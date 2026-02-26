@@ -230,18 +230,19 @@ def remove_background_with_alpha(
 
             if method == "motion" and motion_mask is not None:
                 alpha = create_motion_based_mask(
-                    frame, motion_mask, background_color, tolerance, edge_cleanup
+                    frame, motion_mask, background_color, tolerance
                 )
-                alpha = _apply_soft_edges_alpha(alpha, soft_edges)
             elif method == "combined" and motion_mask is not None:
                 color_alpha = _process_frame(frame, color_ranges, soft_edges)
                 motion_alpha = create_motion_based_mask(
-                    frame, motion_mask, background_color, tolerance, edge_cleanup
+                    frame, motion_mask, background_color, tolerance
                 )
                 alpha = cv2.bitwise_or(color_alpha, motion_alpha)
-                alpha = _apply_soft_edges_alpha(alpha, soft_edges)
             else:
                 alpha = _process_frame(frame, color_ranges, soft_edges)
+
+            alpha = _apply_edge_cleanup(alpha, edge_cleanup)
+            alpha = _apply_soft_edges_alpha(alpha, soft_edges)
 
             # Split frame channels
             b, g, r = cv2.split(frame)
@@ -385,6 +386,17 @@ def _apply_soft_edges_alpha(mask: np.ndarray, soft_edges: int) -> np.ndarray:
         return (soft_mask * 255).astype(np.uint8)
 
     return mask
+
+
+def _apply_edge_cleanup(mask: np.ndarray, edge_cleanup: int) -> np.ndarray:
+    """Apply erosion to remove color spill from edges."""
+    if edge_cleanup <= 0:
+        return mask
+    if mask is None or mask.sum() == 0:
+        return mask
+    kernel_size = 2 * edge_cleanup + 1
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    return cv2.erode(mask, kernel, iterations=1)
 
 
 if __name__ == "__main__":

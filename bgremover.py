@@ -503,9 +503,7 @@ def detect_motion_region(video_path, num_frames=30, threshold=15, dilate_kernel=
     return motion_mask
 
 
-def create_motion_based_mask(
-    frame, motion_mask, bg_color, color_threshold=20, edge_cleanup=0
-):
+def create_motion_based_mask(frame, motion_mask, bg_color, color_threshold=20):
     """
     Create refined mask using motion region + color difference.
 
@@ -514,7 +512,6 @@ def create_motion_based_mask(
         motion_mask: Binary mask of motion region (255 = motion)
         bg_color: Background color in BGR [B, G, R]
         color_threshold: Color distance threshold for foreground
-        edge_cleanup: Pixels to erode from foreground edges (0=disabled)
 
     Returns:
         Binary mask where 255 = foreground, 0 = background
@@ -524,13 +521,6 @@ def create_motion_based_mask(
     color_mask = (dist > color_threshold).astype(np.uint8) * 255
 
     refined = cv2.bitwise_and(color_mask, motion_mask)
-
-    if edge_cleanup > 0:
-        kernel_size = 2 * edge_cleanup + 1
-        if kernel_size % 2 == 0:
-            kernel_size += 1
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-        refined = cv2.erode(refined, kernel, iterations=1)
 
     kernel = np.ones((5, 5), np.uint8)
     refined = cv2.dilate(refined, kernel, iterations=1)
