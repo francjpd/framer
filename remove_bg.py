@@ -5,12 +5,24 @@ CLI tool to remove background from MP4 videos.
 
 import argparse
 import sys
+import re
 
-from bgremover import remove_background
+from bgremover import VideoBackgroundRemover, detect_background_color_from_video
 
 
 def parse_color(color_str):
-    """Parse BGR color string in format 'B,G,R'."""
+    """Parse color string - supports BGR (B,G,R), hex (#RRGGBB or RRGGBB)."""
+    color_str = color_str.strip()
+
+    if color_str.startswith("#"):
+        color_str = color_str[1:]
+
+    if re.match(r"^[0-9A-Fa-f]{6}$", color_str):
+        r = int(color_str[0:2], 16)
+        g = int(color_str[2:4], 16)
+        b = int(color_str[4:6], 16)
+        return [b, g, r]
+
     try:
         values = [int(x.strip()) for x in color_str.split(",")]
         if len(values) != 3:
@@ -18,7 +30,7 @@ def parse_color(color_str):
         return values
     except ValueError:
         raise argparse.ArgumentTypeError(
-            f"Invalid color format: '{color_str}'. Use 'B,G,R' (e.g., '0,255,0' for green)"
+            f"Invalid color format: '{color_str}'. Use 'B,G,R' (e.g., '0,255,0'), '#RRGGBB' (e.g., '#00FF00'), or 'RRGGBB' (e.g., '00FF00')"
         )
 
 
@@ -35,8 +47,8 @@ def main():
         "-c",
         "--color",
         type=parse_color,
-        default="0,255,0",
-        help="Target background color in BGR format (default: '0,255,0' - green)",
+        default=None,
+        help="Target background color (BGR: '0,255,0', hex: '#00FF00' or '00FF00'). If omitted, auto-detects from video borders.",
     )
 
     parser.add_argument(
@@ -70,13 +82,30 @@ def main():
     args = parser.parse_args()
 
     try:
-        output_path = remove_background(
+        remover = VideoBackgroundRemover(color_space=args.space)
+
+        if args.color is not None:
+            remover.add_color_range(
+                target_color=args.color,
+                tolerance=args.tolerance,
+                soft_edges=args.edges,
+            )
+        else:
+            print("Auto-detecting background color from video borders...")
+            colors = detect_background_color_from_video(
+                args.input, tolerance=args.tolerance
+            )
+            print(f"Detected colors: {colors}")
+            for color in colors:
+                remover.add_color_range(
+                    target_color=color,
+                    tolerance=args.tolerance,
+                    soft_edges=args.edges,
+                )
+
+        output_path = remover.process_video(
             input_path=args.input,
             output_path=args.output,
-            background_color=args.color,
-            tolerance=args.tolerance,
-            soft_edges=args.edges,
-            color_space=args.space,
             show_progress=args.progress,
         )
 

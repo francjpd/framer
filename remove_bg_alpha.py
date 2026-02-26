@@ -9,8 +9,38 @@ import numpy as np
 import subprocess
 import shutil
 import tempfile
+import re
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Dict as DictType
+
+from bgremover import generate_color_ranges, detect_background_color_from_video
+
+
+def parse_color(color_str):
+    """Parse color string - supports BGR (B,G,R), hex (#RRGGBB or RRGGBB)."""
+    if color_str is None:
+        return None
+
+    color_str = color_str.strip()
+
+    if color_str.startswith("#"):
+        color_str = color_str[1:]
+
+    if re.match(r"^[0-9A-Fa-f]{6}$", color_str):
+        r = int(color_str[0:2], 16)
+        g = int(color_str[2:4], 16)
+        b = int(color_str[4:6], 16)
+        return [b, g, r]
+
+    try:
+        values = [int(x.strip()) for x in color_str.split(",")]
+        if len(values) != 3:
+            raise ValueError
+        return values
+    except ValueError:
+        raise ValueError(
+            f"Invalid color format: '{color_str}'. Use 'B,G,R', '#RRGGBB', or 'RRGGBB'"
+        )
 
 
 def remove_background_with_alpha(
@@ -21,6 +51,8 @@ def remove_background_with_alpha(
     soft_edges: int = 5,
     color_space: str = "bgr",
     show_progress: bool = False,
+    auto_ranges: bool = True,
+    num_ranges: int = 5,
 ) -> Dict[str, Any]:
     """
     Remove background from video and output with alpha channel.
@@ -38,6 +70,8 @@ def remove_background_with_alpha(
         soft_edges: Soft edge size (default: 5)
         color_space: 'hsv' or 'bgr' (default: 'bgr')
         show_progress: Show progress (default: False)
+        auto_ranges: Auto-generate color ranges (default: True)
+        num_ranges: Number of auto-generated ranges (default: 5)
 
     Returns:
         dict with success, output_path, error
@@ -73,6 +107,18 @@ def remove_background_with_alpha(
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
+        # Generate color ranges if auto_ranges is enabled
+        if auto_ranges:
+            color_ranges = generate_color_ranges(
+                background_color, num_ranges, tolerance
+            )
+            if show_progress:
+                print(
+                    f"Auto-generating {len(color_ranges)} color ranges from base color {background_color}"
+                )
+        else:
+            color_ranges = [{"color": background_color, "tolerance": tolerance}]
+
         frame_count = 0
 
         while True:
@@ -80,10 +126,8 @@ def remove_background_with_alpha(
             if not ret:
                 break
 
-            # Process frame
-            alpha = _process_frame(
-                frame, background_color, tolerance, soft_edges, color_space
-            )
+            # Process frame with color ranges
+            alpha = _process_frame(frame, color_ranges, soft_edges)
 
             # Split frame channels
             b, g, r = cv2.split(frame)
@@ -153,33 +197,44 @@ def remove_background_with_alpha(
 
 def _process_frame(
     frame: np.ndarray,
-    background_color: list,
-    tolerance: int,
+    color_ranges: list,
     soft_edges: int,
-    color_space: str,
 ) -> np.ndarray:
-    """Process single frame to create alpha channel."""
-    bg_b, bg_g, bg_r = background_color
+    """Process single frame to create alpha channel using multiple color ranges."""
+    # Start with empty mask
+    combined_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
 
-    # Calculate threshold bounds
-    lower_b = max(0, bg_b - tolerance)
-    upper_b = min(255, bg_b + tolerance)
-    lower_g = max(0, bg_g - tolerance)
-    upper_g = min(255, bg_g + tolerance)
-    lower_r = max(0, bg_r - tolerance)
-    upper_r = min(255, bg_r + tolerance)
+    # Process each color range and combine with OR
+    for color_range in color_ranges:
+        bg_b, bg_g, bg_r = color_range["color"]
+        tolerance = color_range["tolerance"]
 
-    # Create masks for each channel
-    mask_b = cv2.inRange(frame[:, :, 0], lower_b, upper_b)
-    mask_g = cv2.inRange(frame[:, :, 1], lower_g, upper_g)
-    mask_r = cv2.inRange(frame[:, :, 2], lower_r, upper_r)
+        # Calculate threshold bounds
+        lower = np.array(
+            [
+                max(0, bg_b - tolerance),
+                max(0, bg_g - tolerance),
+                max(0, bg_r - tolerance),
+            ],
+            dtype=np.uint8,
+        )
+        upper = np.array(
+            [
+                min(255, bg_b + tolerance),
+                min(255, bg_g + tolerance),
+                min(255, bg_r + tolerance),
+            ],
+            dtype=np.uint8,
+        )
 
-    # Combine masks (background = all channels match)
-    background_mask = cv2.bitwise_and(mask_b, mask_g)
-    background_mask = cv2.bitwise_and(background_mask, mask_r)
+        # Create mask for this color range
+        range_mask = cv2.inRange(frame, lower, upper)
+
+        # Combine with existing mask using OR
+        combined_mask = cv2.bitwise_or(combined_mask, range_mask)
 
     # Invert to get foreground mask
-    foreground_mask = cv2.bitwise_not(background_mask)
+    foreground_mask = cv2.bitwise_not(combined_mask)
 
     # Apply soft edges
     if soft_edges > 0:
@@ -211,15 +266,57 @@ if __name__ == "__main__":
     parser.add_argument("input", help="Input video")
     parser.add_argument("output", help="Output video")
     parser.add_argument(
-        "-c", "--color", default="115,188,129", help="Background BGR color"
+        "-c",
+        "--color",
+        default=None,
+        help="Background color (BGR: '0,255,0', hex: '#00FF00' or '00FF00'). If omitted, auto-detects from video.",
     )
-    parser.add_argument("-t", "--tolerance", type=int, default=35)
+    parser.add_argument("-t", "--tolerance", type=int, default=30)
     parser.add_argument("-e", "--edges", type=int, default=5)
     parser.add_argument("-p", "--progress", action="store_true")
+    parser.add_argument(
+        "--auto-ranges",
+        action="store_true",
+        default=True,
+        help="Auto-generate color ranges",
+    )
+    parser.add_argument(
+        "--no-auto-ranges",
+        dest="auto_ranges",
+        action="store_false",
+        help="Disable auto color ranges",
+    )
+    parser.add_argument(
+        "-n",
+        "--num-ranges",
+        type=int,
+        default=5,
+        help="Number of auto-generated color ranges",
+    )
 
     args = parser.parse_args()
 
-    bg_color = [int(x.strip()) for x in args.color.split(",")]
+    bg_color = None
+    if args.color is not None:
+        bg_color = parse_color(args.color)
+        auto_detect = False
+    else:
+        auto_detect = True
+
+    if auto_detect:
+        print("Auto-detecting background color from video borders...")
+        detected_colors = detect_background_color_from_video(
+            args.input, tolerance=args.tolerance
+        )
+        print(f"Detected colors: {detected_colors}")
+        if not detected_colors:
+            print("Could not detect background color. Using default.")
+            bg_color = [115, 188, 129]
+            auto_detect = False
+        else:
+            bg_color = detected_colors[0]
+            if len(detected_colors) > 1:
+                print(f"Multiple colors detected, using primary: {bg_color}")
 
     result = remove_background_with_alpha(
         input_path=args.input,
@@ -229,6 +326,8 @@ if __name__ == "__main__":
         soft_edges=args.edges,
         color_space="bgr",
         show_progress=args.progress,
+        auto_ranges=args.auto_ranges,
+        num_ranges=args.num_ranges,
     )
 
     if result["success"]:

@@ -9,7 +9,45 @@ for proper transparency support.
 
 import subprocess
 import sys
+import re
 from pathlib import Path
+
+
+def _parse_color(color_value):
+    """
+    Parse color from various formats:
+    - BGR list/tuple: [B, G, R]
+    - Hex string: '#RRGGBB' or 'RRGGBB'
+    - BGR string: 'B,G,R'
+    Returns BGR list or None if invalid.
+    """
+    if color_value is None:
+        return None
+
+    if isinstance(color_value, (list, tuple)):
+        if len(color_value) == 3:
+            return list(color_value)
+        return None
+
+    if isinstance(color_value, str):
+        color_str = color_value.strip()
+        if color_str.startswith("#"):
+            color_str = color_str[1:]
+
+        if re.match(r"^[0-9A-Fa-f]{6}$", color_str):
+            r = int(color_str[0:2], 16)
+            g = int(color_str[2:4], 16)
+            b = int(color_str[4:6], 16)
+            return [b, g, r]
+
+        try:
+            values = [int(x.strip()) for x in color_str.split(",")]
+            if len(values) == 3:
+                return values
+        except:
+            pass
+
+    return None
 
 
 def remove_video_background(
@@ -20,6 +58,9 @@ def remove_video_background(
     soft_edges=5,
     color_space="bgr",
     show_progress=False,
+    auto_ranges=True,
+    num_ranges=5,
+    auto_detect=True,
 ):
     """
     Remove background from a video file with alpha channel (transparency).
@@ -30,12 +71,16 @@ def remove_video_background(
     Args:
         input_path: Path to input video file
         output_path: Path to output video file (extension will be changed to .mov)
-        background_color: BGR color to remove as list [B, G, R].
-                         If None, uses default green [0, 255, 0].
+        background_color: BGR color to remove as list [B, G, R], hex string '#RRGGBB',
+                         or None for auto-detect from video borders.
+                         If None, auto-detects from video.
         tolerance: Color tolerance for segmentation (0-100, default: 30)
         soft_edges: Soft edge transition size (0 = hard edge, default: 5)
         color_space: 'hsv' or 'bgr' for segmentation (default: 'bgr')
         show_progress: Whether to show progress (default: False)
+        auto_ranges: Auto-generate color ranges from base color (default: True)
+        num_ranges: Number of auto-generated color ranges (default: 5)
+        auto_detect: Auto-detect background color from video (default: True)
 
     Returns:
         dict with keys:
@@ -45,12 +90,25 @@ def remove_video_background(
 
     Example:
         ```python
+        # Auto-detect background from video
+        result = remove_video_background(
+            input_path="input.mp4",
+            output_path="output",
+        )
+
         # Remove green background with transparency
         result = remove_video_background(
             input_path="input.mp4",
             output_path="output",  # Will become output-alpha.mov
             background_color=[0, 255, 0],  # Green
             tolerance=30
+        )
+
+        # Using hex color
+        result = remove_video_background(
+            input_path="input.mp4",
+            output_path="output",
+            background_color="#00FF00",
         )
 
         if result["success"]:
@@ -86,29 +144,31 @@ def remove_video_background(
             str(soft_edges),
         ]
 
-        # Add color if specified
+        # Add auto-ranges parameters
+        if auto_ranges:
+            cmd.extend(["--auto-ranges", "-n", str(num_ranges)])
+        else:
+            cmd.append("--no-auto-ranges")
+
+        # Add color if specified (if not, CLI will auto-detect)
         if background_color is not None:
-            if (
-                isinstance(background_color, (list, tuple))
-                and len(background_color) == 3
-            ):
-                color_str = (
-                    f"{background_color[0]},{background_color[1]},{background_color[2]}"
-                )
-                cmd.extend(["-c", color_str])
-            else:
+            parsed_color = _parse_color(background_color)
+            if parsed_color is None:
                 result["error"] = (
-                    "background_color must be a list/tuple of 3 values [B, G, R]"
+                    "background_color must be a list/tuple of 3 values [B, G, R], "
+                    "or a hex string like '#RRGGBB'"
                 )
                 return result
-        else:
-            # Default to green
-            cmd.extend(["-c", "0,255,0"])
+            color_str = f"{parsed_color[0]},{parsed_color[1]},{parsed_color[2]}"
+            cmd.extend(["-c", color_str])
 
         # Run the CLI tool
         if show_progress:
             print(f"Processing video: {input_path}")
-            print(f"Target color: {background_color or [0, 255, 0]}")
+            if background_color is not None:
+                print(f"Target color: {background_color}")
+            else:
+                print("Target color: auto-detect")
             print(f"Running: {' '.join(cmd)}")
 
         process = subprocess.run(cmd, capture_output=True, text=True, check=False)
