@@ -113,6 +113,7 @@ remover.process_video("input.mp4", "output.mov", show_progress=True)
 | `-n, --num-ranges` | Number of auto-ranges | 5 |
 | `-m, --method` | Detection method: color/motion/combined | color |
 | `--motion-frames` | Frames to analyze for motion | 30 |
+| `--edge-cleanup` | Pixels to erode from edges (removes color spill) | 3 |
 
 ### Detection Methods
 

@@ -132,6 +132,7 @@ def remove_background_with_alpha(
     method: str = "color",
     motion_frames: int = 30,
     motion_threshold: int = 15,
+    edge_cleanup: int = 3,
 ) -> Dict[str, Any]:
     """
     Remove background from video and output with alpha channel.
@@ -152,6 +153,10 @@ def remove_background_with_alpha(
         auto_ranges: Auto-generate color ranges (default: True)
         num_ranges: Number of auto-generated ranges (default: 5)
         output_format: Output format - 'mov' or 'webm'. Auto-detected from extension if not provided.
+        method: Detection method - 'color', 'motion', or 'combined' (default: 'color')
+        motion_frames: Number of frames to analyze for motion detection (default: 30)
+        motion_threshold: Pixel difference threshold for motion (default: 15)
+        edge_cleanup: Pixels to erode from foreground edges to remove color spill (default: 3)
         method: Detection method - 'color', 'motion', or 'combined' (default: 'color')
         motion_frames: Number of frames to analyze for motion detection (default: 30)
         motion_threshold: Pixel difference threshold for motion (default: 15)
@@ -225,13 +230,13 @@ def remove_background_with_alpha(
 
             if method == "motion" and motion_mask is not None:
                 alpha = create_motion_based_mask(
-                    frame, motion_mask, background_color, tolerance
+                    frame, motion_mask, background_color, tolerance, edge_cleanup
                 )
                 alpha = _apply_soft_edges_alpha(alpha, soft_edges)
             elif method == "combined" and motion_mask is not None:
                 color_alpha = _process_frame(frame, color_ranges, soft_edges)
                 motion_alpha = create_motion_based_mask(
-                    frame, motion_mask, background_color, tolerance
+                    frame, motion_mask, background_color, tolerance, edge_cleanup
                 )
                 alpha = cv2.bitwise_or(color_alpha, motion_alpha)
                 alpha = _apply_soft_edges_alpha(alpha, soft_edges)
@@ -436,6 +441,12 @@ if __name__ == "__main__":
         default=30,
         help="Number of frames to analyze for motion detection (default: 30)",
     )
+    parser.add_argument(
+        "--edge-cleanup",
+        type=int,
+        default=3,
+        help="Pixels to erode from foreground edges to remove color spill (default: 3)",
+    )
 
     args = parser.parse_args()
 
@@ -474,6 +485,7 @@ if __name__ == "__main__":
         output_format=args.format,
         method=args.method,
         motion_frames=args.motion_frames,
+        edge_cleanup=args.edge_cleanup,
     )
 
     if result["success"]:
