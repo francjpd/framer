@@ -98,12 +98,14 @@ def _encode_webm(frames_dir: Path, fps: float, output_path: str) -> str:
         str(frames_dir / "frame_%05d.png"),
         "-c:v",
         "libvpx-vp9",
+        "-pix_fmt",
+        "yuva420p",
+        "-auto-alt-ref",
+        "0",
         "-crf",
         "30",
         "-b:v",
         "0",
-        "-pix_fmt",
-        "yuva420p",
         str(final_output),
     ]
 
