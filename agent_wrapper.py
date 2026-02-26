@@ -61,16 +61,18 @@ def remove_video_background(
     auto_ranges=True,
     num_ranges=5,
     auto_detect=True,
+    output_format=None,
 ):
     """
     Remove background from a video file with alpha channel (transparency).
 
-    This function uses remove_bg_alpha.py which outputs .mov files with
-    QuickTime Animation (qtrle) codec for proper alpha channel support.
+    This function uses remove_bg_alpha.py which outputs .mov or .webm files with
+    alpha channel support.
 
     Args:
         input_path: Path to input video file
-        output_path: Path to output video file (extension will be changed to .mov)
+        output_path: Path to output video file. Format auto-detected from extension
+                    (.webm -> WebM, .mov -> MOV), or use output_format parameter.
         background_color: BGR color to remove as list [B, G, R], hex string '#RRGGBB',
                          or None for auto-detect from video borders.
                          If None, auto-detects from video.
@@ -81,11 +83,12 @@ def remove_video_background(
         auto_ranges: Auto-generate color ranges from base color (default: True)
         num_ranges: Number of auto-generated color ranges (default: 5)
         auto_detect: Auto-detect background color from video (default: True)
+        output_format: Output format - 'mov' or 'webm'. Auto-detected from extension if not provided.
 
     Returns:
         dict with keys:
             - success: bool indicating success
-            - output_path: path to output file if successful (.mov with alpha)
+            - output_path: path to output file if successful (.mov or .webm with alpha)
             - error: error message if failed
 
     Example:
@@ -93,13 +96,13 @@ def remove_video_background(
         # Auto-detect background from video
         result = remove_video_background(
             input_path="input.mp4",
-            output_path="output",
+            output_path="output.webm",
         )
 
         # Remove green background with transparency
         result = remove_video_background(
             input_path="input.mp4",
-            output_path="output",  # Will become output-alpha.mov
+            output_path="output",  # Will become output.mov
             background_color=[0, 255, 0],  # Green
             tolerance=30
         )
@@ -125,10 +128,19 @@ def remove_video_background(
         result["error"] = f"Input file not found: {input_path}"
         return result
 
-    # Handle output path - remove extension to add .mov later
-    output_file = Path(output_path)
-    output_base = str(output_file.with_suffix(""))  # Remove any extension
-    output_file.parent.mkdir(parents=True, exist_ok=True)
+    # Determine output format from extension or parameter
+    output_path_obj = Path(output_path)
+    output_ext = output_path_obj.suffix.lower()
+
+    if output_format is None:
+        if output_ext == ".webm":
+            output_format = "webm"
+        else:
+            output_format = "mov"
+
+    # Handle output path - remove extension to add proper extension later
+    output_base = str(output_path_obj.with_suffix(""))
+    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         # Build command for alpha CLI tool (uses FFmpeg for alpha support)
@@ -137,12 +149,16 @@ def remove_video_background(
             sys.executable,
             script_path,
             str(input_path),
-            output_base,  # Will output as {base}-alpha.mov
+            output_base,
             "-t",
             str(tolerance),
             "-e",
             str(soft_edges),
         ]
+
+        # Add format parameter
+        if output_format:
+            cmd.extend(["-f", output_format])
 
         # Add auto-ranges parameters
         if auto_ranges:
@@ -174,14 +190,20 @@ def remove_video_background(
         process = subprocess.run(cmd, capture_output=True, text=True, check=False)
 
         if process.returncode == 0:
-            # Output will be {base}-alpha.mov
-            result["output_path"] = f"{output_base}-alpha.mov"
+            # Output format is handled by CLI - it produces {base}.mov or {base}.webm
+            if output_format == "webm":
+                result["output_path"] = f"{output_base}.webm"
+                format_note = "Output is .webm with alpha channel for transparency"
+            else:
+                result["output_path"] = f"{output_base}.mov"
+                format_note = "Output is .mov with alpha channel for transparency"
+
             result["success"] = True
 
             if show_progress:
                 print(f"✅ Background removed successfully!")
                 print(f"Output saved to: {result['output_path']}")
-                print("Note: Output is .mov with alpha channel for transparency")
+                print(f"Note: {format_note}")
         else:
             result["error"] = (
                 process.stderr.strip()

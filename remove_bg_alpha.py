@@ -43,6 +43,74 @@ def parse_color(color_str):
         )
 
 
+def get_output_format(output_path: str, format_flag: str = None) -> str:
+    """
+    Determine output format from path extension or flag.
+
+    Args:
+        output_path: Output file path
+        format_flag: Optional format flag ('mov' or 'webm')
+
+    Returns:
+        'mov' or 'webm'
+    """
+    if format_flag:
+        return format_flag.lower()
+
+    ext = Path(output_path).suffix.lower()
+    if ext == ".webm":
+        return "webm"
+    return "mov"
+
+
+def _encode_mov(frames_dir: Path, fps: float, output_path: str) -> str:
+    """Encode PNG sequence to MOV with alpha using qtrle codec."""
+    output_file = Path(output_path)
+    final_output = output_file.parent / f"{output_file.stem}.mov"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        str(fps),
+        "-i",
+        str(frames_dir / "frame_%05d.png"),
+        "-c:v",
+        "qtrle",
+        str(final_output),
+    ]
+
+    subprocess.run(cmd, capture_output=True, check=True)
+    return str(final_output)
+
+
+def _encode_webm(frames_dir: Path, fps: float, output_path: str) -> str:
+    """Encode PNG sequence to WebM with alpha using VP9 codec."""
+    output_file = Path(output_path)
+    final_output = output_file.parent / f"{output_file.stem}.webm"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        str(fps),
+        "-i",
+        str(frames_dir / "frame_%05d.png"),
+        "-c:v",
+        "libvpx-vp9",
+        "-crf",
+        "30",
+        "-b:v",
+        "0",
+        "-pix_fmt",
+        "yuva420p",
+        str(final_output),
+    ]
+
+    subprocess.run(cmd, capture_output=True, check=True)
+    return str(final_output)
+
+
 def remove_background_with_alpha(
     input_path: str,
     output_path: str,
@@ -53,6 +121,7 @@ def remove_background_with_alpha(
     show_progress: bool = False,
     auto_ranges: bool = True,
     num_ranges: int = 5,
+    output_format: str = None,
 ) -> Dict[str, Any]:
     """
     Remove background from video and output with alpha channel.
@@ -60,11 +129,11 @@ def remove_background_with_alpha(
     Since OpenCV's VideoWriter doesn't support 4-channel output natively,
     this function uses a workaround:
     1. Process frames and save as PNG sequence (with alpha)
-    2. Use FFmpeg to combine PNG sequence into MOV with alpha
+    2. Use FFmpeg to combine PNG sequence into MOV/WebM with alpha
 
     Args:
         input_path: Input video path
-        output_path: Output video path (should be .mp4)
+        output_path: Output video path
         background_color: BGR color [B, G, R]
         tolerance: Color tolerance (default: 30)
         soft_edges: Soft edge size (default: 5)
@@ -72,6 +141,7 @@ def remove_background_with_alpha(
         show_progress: Show progress (default: False)
         auto_ranges: Auto-generate color ranges (default: True)
         num_ranges: Number of auto-generated ranges (default: 5)
+        output_format: Output format - 'mov' or 'webm'. Auto-detected from extension if not provided.
 
     Returns:
         dict with success, output_path, error
@@ -150,23 +220,16 @@ def remove_background_with_alpha(
         if show_progress:
             print(f"\rProcessing: 100%")
 
-        # Create MOV with qtrle codec which supports alpha
-        output_file = Path(output_path)
-        final_output = output_file.parent / f"{output_file.stem}-alpha.mov"
+        # Determine output format
+        output_format = get_output_format(output_path, output_format)
 
-        ffmpeg_alpha_cmd = [
-            "ffmpeg",
-            "-y",
-            "-framerate",
-            str(fps),
-            "-i",
-            str(temp_dir / "frame_%05d.png"),
-            "-c:v",
-            "qtrle",
-            str(final_output),
-        ]
-
-        subprocess.run(ffmpeg_alpha_cmd, capture_output=True, check=True)
+        # Encode to selected format
+        if output_format == "webm":
+            final_output = _encode_webm(temp_dir, fps, output_path)
+            format_note = "WebM with VP9 alpha support"
+        else:
+            final_output = _encode_mov(temp_dir, fps, output_path)
+            format_note = "MOV with QuickTime animation codec (alpha)"
 
         result["success"] = True
         result["output_path"] = str(final_output)
@@ -174,9 +237,7 @@ def remove_background_with_alpha(
         if show_progress:
             print(f"✅ Background removed successfully!")
             print(f"Output saved to: {final_output}")
-            print(
-                "\nNote: MOV container with QuickTime animation codec supports alpha."
-            )
+            print(f"\nNote: {format_note}")
 
         return result
 
@@ -293,6 +354,13 @@ if __name__ == "__main__":
         default=5,
         help="Number of auto-generated color ranges",
     )
+    parser.add_argument(
+        "-f",
+        "--format",
+        choices=["mov", "webm"],
+        default=None,
+        help="Output format (auto-detected from extension if not specified)",
+    )
 
     args = parser.parse_args()
 
@@ -328,6 +396,7 @@ if __name__ == "__main__":
         show_progress=args.progress,
         auto_ranges=args.auto_ranges,
         num_ranges=args.num_ranges,
+        output_format=args.format,
     )
 
     if result["success"]:
