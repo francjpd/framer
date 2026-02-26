@@ -49,6 +49,12 @@ python remove_bg_alpha.py input.mp4 output.webm -c "#00FF00"
 # Manual color + MOV
 python remove_bg_alpha.py input.mp4 output.mov -c "0,255,0"
 
+# Motion-based detection (for similar bg/subject colors)
+python remove_bg_alpha.py input.mp4 output.webm -m motion
+
+# Combined method
+python remove_bg_alpha.py input.mp4 output.webm -m combined
+
 # With flags
 python remove_bg_alpha.py input.mp4 output --format webm -t 30 -e 5 -p
 ```
@@ -105,6 +111,16 @@ remover.process_video("input.mp4", "output.mov", show_progress=True)
 | `-p, --progress` | Show progress | False |
 | `--auto-ranges` | Auto-generate color ranges | True |
 | `-n, --num-ranges` | Number of auto-ranges | 5 |
+| `-m, --method` | Detection method: color/motion/combined | color |
+| `--motion-frames` | Frames to analyze for motion | 30 |
+
+### Detection Methods
+
+- **color** (default): Uses color-based segmentation. Works well when subject and background have distinct colors.
+- **motion**: Uses frame differencing to detect moving subject. Best for videos where subject moves against static background.
+- **combined**: Combines both color and motion detection for more robust results.
+
+The **motion** method is recommended for videos like `octopus-green.mp4` where the subject and background have similar colors but the subject is moving.
 
 ## Key Technical Details
 
@@ -161,3 +177,4 @@ Each frame samples 4 corners (5x5 pixels each), for 12 total samples. Colors wit
 - Hex color input support (#RRGGBB)
 - WebM output with alpha channel
 - Fixed VP9 alpha encoding with `-auto-alt-ref 0`
+- Added motion-based detection method (-m motion/combined) for videos where subject and background have similar colors

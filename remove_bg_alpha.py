@@ -13,7 +13,12 @@ import re
 from pathlib import Path
 from typing import Dict, Any, List, Dict as DictType
 
-from bgremover import generate_color_ranges, detect_background_color_from_video
+from bgremover import (
+    generate_color_ranges,
+    detect_background_color_from_video,
+    detect_motion_region,
+    create_motion_based_mask,
+)
 
 
 def parse_color(color_str):
@@ -124,6 +129,9 @@ def remove_background_with_alpha(
     auto_ranges: bool = True,
     num_ranges: int = 5,
     output_format: str = None,
+    method: str = "color",
+    motion_frames: int = 30,
+    motion_threshold: int = 15,
 ) -> Dict[str, Any]:
     """
     Remove background from video and output with alpha channel.
@@ -144,6 +152,9 @@ def remove_background_with_alpha(
         auto_ranges: Auto-generate color ranges (default: True)
         num_ranges: Number of auto-generated ranges (default: 5)
         output_format: Output format - 'mov' or 'webm'. Auto-detected from extension if not provided.
+        method: Detection method - 'color', 'motion', or 'combined' (default: 'color')
+        motion_frames: Number of frames to analyze for motion detection (default: 30)
+        motion_threshold: Pixel difference threshold for motion (default: 15)
 
     Returns:
         dict with success, output_path, error
@@ -191,6 +202,20 @@ def remove_background_with_alpha(
         else:
             color_ranges = [{"color": background_color, "tolerance": tolerance}]
 
+        motion_mask = None
+        if method in ("motion", "combined"):
+            if show_progress:
+                print("Detecting motion region...")
+            motion_mask = detect_motion_region(
+                input_path,
+                num_frames=motion_frames,
+                threshold=motion_threshold,
+                dilate_kernel=11,
+            )
+            if show_progress:
+                motion_pixels = np.count_nonzero(motion_mask) / motion_mask.size * 100
+                print(f"Motion region: {motion_pixels:.1f}% of frame")
+
         frame_count = 0
 
         while True:
@@ -198,8 +223,20 @@ def remove_background_with_alpha(
             if not ret:
                 break
 
-            # Process frame with color ranges
-            alpha = _process_frame(frame, color_ranges, soft_edges)
+            if method == "motion" and motion_mask is not None:
+                alpha = create_motion_based_mask(
+                    frame, motion_mask, background_color, tolerance
+                )
+                alpha = _apply_soft_edges_alpha(alpha, soft_edges)
+            elif method == "combined" and motion_mask is not None:
+                color_alpha = _process_frame(frame, color_ranges, soft_edges)
+                motion_alpha = create_motion_based_mask(
+                    frame, motion_mask, background_color, tolerance
+                )
+                alpha = cv2.bitwise_or(color_alpha, motion_alpha)
+                alpha = _apply_soft_edges_alpha(alpha, soft_edges)
+            else:
+                alpha = _process_frame(frame, color_ranges, soft_edges)
 
             # Split frame channels
             b, g, r = cv2.split(frame)
@@ -322,6 +359,29 @@ def _process_frame(
     return foreground_mask
 
 
+def _apply_soft_edges_alpha(mask: np.ndarray, soft_edges: int) -> np.ndarray:
+    """Apply soft edges to a binary mask."""
+    if mask is None or mask.sum() == 0:
+        return mask
+
+    if soft_edges > 0:
+        kernel_size = 2 * soft_edges + 1
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+
+        dilated = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
+        gradient = dilated - mask
+
+        soft_mask = mask.astype(np.float32) / 255.0
+        transition = gradient.astype(np.float32) / 255.0
+        soft_mask = soft_mask + (transition * 0.5)
+
+        return (soft_mask * 255).astype(np.uint8)
+
+    return mask
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -363,6 +423,19 @@ if __name__ == "__main__":
         default=None,
         help="Output format (auto-detected from extension if not specified)",
     )
+    parser.add_argument(
+        "-m",
+        "--method",
+        choices=["color", "motion", "combined"],
+        default="color",
+        help="Detection method: color (default), motion (for moving subjects), combined",
+    )
+    parser.add_argument(
+        "--motion-frames",
+        type=int,
+        default=30,
+        help="Number of frames to analyze for motion detection (default: 30)",
+    )
 
     args = parser.parse_args()
 
@@ -399,6 +472,8 @@ if __name__ == "__main__":
         auto_ranges=args.auto_ranges,
         num_ranges=args.num_ranges,
         output_format=args.format,
+        method=args.method,
+        motion_frames=args.motion_frames,
     )
 
     if result["success"]:
