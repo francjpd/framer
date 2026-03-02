@@ -19,14 +19,14 @@ python cli.py input.mp4 output.webm -c "0,255,0" -p
 
 ```
 ┌─────────────────────────────────────────┐
-│      CLI & Python API Layer (cli.py)      │
-│   Command-line interface + Python API     │
+│      CLI & Python API Layer (cli.py)    │
+│   Command-line interface + Python API   │
 └────────────────────┬────────────────────┘
                      │ imports
 ┌────────────────────▼────────────────────┐
-│          Core Library (bgremover.py)     │
-│   VideoBackgroundRemover class + utils   │
-│           OpenCV image processing        │
+│          Core Library (bgremover.py)    │
+│   VideoBackgroundRemover class + utils  │
+│           OpenCV image processing       │
 └─────────────────────────────────────────┘
 ```
 
@@ -44,44 +44,44 @@ Input Video (MP4)
          ▼
 ┌──────────────────────────────────┐
 │      Detection Method            │
-│  ┌─────────┐    ┌──────────┐   │
-│  │  Color  │    │  Motion  │   │
-│  │Based    │    │Based     │   │
-│  └────┬────┘    └────┬─────┘   │
+│  ┌─────────┐     ┌──────────┐    │
+│  │  Color  │     │  Motion  │    │
+│  │Based    │     │Based     │    │
+│  └────┬────┘     └────┬─────┘    │
 │       │               │          │
 │       └───────┬───────┘          │
 │               ▼                  │
 │        Combine Masks             │
-└─────────────┼───────────────────┘
+└──────────────┼───────────────────┘
                │
                ▼
 ┌──────────────────────────────────┐
 │       Mask Refinement            │
 │  - Soft edges (Gaussian blur)    │
-│  - Edge cleanup (erode)         │
-│  - Hole filling (morphology)    │
-│  - Flood fill (optional)        │
-└─────────────┼───────────────────┘
+│  - Edge cleanup (erode)          │
+│  - Hole filling (morphology)     │
+│  - Flood fill (optional)         │
+└──────────────┼───────────────────┘
                │
                ▼
 ┌──────────────────────────────────┐
 │      Create BGRA frame           │
-│   Merge B,G,R channels + Alpha  │
-└─────────────┼───────────────────┘
+│   Merge B,G,R channels + Alpha   │
+└──────────────┼───────────────────┘
                │
                ▼
-┌──────────────────────────────────┐
-│    Save to PNG sequence          │
-│    (temp directory)             │
-└─────────────┼────────────────────┘
+┌───────────────────────────────────┐
+│    Save to PNG sequence           │
+│    (temp directory)               │
+└──────────────┼────────────────────┘
                │
                ▼
-┌──────────────────────────────────┐
-│       FFmpeg Encode              │
-│  - MOV: qtrle codec             │
-│  - WebM: VP9 codec              │
-│         (with alpha)             │
-└─────────────┼────────────────────┘
+┌───────────────────────────────────┐
+│       FFmpeg Encode               │
+│  - MOV: qtrle codec               │
+│  - WebM: VP9 codec                │
+│         (with alpha)              │
+└──────────────┼────────────────────┘
                │
                ▼
     Output Video (.mov/.webm)
@@ -90,20 +90,22 @@ Input Video (MP4)
 
 ## Key Components
 
-| File | Purpose | Key Functions/Classes |
-|------|---------|----------------------|
-| `bgremover.py` | Core library | `VideoBackgroundRemover`, `detect_background_color_*`, `fill_mask_holes`, `detect_motion_region` |
-| `cli.py` | CLI tool + Python API | `remove_background()`, `remove_video_background()`, `_encode_mov()`, `_encode_webm()` |
-| `tests/` | Unit tests | `test_bgremover.py` |
+| File           | Purpose               | Key Functions/Classes                                                                            |
+| -------------- | --------------------- | ------------------------------------------------------------------------------------------------ |
+| `bgremover.py` | Core library          | `VideoBackgroundRemover`, `detect_background_color_*`, `fill_mask_holes`, `detect_motion_region` |
+| `cli.py`       | CLI tool + Python API | `remove_background()`, `remove_video_background()`, `_encode_mov()`, `_encode_webm()`            |
+| `tests/`       | Unit tests            | `test_bgremover.py`                                                                              |
 
 ## Entry Points
 
 ### 1. CLI (Most Common)
+
 ```bash
 python cli.py input.mp4 output.webm -c "0,255,0" -t 30 -p
 ```
 
 ### 2. Python Library
+
 ```python
 from bgremover import VideoBackgroundRemover
 
@@ -113,6 +115,7 @@ remover.process_video("input.mp4", "output.webm")
 ```
 
 ### 3. Python API
+
 ```python
 from cli import remove_video_background
 
@@ -125,27 +128,30 @@ result = remove_video_background(
 
 ## Where to Start
 
-| Goal | Read First |
-|------|-----------|
-| Understand core algorithm | `bgremover.py` - `_create_bgr_mask()`, `_create_hsv_mask()` |
-| Add CLI option | `cli.py` - argparse section (bottom of file) |
-| Add/modify detection | `bgremover.py` - `detect_motion_region()` |
-| Improve mask quality | `bgremover.py` - `fill_mask_holes()`, `fill_internal_holes()` |
-| Fix FFmpeg encoding | `cli.py` - `_encode_mov()`, `_encode_webm()` |
+| Goal                      | Read First                                                    |
+| ------------------------- | ------------------------------------------------------------- |
+| Understand core algorithm | `bgremover.py` - `_create_bgr_mask()`, `_create_hsv_mask()`   |
+| Add CLI option            | `cli.py` - argparse section (bottom of file)                  |
+| Add/modify detection      | `bgremover.py` - `detect_motion_region()`                     |
+| Improve mask quality      | `bgremover.py` - `fill_mask_holes()`, `fill_internal_holes()` |
+| Fix FFmpeg encoding       | `cli.py` - `_encode_mov()`, `_encode_webm()`                  |
 
 ## Key Algorithms
 
 ### Color-Based Detection
+
 - Convert frame to HSV or BGR color space
 - Create mask using `cv2.inRange()` with lower/upper bounds
 - Combine multiple color ranges with OR logic
 
 ### Motion Detection
+
 - Frame differencing between consecutive frames
 - Threshold to create binary motion mask
 - Dilate to fill gaps
 
 ### Mask Refinement
+
 - **Soft edges**: Gaussian blur on mask boundary
 - **Hole filling**: Morphological closing (`cv2.morphologyEx`)
 - **Flood fill**: Find contours, fill enclosed regions
@@ -153,11 +159,14 @@ result = remove_video_background(
 ## Important Notes
 
 ### Why PNG + FFmpeg?
+
 OpenCV's `VideoWriter` doesn't support 4-channel (BGRA) video output natively. The workaround:
+
 1. Process frames and save as PNG with alpha
 2. Use FFmpeg to encode PNG sequence to MOV/WebM with alpha
 
 ### Alpha Encoding
+
 - **MOV**: Uses `qtrle` codec (reliable alpha)
 - **WebM**: Uses VP9 with `-auto-alt-ref 0` (critical for alpha)
 

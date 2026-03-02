@@ -2,11 +2,17 @@
 Core library for background removal from videos.
 
 Provides color-based and motion-based segmentation, mask refinement,
-and video processing utilities.
+and video processing utilities with alpha channel support.
 """
 
 import cv2
 import numpy as np
+import subprocess
+import shutil
+import tempfile
+import re
+from pathlib import Path
+from typing import Dict, Any
 
 
 def generate_color_ranges(base_bgr_color, num_ranges=5, base_tolerance=25):
@@ -581,38 +587,327 @@ class VideoBackgroundRemover:
         return output_path
 
 
+def get_output_format(output_path: str, format_flag: str = None) -> str:
+    """Determine output format from path extension or flag."""
+    if format_flag is not None:
+        return format_flag.lower()
+
+    ext = Path(output_path).suffix.lower()
+    return "webm" if ext == ".webm" else "mov"
+
+
+def _encode_mov(frames_dir: Path, fps: float, output_path: str) -> str:
+    """Encode PNG sequence to MOV with alpha using qtrle codec."""
+    output_file = Path(output_path)
+    final_output = output_file.parent / f"{output_file.stem}.mov"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        str(fps),
+        "-i",
+        str(frames_dir / "frame_%05d.png"),
+        "-c:v",
+        "qtrle",
+        str(final_output),
+    ]
+    subprocess.run(cmd, capture_output=True, check=True)
+    return str(final_output)
+
+
+def _encode_webm(frames_dir: Path, fps: float, output_path: str) -> str:
+    """Encode PNG sequence to WebM with alpha using VP9 codec."""
+    output_file = Path(output_path)
+    final_output = output_file.parent / f"{output_file.stem}.webm"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        str(fps),
+        "-i",
+        str(frames_dir / "frame_%05d.png"),
+        "-c:v",
+        "libvpx-vp9",
+        "-pix_fmt",
+        "yuva420p",
+        "-auto-alt-ref",
+        "0",
+        "-crf",
+        "30",
+        "-b:v",
+        "0",
+        str(final_output),
+    ]
+    subprocess.run(cmd, capture_output=True, check=True)
+    return str(final_output)
+
+
+def _apply_soft_edges(mask: np.ndarray, soft_edges: int) -> np.ndarray:
+    """Apply soft edges to a binary mask."""
+    if mask is None or mask.sum() == 0 or soft_edges <= 0:
+        return mask
+
+    kernel_size = 2 * soft_edges + 1
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+
+    dilated = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
+    gradient = dilated - mask
+
+    soft_mask = mask.astype(np.float32) / 255.0
+    transition = gradient.astype(np.float32) / 255.0
+    return (255 * (soft_mask + transition * 0.5)).astype(np.uint8)
+
+
+def _apply_edge_cleanup(mask: np.ndarray, edge_cleanup: int) -> np.ndarray:
+    """Apply erosion to remove color spill from edges."""
+    if edge_cleanup <= 0 or mask is None or mask.sum() == 0:
+        return mask
+    kernel_size = 2 * edge_cleanup + 1
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    return cv2.erode(mask, kernel, iterations=1)
+
+
+def _process_frame(
+    frame: np.ndarray,
+    color_ranges: list,
+    soft_edges: int,
+    edge_cleanup: int,
+    use_adaptive_bg: bool = False,
+    hole_fill_threshold: int = 15,
+    flood_fill: bool = False,
+) -> np.ndarray:
+    """Process single frame to create alpha channel using multiple color ranges."""
+
+    if use_adaptive_bg:
+        bg_color = detect_background_color_from_frame_border(frame, border_width=10)
+        color_ranges = [{"color": bg_color, "tolerance": 30}]
+
+    combined_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    for color_range in color_ranges:
+        bg_b, bg_g, bg_r = color_range["color"]
+        tolerance = color_range["tolerance"]
+
+        lower = np.array(
+            [
+                max(0, bg_b - tolerance),
+                max(0, bg_g - tolerance),
+                max(0, bg_r - tolerance),
+            ],
+            dtype=np.uint8,
+        )
+        upper = np.array(
+            [
+                min(255, bg_b + tolerance),
+                min(255, bg_g + tolerance),
+                min(255, bg_r + tolerance),
+            ],
+            dtype=np.uint8,
+        )
+
+        range_mask = cv2.inRange(frame, lower, upper)
+        combined_mask = cv2.bitwise_or(combined_mask, range_mask)
+
+    foreground_mask = cv2.bitwise_not(combined_mask)
+
+    if hole_fill_threshold > 0:
+        foreground_mask = fill_mask_holes(foreground_mask, hole_fill_threshold)
+
+    if flood_fill:
+        foreground_mask = fill_enclosed_background(foreground_mask, min_area=30)
+
+    foreground_mask = _apply_edge_cleanup(foreground_mask, edge_cleanup)
+    return _apply_soft_edges(foreground_mask, soft_edges)
+
+
 def remove_background(
-    input_path,
-    output_path,
-    background_color=[0, 255, 0],
-    tolerance=30,
-    soft_edges=5,
-    color_space="hsv",
-    show_progress=False,
-):
+    input_path: str,
+    output_path: str,
+    background_color: list = None,
+    tolerance: int = 30,
+    soft_edges: int = 5,
+    show_progress: bool = False,
+    auto_ranges: bool = True,
+    num_ranges: int = 5,
+    method: str = "color",
+    motion_frames: int = 30,
+    motion_threshold: int = 15,
+    edge_cleanup: int = 3,
+    adaptive_bg: bool = False,
+    hole_fill: int = 25,
+    flood_fill: bool = False,
+) -> Dict[str, Any]:
     """
-    Convenience function to remove background from a video.
+    Remove background from video and output with alpha channel.
+
+    Uses FFmpeg to encode MOV/WebM with alpha support.
 
     Args:
-        input_path: Path to input video
-        output_path: Path to output video
-        background_color: Target BGR color to remove [B, G, R]
-        tolerance: Color tolerance (higher = more lenient)
-        soft_edges: Soft edge transition size (0 = hard edge)
-        color_space: 'hsv' or 'bgr' for segmentation
-        show_progress: Whether to show progress
+        input_path: Input video path
+        output_path: Output video path
+        background_color: BGR color [B, G, R]
+        tolerance: Color tolerance (default: 30)
+        soft_edges: Soft edge size (default: 5)
+        show_progress: Show progress (default: False)
+        auto_ranges: Auto-generate color ranges (default: True)
+        num_ranges: Number of auto-generated ranges (default: 5)
+        method: Detection method - 'color', 'motion', or 'combined' (default: 'color')
+        motion_frames: Frames to analyze for motion detection (default: 30)
+        motion_threshold: Pixel difference threshold for motion (default: 15)
+        edge_cleanup: Pixels to erode from edges (default: 3)
+        adaptive_bg: Detect background per-frame from borders (default: False)
+        hole_fill: Fill holes smaller than size (default: 25)
+        flood_fill: Fill internal holes (default: False)
 
     Returns:
-        Output video path
+        dict with success, output_path, error
     """
-    remover = VideoBackgroundRemover(color_space=color_space)
-    remover.add_color_range(
-        target_color=background_color, tolerance=tolerance, soft_edges=soft_edges
-    )
+    result: Dict[str, Any] = {"success": False, "output_path": None, "error": None}
+    temp_dir = None
 
-    return remover.process_video(
-        input_path=input_path, output_path=output_path, show_progress=show_progress
-    )
+    try:
+        input_file = Path(input_path)
+        if not input_file.exists():
+            result["error"] = f"Input file not found: {input_path}"
+            return result
+
+        if shutil.which("ffmpeg") is None:
+            result["error"] = (
+                "FFmpeg not found. Please install FFmpeg for alpha channel support."
+            )
+            return result
+
+        # Auto-detect background color if not provided
+        if background_color is None:
+            detected = detect_background_color_from_video(
+                input_path, tolerance=tolerance
+            )
+            background_color = detected[0] if detected else [115, 188, 129]
+
+        temp_dir = Path(tempfile.mkdtemp())
+
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            result["error"] = f"Could not open video: {input_path}"
+            return result
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        # Generate color ranges
+        if auto_ranges:
+            color_ranges = generate_color_ranges(
+                background_color, num_ranges, tolerance
+            )
+        else:
+            color_ranges = [{"color": background_color, "tolerance": tolerance}]
+
+        # Motion detection
+        motion_mask = None
+        if method in ("motion", "combined"):
+            if show_progress:
+                print("Detecting motion region...")
+            motion_mask = detect_motion_region(
+                input_path,
+                num_frames=motion_frames,
+                threshold=motion_threshold,
+                dilate_kernel=11,
+            )
+
+        frame_count = 0
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Create alpha mask
+            if method == "color":
+                alpha = _process_frame(
+                    frame,
+                    color_ranges,
+                    soft_edges,
+                    edge_cleanup,
+                    adaptive_bg,
+                    hole_fill,
+                    flood_fill,
+                )
+            elif method == "motion" and motion_mask is not None:
+                alpha = create_motion_based_mask(
+                    frame, motion_mask, background_color, tolerance
+                )
+            elif method == "combined" and motion_mask is not None:
+                color_alpha = _process_frame(
+                    frame,
+                    color_ranges,
+                    soft_edges,
+                    edge_cleanup,
+                    adaptive_bg,
+                    hole_fill,
+                    flood_fill,
+                )
+                motion_alpha = create_motion_based_mask(
+                    frame, motion_mask, background_color, tolerance
+                )
+                alpha = cv2.bitwise_or(color_alpha, motion_alpha)
+            else:
+                alpha = _process_frame(
+                    frame,
+                    color_ranges,
+                    soft_edges,
+                    edge_cleanup,
+                    adaptive_bg,
+                    hole_fill,
+                    flood_fill,
+                )
+
+            # Create BGRA frame
+            b, g, r = cv2.split(frame)
+            bgra = cv2.merge([b, g, r, alpha])
+
+            # Save as PNG
+            frame_path = temp_dir / f"frame_{frame_count:05d}.png"
+            cv2.imwrite(str(frame_path), bgra)
+
+            frame_count += 1
+            if show_progress and frame_count % 10 == 0:
+                print(
+                    f"\rProcessing: {(frame_count / total_frames) * 100:.1f}%", end=""
+                )
+
+        cap.release()
+        if show_progress:
+            print(f"\rProcessing: 100%")
+
+        # Encode to output format
+        output_format = get_output_format(output_path, None)
+        final_output = (
+            _encode_webm(temp_dir, fps, output_path)
+            if output_format == "webm"
+            else _encode_mov(temp_dir, fps, output_path)
+        )
+
+        result["success"] = True
+        result["output_path"] = final_output
+
+        return result
+
+    except subprocess.CalledProcessError as e:
+        result["error"] = f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}"
+    except Exception as e:
+        result["error"] = str(e)
+    finally:
+        if temp_dir is not None and temp_dir.exists():
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except:
+                pass
+
+    return result
 
 
 def detect_motion_region(video_path, num_frames=30, threshold=15, dilate_kernel=11):
