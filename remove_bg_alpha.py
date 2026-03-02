@@ -16,8 +16,12 @@ from typing import Dict, Any, List, Dict as DictType
 from bgremover import (
     generate_color_ranges,
     detect_background_color_from_video,
+    detect_background_color_from_frame_border,
     detect_motion_region,
     create_motion_based_mask,
+    fill_mask_holes,
+    fill_internal_holes,
+    fill_enclosed_background,
 )
 
 
@@ -133,6 +137,9 @@ def remove_background_with_alpha(
     motion_frames: int = 30,
     motion_threshold: int = 15,
     edge_cleanup: int = 3,
+    adaptive_bg: bool = False,
+    hole_fill: int = 25,
+    flood_fill: bool = False,
 ) -> Dict[str, Any]:
     """
     Remove background from video and output with alpha channel.
@@ -157,6 +164,9 @@ def remove_background_with_alpha(
         motion_frames: Number of frames to analyze for motion detection (default: 30)
         motion_threshold: Pixel difference threshold for motion (default: 15)
         edge_cleanup: Pixels to erode from foreground edges to remove color spill (default: 3)
+        adaptive_bg: Detect background color per-frame from borders (default: False)
+        hole_fill: Fill holes in mask smaller than this size (default: 25, 0 to disable)
+        flood_fill: Fill internal holes trapped between foreground pixels (default: False)
         method: Detection method - 'color', 'motion', or 'combined' (default: 'color')
         motion_frames: Number of frames to analyze for motion detection (default: 30)
         motion_threshold: Pixel difference threshold for motion (default: 15)
@@ -233,13 +243,28 @@ def remove_background_with_alpha(
                     frame, motion_mask, background_color, tolerance
                 )
             elif method == "combined" and motion_mask is not None:
-                color_alpha = _process_frame(frame, color_ranges, soft_edges)
+                color_alpha = _process_frame(
+                    frame,
+                    color_ranges,
+                    soft_edges,
+                    use_adaptive_bg=adaptive_bg,
+                    hole_fill_threshold=hole_fill,
+                    flood_fill=flood_fill,
+                )
                 motion_alpha = create_motion_based_mask(
                     frame, motion_mask, background_color, tolerance
                 )
                 alpha = cv2.bitwise_or(color_alpha, motion_alpha)
             else:
-                alpha = _process_frame(frame, color_ranges, soft_edges)
+                alpha = _process_frame(
+                    frame,
+                    color_ranges,
+                    soft_edges,
+                    tolerance=tolerance,
+                    use_adaptive_bg=adaptive_bg,
+                    hole_fill_threshold=hole_fill,
+                    flood_fill=flood_fill,
+                )
 
             alpha = _apply_edge_cleanup(alpha, edge_cleanup)
             alpha = _apply_soft_edges_alpha(alpha, soft_edges)
@@ -305,8 +330,18 @@ def _process_frame(
     frame: np.ndarray,
     color_ranges: list,
     soft_edges: int,
+    tolerance: int = 30,
+    use_adaptive_bg: bool = False,
+    hole_fill_threshold: int = 15,
+    flood_fill: bool = False,
 ) -> np.ndarray:
     """Process single frame to create alpha channel using multiple color ranges."""
+
+    # If adaptive mode, detect background from frame borders
+    if use_adaptive_bg:
+        bg_color = detect_background_color_from_frame_border(frame, border_width=10)
+        color_ranges = [{"color": bg_color, "tolerance": tolerance}]
+
     # Start with empty mask
     combined_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
 
@@ -341,6 +376,14 @@ def _process_frame(
 
     # Invert to get foreground mask
     foreground_mask = cv2.bitwise_not(combined_mask)
+
+    # Fill small holes in the mask
+    if hole_fill_threshold > 0:
+        foreground_mask = fill_mask_holes(foreground_mask, hole_fill_threshold)
+
+    # Fill internal holes trapped between foreground pixels using contour-based fill
+    if flood_fill:
+        foreground_mask = fill_enclosed_background(foreground_mask, min_area=30)
 
     # Apply soft edges
     if soft_edges > 0:
@@ -459,6 +502,30 @@ if __name__ == "__main__":
         default=3,
         help="Pixels to erode from foreground edges to remove color spill (default: 3)",
     )
+    parser.add_argument(
+        "--adaptive-bg",
+        action="store_true",
+        default=False,
+        help="Detect background color per-frame from frame borders (better for varying lighting)",
+    )
+    parser.add_argument(
+        "--hole-fill",
+        type=int,
+        default=25,
+        help="Fill holes in mask smaller than this size (0 to disable, default: 25)",
+    )
+    parser.add_argument(
+        "--flood-fill",
+        action="store_true",
+        default=False,
+        help="Fill internal holes trapped between foreground pixels (default: disabled)",
+    )
+    parser.add_argument(
+        "--no-flood-fill",
+        dest="flood_fill",
+        action="store_false",
+        help="Disable flood fill for internal holes",
+    )
 
     args = parser.parse_args()
 
@@ -484,6 +551,9 @@ if __name__ == "__main__":
             if len(detected_colors) > 1:
                 print(f"Multiple colors detected, using primary: {bg_color}")
 
+    # Enable flood_fill by default when using adaptive_bg
+    flood_fill_enabled = args.flood_fill if args.flood_fill else args.adaptive_bg
+
     result = remove_background_with_alpha(
         input_path=args.input,
         output_path=args.output,
@@ -498,6 +568,9 @@ if __name__ == "__main__":
         method=args.method,
         motion_frames=args.motion_frames,
         edge_cleanup=args.edge_cleanup,
+        adaptive_bg=args.adaptive_bg,
+        hole_fill=args.hole_fill,
+        flood_fill=flood_fill_enabled,
     )
 
     if result["success"]:
