@@ -1,3 +1,10 @@
+"""
+Core library for background removal from videos.
+
+Provides color-based and motion-based segmentation, mask refinement,
+and video processing utilities.
+"""
+
 import cv2
 import numpy as np
 

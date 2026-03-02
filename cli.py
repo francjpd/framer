@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Script to process video with background removal and output with alpha channel.
-Uses OpenCV for processing and FFmpeg for final encoding with alpha support.
+CLI tool for removing backgrounds from videos with alpha channel support.
+
+Supports MOV and WebM output formats with transparency.
+Uses OpenCV for processing and FFmpeg for final encoding.
 """
 
 import cv2

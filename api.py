@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Helper module for AI agents to remove backgrounds from videos.
-Provides a simple function interface that can be easily called by agents.
+Simple Python API for removing backgrounds from videos.
 
-This module uses cli.py which outputs .mov files with alpha channel
+This module provides a high-level function interface for removing
+video backgrounds. It outputs .mov or .webm files with alpha channel
 for proper transparency support.
 """
 
