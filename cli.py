@@ -13,7 +13,8 @@ import shutil
 import tempfile
 import re
 from pathlib import Path
-from typing import Dict, Any, List, Dict as DictType
+from typing import Dict, Any
+
 
 from bgremover import (
     generate_color_ranges,
@@ -22,12 +23,11 @@ from bgremover import (
     detect_motion_region,
     create_motion_based_mask,
     fill_mask_holes,
-    fill_internal_holes,
     fill_enclosed_background,
 )
 
 
-def parse_color(color_str):
+def parse_color(color_str: str) -> list | None:
     """Parse color string - supports BGR (B,G,R), hex (#RRGGBB or RRGGBB)."""
     if color_str is None:
         return None
@@ -45,16 +45,17 @@ def parse_color(color_str):
 
     try:
         values = [int(x.strip()) for x in color_str.split(",")]
-        if len(values) != 3:
-            raise ValueError
-        return values
+        if len(values) == 3:
+            return values
     except ValueError:
-        raise ValueError(
-            f"Invalid color format: '{color_str}'. Use 'B,G,R', '#RRGGBB', or 'RRGGBB'"
-        )
+        pass
+
+    raise ValueError(
+        f"Invalid color format: '{color_str}'. Use 'B,G,R', '#RRGGBB', or 'RRGGBB'"
+    )
 
 
-def get_output_format(output_path: str, format_flag: str = None) -> str:
+def get_output_format(output_path: str, format_flag: str | None) -> str:
     """
     Determine output format from path extension or flag.
 
@@ -65,7 +66,7 @@ def get_output_format(output_path: str, format_flag: str = None) -> str:
     Returns:
         'mov' or 'webm'
     """
-    if format_flag:
+    if format_flag is not None:
         return format_flag.lower()
 
     ext = Path(output_path).suffix.lower()
@@ -124,215 +125,45 @@ def _encode_webm(frames_dir: Path, fps: float, output_path: str) -> str:
     return str(final_output)
 
 
-def remove_background(
-    input_path: str,
-    output_path: str,
-    background_color: list,
-    tolerance: int = 30,
-    soft_edges: int = 5,
-    color_space: str = "bgr",
-    show_progress: bool = False,
-    auto_ranges: bool = True,
-    num_ranges: int = 5,
-    output_format: str = None,
-    method: str = "color",
-    motion_frames: int = 30,
-    motion_threshold: int = 15,
-    edge_cleanup: int = 3,
-    adaptive_bg: bool = False,
-    hole_fill: int = 25,
-    flood_fill: bool = False,
-) -> Dict[str, Any]:
-    """
-    Remove background from video and output with alpha channel.
+def _apply_soft_edges_alpha(mask: np.ndarray, soft_edges: int) -> np.ndarray:
+    """Apply soft edges to a binary mask."""
+    if mask is None or mask.sum() == 0:
+        return mask
 
-    Since OpenCV's VideoWriter doesn't support 4-channel output natively,
-    this function uses a workaround:
-    1. Process frames and save as PNG sequence (with alpha)
-    2. Use FFmpeg to combine PNG sequence into MOV/WebM with alpha
+    if soft_edges <= 0:
+        return mask
 
-    Args:
-        input_path: Input video path
-        output_path: Output video path
-        background_color: BGR color [B, G, R]
-        tolerance: Color tolerance (default: 30)
-        soft_edges: Soft edge size (default: 5)
-        color_space: 'hsv' or 'bgr' (default: 'bgr')
-        show_progress: Show progress (default: False)
-        auto_ranges: Auto-generate color ranges (default: True)
-        num_ranges: Number of auto-generated ranges (default: 5)
-        output_format: Output format - 'mov' or 'webm'. Auto-detected from extension if not provided.
-        method: Detection method - 'color', 'motion', or 'combined' (default: 'color')
-        motion_frames: Number of frames to analyze for motion detection (default: 30)
-        motion_threshold: Pixel difference threshold for motion (default: 15)
-        edge_cleanup: Pixels to erode from foreground edges to remove color spill (default: 3)
-        adaptive_bg: Detect background color per-frame from borders (default: False)
-        hole_fill: Fill holes in mask smaller than this size (default: 25, 0 to disable)
-        flood_fill: Fill internal holes trapped between foreground pixels (default: False)
-        method: Detection method - 'color', 'motion', or 'combined' (default: 'color')
-        motion_frames: Number of frames to analyze for motion detection (default: 30)
-        motion_threshold: Pixel difference threshold for motion (default: 15)
+    kernel_size = 2 * soft_edges + 1
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
 
-    Returns:
-        dict with success, output_path, error
-    """
-    result: Dict[str, Any] = {"success": False, "output_path": None, "error": None}
+    dilated = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
+    gradient = dilated - mask
 
-    temp_dir = None
+    soft_mask = mask.astype(np.float32) / 255.0
+    transition = gradient.astype(np.float32) / 255.0
+    soft_mask = soft_mask + (transition * 0.5)
 
-    try:
-        input_file = Path(input_path)
-        if not input_file.exists():
-            result["error"] = f"Input file not found: {input_path}"
-            return result
+    return (soft_mask * 255).astype(np.uint8)
 
-        # Check FFmpeg is available
-        if shutil.which("ffmpeg") is None:
-            result["error"] = (
-                "FFmpeg not found. Please install FFmpeg for alpha channel support."
-            )
-            return result
 
-        # Create temp directory for PNG sequence
-        temp_dir = Path(tempfile.mkdtemp())
-
-        # Open video
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened():
-            result["error"] = f"Could not open video: {input_path}"
-            return result
-
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-        # Generate color ranges if auto_ranges is enabled
-        if auto_ranges:
-            color_ranges = generate_color_ranges(
-                background_color, num_ranges, tolerance
-            )
-            if show_progress:
-                print(
-                    f"Auto-generating {len(color_ranges)} color ranges from base color {background_color}"
-                )
-        else:
-            color_ranges = [{"color": background_color, "tolerance": tolerance}]
-
-        motion_mask = None
-        if method in ("motion", "combined"):
-            if show_progress:
-                print("Detecting motion region...")
-            motion_mask = detect_motion_region(
-                input_path,
-                num_frames=motion_frames,
-                threshold=motion_threshold,
-                dilate_kernel=11,
-            )
-            if show_progress:
-                motion_pixels = np.count_nonzero(motion_mask) / motion_mask.size * 100
-                print(f"Motion region: {motion_pixels:.1f}% of frame")
-
-        frame_count = 0
-
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            if method == "motion" and motion_mask is not None:
-                alpha = create_motion_based_mask(
-                    frame, motion_mask, background_color, tolerance
-                )
-            elif method == "combined" and motion_mask is not None:
-                color_alpha = _process_frame(
-                    frame,
-                    color_ranges,
-                    soft_edges,
-                    use_adaptive_bg=adaptive_bg,
-                    hole_fill_threshold=hole_fill,
-                    flood_fill=flood_fill,
-                )
-                motion_alpha = create_motion_based_mask(
-                    frame, motion_mask, background_color, tolerance
-                )
-                alpha = cv2.bitwise_or(color_alpha, motion_alpha)
-            else:
-                alpha = _process_frame(
-                    frame,
-                    color_ranges,
-                    soft_edges,
-                    tolerance=tolerance,
-                    use_adaptive_bg=adaptive_bg,
-                    hole_fill_threshold=hole_fill,
-                    flood_fill=flood_fill,
-                )
-
-            alpha = _apply_edge_cleanup(alpha, edge_cleanup)
-            alpha = _apply_soft_edges_alpha(alpha, soft_edges)
-
-            # Split frame channels
-            b, g, r = cv2.split(frame)
-
-            # Merge to BGRA
-            bgra = cv2.merge([b, g, r, alpha])
-
-            # Save as PNG
-            frame_path = temp_dir / f"frame_{frame_count:05d}.png"
-            cv2.imwrite(str(frame_path), bgra)
-
-            frame_count += 1
-
-            if show_progress and frame_count % 10 == 0:
-                progress = (frame_count / total_frames) * 100
-                print(f"\rProcessing: {progress:.1f}%", end="")
-
-        cap.release()
-
-        if show_progress:
-            print(f"\rProcessing: 100%")
-
-        # Determine output format
-        output_format = get_output_format(output_path, output_format)
-
-        # Encode to selected format
-        if output_format == "webm":
-            final_output = _encode_webm(temp_dir, fps, output_path)
-            format_note = "WebM with VP9 alpha support"
-        else:
-            final_output = _encode_mov(temp_dir, fps, output_path)
-            format_note = "MOV with QuickTime animation codec (alpha)"
-
-        result["success"] = True
-        result["output_path"] = str(final_output)
-
-        if show_progress:
-            print(f"✅ Background removed successfully!")
-            print(f"Output saved to: {final_output}")
-            print(f"\nNote: {format_note}")
-
-        return result
-
-    except subprocess.CalledProcessError as e:
-        result["error"] = f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}"
-    except Exception as e:
-        result["error"] = str(e)
-    finally:
-        # Clean up temp directory if exists
-        try:
-            if temp_dir is not None and temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-        except:
-            pass
-
-    return result
+def _apply_edge_cleanup(mask: np.ndarray, edge_cleanup: int) -> np.ndarray:
+    """Apply erosion to remove color spill from edges."""
+    if edge_cleanup <= 0:
+        return mask
+    if mask is None or mask.sum() == 0:
+        return mask
+    kernel_size = 2 * edge_cleanup + 1
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    return cv2.erode(mask, kernel, iterations=1)
 
 
 def _process_frame(
     frame: np.ndarray,
     color_ranges: list,
     soft_edges: int,
-    tolerance: int = 30,
+    edge_cleanup: int,
     use_adaptive_bg: bool = False,
     hole_fill_threshold: int = 15,
     flood_fill: bool = False,
@@ -342,7 +173,7 @@ def _process_frame(
     # If adaptive mode, detect background from frame borders
     if use_adaptive_bg:
         bg_color = detect_background_color_from_frame_border(frame, border_width=10)
-        color_ranges = [{"color": bg_color, "tolerance": tolerance}]
+        color_ranges = [{"color": bg_color, "tolerance": 30}]
 
     # Start with empty mask
     combined_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
@@ -387,61 +218,213 @@ def _process_frame(
     if flood_fill:
         foreground_mask = fill_enclosed_background(foreground_mask, min_area=30)
 
+    # Apply edge cleanup
+    foreground_mask = _apply_edge_cleanup(foreground_mask, edge_cleanup)
+
     # Apply soft edges
-    if soft_edges > 0:
-        kernel_size = 2 * soft_edges + 1
-        if kernel_size % 2 == 0:
-            kernel_size += 1
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
-
-        # Dilate the mask
-        dilated = cv2.dilate(foreground_mask.astype(np.uint8), kernel, iterations=1)
-
-        # Create gradient (transition zone)
-        gradient = dilated - foreground_mask
-
-        # Create soft transition
-        soft_mask = foreground_mask.astype(np.float32) / 255.0
-        transition = gradient.astype(np.float32) / 255.0
-        soft_mask = soft_mask + (transition * 0.5)
-
-        return (soft_mask * 255).astype(np.uint8)
+    foreground_mask = _apply_soft_edges_alpha(foreground_mask, soft_edges)
 
     return foreground_mask
 
 
-def _apply_soft_edges_alpha(mask: np.ndarray, soft_edges: int) -> np.ndarray:
-    """Apply soft edges to a binary mask."""
-    if mask is None or mask.sum() == 0:
-        return mask
+def remove_background(
+    input_path: str,
+    output_path: str,
+    background_color: list,
+    tolerance: int = 30,
+    soft_edges: int = 5,
+    show_progress: bool = False,
+    auto_ranges: bool = True,
+    num_ranges: int = 5,
+    method: str = "color",
+    motion_frames: int = 30,
+    motion_threshold: int = 15,
+    edge_cleanup: int = 3,
+    adaptive_bg: bool = False,
+    hole_fill: int = 25,
+    flood_fill: bool = False,
+) -> Dict[str, Any]:
+    """
+    Remove background from video and output with alpha channel.
 
-    if soft_edges > 0:
-        kernel_size = 2 * soft_edges + 1
-        if kernel_size % 2 == 0:
-            kernel_size += 1
-        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    Since OpenCV's VideoWriter doesn't support 4-channel output natively,
+    this function uses a workaround:
+    1. Process frames and save as PNG sequence (with alpha)
+    2. Use FFmpeg to combine PNG sequence into MOV/WebM with alpha
 
-        dilated = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
-        gradient = dilated - mask
+    Args:
+        input_path: Input video path
+        output_path: Output video path
+        background_color: BGR color [B, G, R]
+        tolerance: Color tolerance (default: 30)
+        soft_edges: Soft edge size (default: 5)
+        show_progress: Show progress (default: False)
+        auto_ranges: Auto-generate color ranges (default: True)
+        num_ranges: Number of auto-generated ranges (default: 5)
+        method: Detection method - 'color', 'motion', or 'combined' (default: 'color')
+        motion_frames: Number of frames to analyze for motion detection (default: 30)
+        motion_threshold: Pixel difference threshold for motion (default: 15)
+        edge_cleanup: Pixels to erode from foreground edges to remove color spill (default: 3)
+        adaptive_bg: Detect background color per-frame from borders (default: False)
+        hole_fill: Fill holes in mask smaller than this size (default: 25, 0 to disable)
+        flood_fill: Fill internal holes trapped between foreground pixels (default: False)
 
-        soft_mask = mask.astype(np.float32) / 255.0
-        transition = gradient.astype(np.float32) / 255.0
-        soft_mask = soft_mask + (transition * 0.5)
+    Returns:
+        dict with success, output_path, error
+    """
+    result: Dict[str, Any] = {"success": False, "output_path": None, "error": None}
 
-        return (soft_mask * 255).astype(np.uint8)
+    temp_dir = None
 
-    return mask
+    try:
+        input_file = Path(input_path)
+        if not input_file.exists():
+            result["error"] = f"Input file not found: {input_path}"
+            return result
 
+        if shutil.which("ffmpeg") is None:
+            result["error"] = (
+                "FFmpeg not found. Please install FFmpeg for alpha channel support."
+            )
+            return result
 
-def _apply_edge_cleanup(mask: np.ndarray, edge_cleanup: int) -> np.ndarray:
-    """Apply erosion to remove color spill from edges."""
-    if edge_cleanup <= 0:
-        return mask
-    if mask is None or mask.sum() == 0:
-        return mask
-    kernel_size = 2 * edge_cleanup + 1
-    kernel = np.ones((kernel_size, kernel_size), np.uint8)
-    return cv2.erode(mask, kernel, iterations=1)
+        temp_dir = Path(tempfile.mkdtemp())
+
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            result["error"] = f"Could not open video: {input_path}"
+            return result
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        # Generate color ranges if auto_ranges is enabled
+        if auto_ranges:
+            color_ranges = generate_color_ranges(
+                background_color, num_ranges, tolerance
+            )
+            if show_progress:
+                print(
+                    f"Auto-generating {len(color_ranges)} color ranges from base color {background_color}"
+                )
+        else:
+            color_ranges = [{"color": background_color, "tolerance": tolerance}]
+
+        motion_mask = None
+        if method in ("motion", "combined"):
+            if show_progress:
+                print("Detecting motion region...")
+            motion_mask = detect_motion_region(
+                input_path,
+                num_frames=motion_frames,
+                threshold=motion_threshold,
+                dilate_kernel=11,
+            )
+            if show_progress:
+                motion_pixels = np.count_nonzero(motion_mask) / motion_mask.size * 100
+                print(f"Motion region: {motion_pixels:.1f}% of frame")
+
+        frame_count = 0
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Create alpha mask based on detection method
+            if method == "color":
+                alpha = _process_frame(
+                    frame,
+                    color_ranges,
+                    soft_edges,
+                    edge_cleanup,
+                    use_adaptive_bg=adaptive_bg,
+                    hole_fill_threshold=hole_fill,
+                    flood_fill=flood_fill,
+                )
+            elif method == "motion" and motion_mask is not None:
+                alpha = create_motion_based_mask(
+                    frame, motion_mask, background_color, tolerance
+                )
+            elif method == "combined" and motion_mask is not None:
+                color_alpha = _process_frame(
+                    frame,
+                    color_ranges,
+                    soft_edges,
+                    edge_cleanup,
+                    use_adaptive_bg=adaptive_bg,
+                    hole_fill_threshold=hole_fill,
+                    flood_fill=flood_fill,
+                )
+                motion_alpha = create_motion_based_mask(
+                    frame, motion_mask, background_color, tolerance
+                )
+                alpha = cv2.bitwise_or(color_alpha, motion_alpha)
+            else:
+                # Fallback for combined method without motion mask
+                alpha = _process_frame(
+                    frame,
+                    color_ranges,
+                    soft_edges,
+                    edge_cleanup,
+                    use_adaptive_bg=adaptive_bg,
+                    hole_fill_threshold=hole_fill,
+                    flood_fill=flood_fill,
+                )
+
+            # Split frame channels
+            b, g, r = cv2.split(frame)
+
+            # Merge to BGRA
+            bgra = cv2.merge([b, g, r, alpha])
+
+            # Save as PNG
+            frame_path = temp_dir / f"frame_{frame_count:05d}.png"
+            cv2.imwrite(str(frame_path), bgra)
+
+            frame_count += 1
+
+            if show_progress and frame_count % 10 == 0:
+                progress = (frame_count / total_frames) * 100
+                print(f"\rProcessing: {progress:.1f}%", end="")
+
+        cap.release()
+
+        if show_progress:
+            print(f"\rProcessing: 100%")
+
+        # Determine output format
+        output_format = get_output_format(output_path, None)
+
+        # Encode to selected format
+        if output_format == "webm":
+            final_output = _encode_webm(temp_dir, fps, output_path)
+            format_note = "WebM with VP9 alpha support"
+        else:
+            final_output = _encode_mov(temp_dir, fps, output_path)
+            format_note = " MOV with QuickTime animation codec (alpha)"
+
+        result["success"] = True
+        result["output_path"] = str(final_output)
+
+        if show_progress:
+            print(f"\n✅ Success! Output: {final_output}")
+            print(f"Note: {format_note}")
+
+        return result
+
+    except subprocess.CalledProcessError as e:
+        result["error"] = f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}"
+    except Exception as e:
+        result["error"] = str(e)
+    finally:
+        if temp_dir is not None and temp_dir.exists():
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except:
+                pass
+
+    return result
 
 
 if __name__ == "__main__":
@@ -454,7 +437,7 @@ if __name__ == "__main__":
         "-c",
         "--color",
         default=None,
-        help="Background color (BGR: '0,255,0', hex: '#00FF00' or '00FF00'). If omitted, auto-detects from video.",
+        help="Background color (BGR: '0,255,0', hex: '#00FF00' or '00FF00'). Auto-detects if omitted.",
     )
     parser.add_argument("-t", "--tolerance", type=int, default=30)
     parser.add_argument("-e", "--edges", type=int, default=5)
@@ -462,13 +445,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--auto-ranges",
         action="store_true",
+        dest="auto_ranges",
         default=True,
-        help="Auto-generate color ranges",
+        help="Auto-generate color ranges (default)",
     )
     parser.add_argument(
         "--no-auto-ranges",
-        dest="auto_ranges",
         action="store_false",
+        dest="auto_ranges",
         help="Disable auto color ranges",
     )
     parser.add_argument(
@@ -479,18 +463,11 @@ if __name__ == "__main__":
         help="Number of auto-generated color ranges",
     )
     parser.add_argument(
-        "-f",
-        "--format",
-        choices=["mov", "webm"],
-        default=None,
-        help="Output format (auto-detected from extension if not specified)",
-    )
-    parser.add_argument(
         "-m",
         "--method",
         choices=["color", "motion", "combined"],
         default="color",
-        help="Detection method: color (default), motion (for moving subjects), combined",
+        help="Detection method: color (default), motion, combined",
     )
     parser.add_argument(
         "--motion-frames",
@@ -502,13 +479,13 @@ if __name__ == "__main__":
         "--edge-cleanup",
         type=int,
         default=3,
-        help="Pixels to erode from foreground edges to remove color spill (default: 3)",
+        help="Pixels to erode from edges to remove color spill (default: 3)",
     )
     parser.add_argument(
         "--adaptive-bg",
         action="store_true",
         default=False,
-        help="Detect background color per-frame from frame borders (better for varying lighting)",
+        help="Detect background per-frame from borders (better for varying lighting)",
     )
     parser.add_argument(
         "--hole-fill",
@@ -520,25 +497,15 @@ if __name__ == "__main__":
         "--flood-fill",
         action="store_true",
         default=False,
-        help="Fill internal holes trapped between foreground pixels (default: disabled)",
-    )
-    parser.add_argument(
-        "--no-flood-fill",
-        dest="flood_fill",
-        action="store_false",
-        help="Disable flood fill for internal holes",
+        help="Fill internal holes trapped between foreground pixels",
     )
 
     args = parser.parse_args()
 
-    bg_color = None
+    bg_color: list | None = None
     if args.color is not None:
         bg_color = parse_color(args.color)
-        auto_detect = False
     else:
-        auto_detect = True
-
-    if auto_detect:
         print("Auto-detecting background color from video borders...")
         detected_colors = detect_background_color_from_video(
             args.input, tolerance=args.tolerance
@@ -547,26 +514,23 @@ if __name__ == "__main__":
         if not detected_colors:
             print("Could not detect background color. Using default.")
             bg_color = [115, 188, 129]
-            auto_detect = False
         else:
             bg_color = detected_colors[0]
             if len(detected_colors) > 1:
                 print(f"Multiple colors detected, using primary: {bg_color}")
 
     # Enable flood_fill by default when using adaptive_bg
-    flood_fill_enabled = args.flood_fill if args.flood_fill else args.adaptive_bg
+    flood_fill_enabled = args.flood_fill or args.adaptive_bg
 
     result = remove_background(
         input_path=args.input,
         output_path=args.output,
-        background_color=bg_color,
+        background_color=bg_color,  # type: ignore
         tolerance=args.tolerance,
         soft_edges=args.edges,
-        color_space="bgr",
         show_progress=args.progress,
         auto_ranges=args.auto_ranges,
         num_ranges=args.num_ranges,
-        output_format=args.format,
         method=args.method,
         motion_frames=args.motion_frames,
         edge_cleanup=args.edge_cleanup,
