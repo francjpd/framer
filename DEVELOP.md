@@ -19,13 +19,8 @@ python cli.py input.mp4 output.webm -c "0,255,0" -p
 
 ```
 ┌─────────────────────────────────────────┐
-│           CLI Layer (cli.py)              │
-│     argparse-based command interface     │
-└────────────────────┬────────────────────┘
-                     │ subprocess call
-┌────────────────────▼────────────────────┐
-│              API Layer (cli.py)             │
-│        Simple Python API function         │
+│      CLI & Python API Layer (cli.py)      │
+│   Command-line interface + Python API     │
 └────────────────────┬────────────────────┘
                      │ imports
 ┌────────────────────▼────────────────────┐
@@ -98,8 +93,7 @@ Input Video (MP4)
 | File | Purpose | Key Functions/Classes |
 |------|---------|----------------------|
 | `bgremover.py` | Core library | `VideoBackgroundRemover`, `detect_background_color_*`, `fill_mask_holes`, `detect_motion_region` |
-| `cli.py` | CLI entry point | `remove_background()`, `_process_frame()`, `_encode_mov()`, `_encode_webm()` |
-| `cli.py` | CLI entry point & API | `remove_background()`, `remove_video_background()` |
+| `cli.py` | CLI tool + Python API | `remove_background()`, `remove_video_background()`, `_encode_mov()`, `_encode_webm()` |
 | `tests/` | Unit tests | `test_bgremover.py` |
 
 ## Entry Points
@@ -118,7 +112,7 @@ remover.add_color_range(target_color=[0,255,0], tolerance=30)
 remover.process_video("input.mp4", "output.webm")
 ```
 
-### 3. Agent Wrapper
+### 3. Python API
 ```python
 from cli import remove_video_background
 
