@@ -18,7 +18,7 @@ Auto-generate multiple color ranges from a single input color to capture backgro
 
 ## Implementation
 
-### 1. Modify `remove_bg_alpha.py`
+### 1. Modify `remove_bg.py`
 
 Add new function `generate_color_ranges()`:
 
@@ -75,7 +75,7 @@ Update `VideoBackgroundRemover` class:
 - Update `process_frame()` to handle multiple color ranges with OR logic
 - Ensure mask combines all ranges correctly
 
-### 3. Modify `remove_bg_alpha.py`
+### 3. Modify `remove_bg.py`
 
 Update `remove_background_with_alpha()` function:
 
@@ -91,7 +91,7 @@ Update `remove_video_background()` function:
 - When enabled, generate ranges automatically
 - Pass to underlying CLI tool
 
-### 5. Modify CLI `remove_bg_alpha.py`
+### 5. Modify CLI `remove_bg.py`
 
 Add CLI argument:
 
@@ -131,10 +131,10 @@ result = remove_video_background(
 
 ```bash
 # Auto ranges (default)
-python remove_bg_alpha.py input.mp4 output -c "73,101,74" -t 25
+python remove_bg.py input.mp4 output -c "73,101,74" -t 25
 
 # Disable auto ranges
-python remove_bg_alpha.py input.mp4 output -c "73,101,74" -t 25 --no-auto-ranges
+python remove_bg.py input.mp4 output -c "73,101,74" -t 25 --no-auto-ranges
 ```
 
 ## Files to Modify
@@ -142,7 +142,7 @@ python remove_bg_alpha.py input.mp4 output -c "73,101,74" -t 25 --no-auto-ranges
 | File | Changes |
 |------|---------|
 | `bgremover.py` | Add `add_auto_color_ranges()` method |
-| `remove_bg_alpha.py` | Add `generate_color_ranges()`, integrate with processing |
+| `remove_bg.py` | Add `generate_color_ranges()`, integrate with processing |
 | `agent_wrapper.py` | Add `auto_ranges` parameter, pass to CLI |
 | `SKILL.md` | Document new auto-range feature |
 

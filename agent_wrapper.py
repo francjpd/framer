@@ -3,7 +3,7 @@
 Helper module for AI agents to remove backgrounds from videos.
 Provides a simple function interface that can be easily called by agents.
 
-This module uses remove_bg_alpha.py which outputs .mov files with alpha channel
+This module uses remove_bg.py which outputs .mov files with alpha channel
 for proper transparency support.
 """
 
@@ -66,7 +66,7 @@ def remove_video_background(
     """
     Remove background from a video file with alpha channel (transparency).
 
-    This function uses remove_bg_alpha.py which outputs .mov or .webm files with
+    This function uses remove_bg.py which outputs .mov or .webm files with
     alpha channel support.
 
     Args:
@@ -144,7 +144,7 @@ def remove_video_background(
 
     try:
         # Build command for alpha CLI tool (uses FFmpeg for alpha support)
-        script_path = str(Path(__file__).parent / "remove_bg_alpha.py")
+        script_path = str(Path(__file__).parent / "remove_bg.py")
         cmd = [
             sys.executable,
             script_path,

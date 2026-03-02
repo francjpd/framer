@@ -122,7 +122,7 @@ def _encode_webm(frames_dir: Path, fps: float, output_path: str) -> str:
     return str(final_output)
 
 
-def remove_background_with_alpha(
+def remove_background(
     input_path: str,
     output_path: str,
     background_color: list,
@@ -554,7 +554,7 @@ if __name__ == "__main__":
     # Enable flood_fill by default when using adaptive_bg
     flood_fill_enabled = args.flood_fill if args.flood_fill else args.adaptive_bg
 
-    result = remove_background_with_alpha(
+    result = remove_background(
         input_path=args.input,
         output_path=args.output,
         background_color=bg_color,

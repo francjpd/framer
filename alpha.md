@@ -38,25 +38,25 @@ Requires: OpenCV, NumPy, FFmpeg
 
 ```bash
 # Auto-detect background + WebM output (recommended)
-python remove_bg_alpha.py input.mp4 output.webm
+python remove_bg.py input.mp4 output.webm
 
 # Auto-detect background + MOV output
-python remove_bg_alpha.py input.mp4 output.mov
+python remove_bg.py input.mp4 output.mov
 
 # Manual color + WebM
-python remove_bg_alpha.py input.mp4 output.webm -c "#00FF00"
+python remove_bg.py input.mp4 output.webm -c "#00FF00"
 
 # Manual color + MOV
-python remove_bg_alpha.py input.mp4 output.mov -c "0,255,0"
+python remove_bg.py input.mp4 output.mov -c "0,255,0"
 
 # Motion-based detection (for similar bg/subject colors)
-python remove_bg_alpha.py input.mp4 output.webm -m motion
+python remove_bg.py input.mp4 output.webm -m motion
 
 # Combined method
-python remove_bg_alpha.py input.mp4 output.webm -m combined
+python remove_bg.py input.mp4 output.webm -m combined
 
 # With flags
-python remove_bg_alpha.py input.mp4 output --format webm -t 30 -e 5 -p
+python remove_bg.py input.mp4 output --format webm -t 30 -e 5 -p
 ```
 
 ### Python API
@@ -160,7 +160,7 @@ Each frame samples 4 corners (5x5 pixels each), for 12 total samples. Colors wit
 | File | Description |
 |------|-------------|
 | `bgremover.py` | Core library (VideoBackgroundRemover class) |
-| `remove_bg_alpha.py` | CLI tool with alpha support |
+| `remove_bg.py` | CLI tool with alpha support |
 | `agent_wrapper.py` | Python API wrapper |
 | `remove_bg.py` | Basic CLI (no alpha) |
 
