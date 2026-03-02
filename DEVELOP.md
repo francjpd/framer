@@ -12,19 +12,19 @@ pip install -r requirements.txt
 pytest tests/
 
 # Try the CLI
-python remove_bg.py input.mp4 output.webm -c "0,255,0" -p
+python cli.py input.mp4 output.webm -c "0,255,0" -p
 ```
 
 ## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────┐
-│           CLI Layer (remove_bg.py)      │
+│           CLI Layer (cli.py)              │
 │     argparse-based command interface     │
 └────────────────────┬────────────────────┘
                      │ subprocess call
 ┌────────────────────▼────────────────────┐
-│      Agent Wrapper (agent_wrapper.py)    │
+│              API Layer (api.py)           │
 │        Simple Python API function         │
 └────────────────────┬────────────────────┘
                      │ imports
@@ -98,15 +98,15 @@ Input Video (MP4)
 | File | Purpose | Key Functions/Classes |
 |------|---------|----------------------|
 | `bgremover.py` | Core library | `VideoBackgroundRemover`, `detect_background_color_*`, `fill_mask_holes`, `detect_motion_region` |
-| `remove_bg.py` | CLI entry point | `remove_background()`, `_process_frame()`, `_encode_mov()`, `_encode_webm()` |
-| `agent_wrapper.py` | Simple API | `remove_video_background()` |
+| `cli.py` | CLI entry point | `remove_background()`, `_process_frame()`, `_encode_mov()`, `_encode_webm()` |
+| `api.py` | Simple API | `remove_video_background()` |
 | `tests/` | Unit tests | `test_bgremover.py` |
 
 ## Entry Points
 
 ### 1. CLI (Most Common)
 ```bash
-python remove_bg.py input.mp4 output.webm -c "0,255,0" -t 30 -p
+python cli.py input.mp4 output.webm -c "0,255,0" -t 30 -p
 ```
 
 ### 2. Python Library
@@ -120,7 +120,7 @@ remover.process_video("input.mp4", "output.webm")
 
 ### 3. Agent Wrapper
 ```python
-from agent_wrapper import remove_video_background
+from api import remove_video_background
 
 result = remove_video_background(
     input_path="input.mp4",
@@ -134,10 +134,10 @@ result = remove_video_background(
 | Goal | Read First |
 |------|-----------|
 | Understand core algorithm | `bgremover.py` - `_create_bgr_mask()`, `_create_hsv_mask()` |
-| Add CLI option | `remove_bg.py` - argparse section (bottom of file) |
+| Add CLI option | `cli.py` - argparse section (bottom of file) |
 | Add/modify detection | `bgremover.py` - `detect_motion_region()` |
 | Improve mask quality | `bgremover.py` - `fill_mask_holes()`, `fill_internal_holes()` |
-| Fix FFmpeg encoding | `remove_bg.py` - `_encode_mov()`, `_encode_webm()` |
+| Fix FFmpeg encoding | `cli.py` - `_encode_mov()`, `_encode_webm()` |
 
 ## Key Algorithms
 
@@ -179,8 +179,8 @@ pytest tests/test_bgremover.py -v
 
 ## Adding New Features
 
-1. **New CLI option**: Add to argparse in `remove_bg.py`
-2. **New detection method**: Add function in `bgremover.py`, integrate in `remove_bg.py`
+1. **New CLI option**: Add to argparse in `cli.py`
+2. **New detection method**: Add function in `bgremover.py`, integrate in `cli.py`
 3. **New mask refinement**: Add function in `bgremover.py`, call in pipeline
 
 ## Debugging Tips

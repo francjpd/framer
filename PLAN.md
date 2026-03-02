@@ -18,7 +18,7 @@ Auto-generate multiple color ranges from a single input color to capture backgro
 
 ## Implementation
 
-### 1. Modify `remove_bg.py`
+### 1. Modify `cli.py`
 
 Add new function `generate_color_ranges()`:
 
@@ -75,7 +75,7 @@ Update `VideoBackgroundRemover` class:
 - Update `process_frame()` to handle multiple color ranges with OR logic
 - Ensure mask combines all ranges correctly
 
-### 3. Modify `remove_bg.py`
+### 3. Modify `cli.py`
 
 Update `remove_background_with_alpha()` function:
 
@@ -83,7 +83,7 @@ Update `remove_background_with_alpha()` function:
 - When enabled, call `generate_color_ranges()` 
 - Pass all ranges to the processor
 
-### 4. Modify `agent_wrapper.py`
+### 4. Modify `api.py`
 
 Update `remove_video_background()` function:
 
@@ -91,7 +91,7 @@ Update `remove_video_background()` function:
 - When enabled, generate ranges automatically
 - Pass to underlying CLI tool
 
-### 5. Modify CLI `remove_bg.py`
+### 5. Modify CLI `cli.py`
 
 Add CLI argument:
 
@@ -106,7 +106,7 @@ Default: enabled
 ### Python
 
 ```python
-from agent_wrapper import remove_video_background
+from api import remove_video_background
 
 # Simple - auto-generates ranges from one color
 result = remove_video_background(
@@ -131,10 +131,10 @@ result = remove_video_background(
 
 ```bash
 # Auto ranges (default)
-python remove_bg.py input.mp4 output -c "73,101,74" -t 25
+python cli.py input.mp4 output -c "73,101,74" -t 25
 
 # Disable auto ranges
-python remove_bg.py input.mp4 output -c "73,101,74" -t 25 --no-auto-ranges
+python cli.py input.mp4 output -c "73,101,74" -t 25 --no-auto-ranges
 ```
 
 ## Files to Modify
@@ -142,8 +142,8 @@ python remove_bg.py input.mp4 output -c "73,101,74" -t 25 --no-auto-ranges
 | File | Changes |
 |------|---------|
 | `bgremover.py` | Add `add_auto_color_ranges()` method |
-| `remove_bg.py` | Add `generate_color_ranges()`, integrate with processing |
-| `agent_wrapper.py` | Add `auto_ranges` parameter, pass to CLI |
+| `cli.py` | Add `generate_color_ranges()`, integrate with processing |
+| `api.py` | Add `auto_ranges` parameter, pass to CLI |
 | `SKILL.md` | Document new auto-range feature |
 
 ## Testing

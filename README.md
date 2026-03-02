@@ -24,7 +24,7 @@ pip install -r requirements.txt
 ### CLI Tool
 
 ```bash
-python remove_bg.py input.mp4 output.webm -c "0,255,0" -t 30
+python cli.py input.mp4 output.webm -c "0,255,0" -t 30
 ```
 
 ### CLI Options
@@ -57,49 +57,49 @@ python remove_bg.py input.mp4 output.webm -c "0,255,0" -t 30
 #### Remove Green Screen Background
 
 ```bash
-python remove_bg.py input.mp4 output.webm -c "0,255,0" -t 30
+python cli.py input.mp4 output.webm -c "0,255,0" -t 30
 ```
 
 #### Remove Blue Screen Background
 
 ```bash
-python remove_bg.py input.mp4 output.webm -c "255,0,0" -t 30
+python cli.py input.mp4 output.webm -c "255,0,0" -t 30
 ```
 
 #### Auto-Detect Background Color
 
 ```bash
-python remove_bg.py input.mp4 output.webm
+python cli.py input.mp4 output.webm
 ```
 
 #### Use Motion Detection (for moving subjects)
 
 ```bash
-python remove_bg.py input.mp4 output.webm -m motion
+python cli.py input.mp4 output.webm -m motion
 ```
 
 #### Combined Method (best quality)
 
 ```bash
-python remove_bg.py input.mp4 output.webm -m combined
+python cli.py input.mp4 output.webm -m combined
 ```
 
 #### Adaptive Background (varying lighting)
 
 ```bash
-python remove_bg.py input.mp4 output.webm --adaptive-bg
+python cli.py input.mp4 output.webm --adaptive-bg
 ```
 
 #### With Hole Filling and Flood Fill
 
 ```bash
-python remove_bg.py input.mp4 output.webm --hole-fill 25 --flood-fill
+python cli.py input.mp4 output.webm --hole-fill 25 --flood-fill
 ```
 
 #### Full Example with All Options
 
 ```bash
-python remove_bg.py input.mp4 output.webm \
+python cli.py input.mp4 output.webm \
     -c "0,255,0" \
     -t 30 \
     -e 5 \
@@ -142,7 +142,7 @@ remover.process_video("input.mp4", "output.webm")
 ### AI Agent Wrapper
 
 ```python
-from agent_wrapper import remove_video_background
+from api import remove_video_background
 
 result = remove_video_background(
     input_path="input.mp4",
