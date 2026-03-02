@@ -142,7 +142,7 @@ remover.process_video("input.mp4", "output.webm")
 ### AI Agent Wrapper
 
 ```python
-from api import remove_video_background
+from cli import remove_video_background
 
 result = remove_video_background(
     input_path="input.mp4",

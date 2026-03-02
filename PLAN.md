@@ -83,7 +83,7 @@ Update `remove_background_with_alpha()` function:
 - When enabled, call `generate_color_ranges()` 
 - Pass all ranges to the processor
 
-### 4. Modify `api.py`
+### 4. Modify `cli.py`
 
 Update `remove_video_background()` function:
 
@@ -106,7 +106,7 @@ Default: enabled
 ### Python
 
 ```python
-from api import remove_video_background
+from cli import remove_video_background
 
 # Simple - auto-generates ranges from one color
 result = remove_video_background(
@@ -143,7 +143,7 @@ python cli.py input.mp4 output -c "73,101,74" -t 25 --no-auto-ranges
 |------|---------|
 | `bgremover.py` | Add `add_auto_color_ranges()` method |
 | `cli.py` | Add `generate_color_ranges()`, integrate with processing |
-| `api.py` | Add `auto_ranges` parameter, pass to CLI |
+| `cli.py` | Add `auto_ranges` parameter, pass to CLI |
 | `SKILL.md` | Document new auto-range feature |
 
 ## Testing

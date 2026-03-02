@@ -27,6 +27,42 @@ from bgremover import (
 )
 
 
+def _parse_color_from_api(color_value):
+    """
+    Parse color from various formats for API.
+    - BGR list/tuple: [B, G, R]
+    - Hex string: '#RRGGBB' or 'RRGGBB'
+    - BGR string: 'B,G,R'
+    """
+    if color_value is None:
+        return None
+
+    if isinstance(color_value, (list, tuple)):
+        if len(color_value) == 3:
+            return list(color_value)
+        return None
+
+    if isinstance(color_value, str):
+        color_str = color_value.strip()
+        if color_str.startswith("#"):
+            color_str = color_str[1:]
+
+        if re.match(r"^[0-9A-Fa-f]{6}$", color_str):
+            r = int(color_str[0:2], 16)
+            g = int(color_str[2:4], 16)
+            b = int(color_str[4:6], 16)
+            return [b, g, r]
+
+        try:
+            values = [int(x.strip()) for x in color_str.split(",")]
+            if len(values) == 3:
+                return values
+        except:
+            pass
+
+    return None
+
+
 def parse_color(color_str: str) -> list | None:
     """Parse color string - supports BGR (B,G,R), hex (#RRGGBB or RRGGBB)."""
     if color_str is None:
@@ -544,3 +580,176 @@ if __name__ == "__main__":
     else:
         print(f"\n❌ Error: {result['error']}")
         exit(1)
+
+
+def remove_video_background(
+    input_path,
+    output_path,
+    background_color=None,
+    tolerance=30,
+    soft_edges=5,
+    show_progress=False,
+    auto_ranges=True,
+    num_ranges=5,
+    auto_detect=True,
+    output_format=None,
+):
+    """
+    Remove background from a video file with alpha channel (transparency).
+
+    Args:
+        input_path: Path to input video file
+        output_path: Path to output video file. Format auto-detected from extension
+                    (.webm -> WebM, .mov -> MOV).
+        background_color: BGR color as list [B, G, R], or None for auto-detect.
+        tolerance: Color tolerance (0-100, default: 30)
+        soft_edges: Soft edge size (0 = hard edge, default: 5)
+        show_progress: Whether to show progress (default: False)
+        auto_ranges: Auto-generate color ranges (default: True)
+        num_ranges: Number of auto-generated ranges (default: 5)
+        output_format: 'mov' or 'webm' (auto-detected from extension if not specified)
+
+    Returns:
+        dict with keys: success, output_path, error
+
+    Example:
+        result = remove_video_background(
+            input_path="video.mp4",
+            output_path="output.webm",
+            background_color=[0, 255, 0],
+            tolerance=30
+        )
+
+        if result["success"]:
+            print(f"Output: {result['output_path']}")
+        else:
+            print(f"Error: {result['error']}")
+    """
+    from pathlib import Path as PathObj
+    import subprocess
+    import sys
+
+    result = {"success": False, "output_path": None, "error": None}
+
+    input_file = PathObj(input_path)
+    if not input_file.exists():
+        result["error"] = f"Input file not found: {input_path}"
+        return result
+
+    output_path_obj = PathObj(output_path)
+    output_ext = output_path_obj.suffix.lower()
+
+    if output_format is None:
+        output_format = "webm" if output_ext == ".webm" else "mov"
+
+    output_base = str(output_path_obj.with_suffix(""))
+    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        script_path = str(PathObj(__file__).parent / "cli.py")
+        cmd = [
+            sys.executable,
+            script_path,
+            str(input_path),
+            output_base,
+            "-t",
+            str(tolerance),
+            "-e",
+            str(soft_edges),
+        ]
+
+        if output_format == "webm":
+            cmd.extend(["-f", "webm"])
+
+        if auto_ranges:
+            cmd.extend(["--auto-ranges", "-n", str(num_ranges)])
+        else:
+            cmd.append("--no-auto-ranges")
+
+        if background_color is not None:
+            parsed_color = _parse_color_from_api(background_color)
+            if parsed_color is None:
+                result["error"] = (
+                    "background_color must be a list/tuple of 3 values [B, G, R], "
+                    "or a hex string"
+                )
+                return result
+            color_str = f"{parsed_color[0]},{parsed_color[1]},{parsed_color[2]}"
+            cmd.extend(["-c", color_str])
+
+        process = subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+        if process.returncode == 0:
+            if output_format == "webm":
+                result["output_path"] = f"{output_base}.webm"
+            else:
+                result["output_path"] = f"{output_base}.mov"
+            result["success"] = True
+        else:
+            result["error"] = (
+                process.stderr.strip() or f"CLI exited with code {process.returncode}"
+            )
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+def remove_video_background_multi_color(
+    input_path,
+    output_path,
+    color_ranges,
+    tolerance=30,
+    soft_edges=5,
+    color_space="hsv",
+    show_progress=False,
+):
+    """
+    Remove background from a video using multiple color ranges.
+
+    Args:
+        input_path: Path to input video file
+        output_path: Path to output video file
+        color_ranges: List of dicts with 'color' and optional 'tolerance', 'soft_edges'
+        tolerance: Default color tolerance (default: 30)
+        soft_edges: Soft edge size (default: 5)
+        color_space: 'hsv' or 'bgr' (default: 'hsv')
+        show_progress: Whether to show progress (default: False)
+
+    Returns:
+        dict with keys: success, output_path, error
+    """
+    try:
+        from bgremover import VideoBackgroundRemover
+
+        remover = VideoBackgroundRemover(color_space=color_space)
+
+        for color_range in color_ranges:
+            target_color = color_range["color"]
+            range_tolerance = color_range.get("tolerance", tolerance)
+            range_edges = color_range.get("soft_edges", soft_edges)
+
+            remover.add_color_range(
+                target_color=target_color,
+                tolerance=range_tolerance,
+                soft_edges=range_edges,
+            )
+
+        output_path = remover.process_video(
+            input_path=input_path, output_path=output_path, show_progress=show_progress
+        )
+
+        return {"success": True, "output_path": output_path, "error": None}
+
+    except ImportError:
+        return {
+            "success": False,
+            "output_path": None,
+            "error": "bgremover module not available",
+        }
+    except Exception as e:
+        return {"success": False, "output_path": None, "error": str(e)}
+
+
+process_video = remove_video_background
