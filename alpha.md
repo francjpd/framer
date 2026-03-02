@@ -62,7 +62,7 @@ python cli.py input.mp4 output --format webm -t 30 -e 5 -p
 ### Python API
 
 ```python
-from cli import remove_video_background
+from bgremover import remove_background
 
 # Auto-detect background + WebM output
 result = remove_video_background(

@@ -115,11 +115,10 @@ remover.process_video("input.mp4", "output.webm")
 ```
 
 ### 3. Python API
-
 ```python
-from cli import remove_video_background
+from bgremover import remove_background
 
-result = remove_video_background(
+result = remove_background(
     input_path="input.mp4",
     output_path="output.webm",
     background_color=[0, 255, 0]

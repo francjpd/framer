@@ -106,7 +106,7 @@ Default: enabled
 ### Python
 
 ```python
-from cli import remove_video_background
+from bgremover import remove_background
 
 # Simple - auto-generates ranges from one color
 result = remove_video_background(
