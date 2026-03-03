@@ -126,6 +126,36 @@ def main():
         default=False,
         help="Fill internal holes trapped between foreground pixels",
     )
+    parser.add_argument(
+        "--refine",
+        action="store_true",
+        default=False,
+        help="Enable refinement pass to catch missed background colors",
+    )
+    parser.add_argument(
+        "--refine-tolerance",
+        type=int,
+        default=45,
+        help="Color tolerance for refinement detection (default: 45)",
+    )
+    parser.add_argument(
+        "--refine-block-size",
+        type=int,
+        default=32,
+        help="Block size for section analysis in refinement (default: 32)",
+    )
+    parser.add_argument(
+        "--refine-interactive",
+        action="store_true",
+        default=False,
+        help="Enable interactive manual review for refinement (requires display)",
+    )
+    parser.add_argument(
+        "--refine-save-previews",
+        action="store_true",
+        default=False,
+        help="Save preview images with flagged areas to folder for review",
+    )
 
     args = parser.parse_args()
 
@@ -146,6 +176,11 @@ def main():
         adaptive_bg=args.adaptive_bg,
         hole_fill=args.hole_fill,
         flood_fill=args.flood_fill,
+        refine=args.refine,
+        refine_tolerance=args.refine_tolerance,
+        refine_block_size=args.refine_block_size,
+        refine_interactive=args.refine_interactive,
+        refine_save_previews=args.refine_save_previews,
     )
 
     if result["success"]:

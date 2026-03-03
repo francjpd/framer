@@ -740,6 +740,11 @@ def remove_background(
     adaptive_bg: bool = False,
     hole_fill: int = 25,
     flood_fill: bool = False,
+    refine: bool = False,
+    refine_tolerance: int = 45,
+    refine_block_size: int = 32,
+    refine_interactive: bool = False,
+    refine_save_previews: bool = False,
 ) -> Dict[str, Any]:
     """
     Remove background from video and output with alpha channel.
@@ -762,6 +767,11 @@ def remove_background(
         adaptive_bg: Detect background per-frame from borders (default: False)
         hole_fill: Fill holes smaller than size (default: 25)
         flood_fill: Fill internal holes (default: False)
+        refine: Enable refinement pass to catch missed background colors (default: False)
+        refine_tolerance: Color tolerance for refinement (default: 45)
+        refine_block_size: Block size for section analysis (default: 32)
+        refine_interactive: Enable manual review per frame (default: False)
+        refine_save_previews: Save preview images with flagged areas (default: False)
 
     Returns:
         dict with success, output_path, error
@@ -883,6 +893,20 @@ def remove_background(
         if show_progress:
             print(f"\rProcessing: 100%")
 
+        if refine:
+            if show_progress:
+                print("\nRunning refinement pass...")
+            refined_count = refine_background_removed_frames(
+                temp_dir,
+                background_color,
+                tolerance=refine_tolerance,
+                block_size=refine_block_size,
+                interactive=refine_interactive,
+                save_previews=refine_save_previews,
+            )
+            if show_progress:
+                print(f"Refinement complete: {refined_count} pixels/regions refined")
+
         # Encode to output format
         output_format = get_output_format(output_path, None)
         final_output = (
@@ -908,6 +932,350 @@ def remove_background(
                 pass
 
     return result
+
+
+def _color_match_in_ranges(pixel, color_ranges):
+    """Check if a pixel matches any of the background color ranges."""
+    b, g, r = pixel
+    for color_range in color_ranges:
+        bg_b, bg_g, bg_r = color_range["color"]
+        tolerance = color_range["tolerance"]
+        if (
+            abs(int(b) - bg_b) <= tolerance
+            and abs(int(g) - bg_g) <= tolerance
+            and abs(int(r) - bg_r) <= tolerance
+        ):
+            return True
+    return False
+
+
+def _detect_missed_background_pixel(
+    foreground_pixels, color_ranges, tolerance_override=None
+):
+    """Detect pixels that match background color but weren't removed."""
+    tolerance = tolerance_override if tolerance_override else 45
+    missed = []
+    for y, x, pixel in foreground_pixels:
+        b, g, r = pixel
+        for color_range in color_ranges:
+            bg = color_range["color"]
+            tol = tolerance_override if tolerance_override else color_range["tolerance"]
+            if (
+                abs(int(b) - bg[0]) <= tol
+                and abs(int(g) - bg[1]) <= tol
+                and abs(int(r) - bg[2]) <= tol
+            ):
+                missed.append((y, x))
+                break
+    return missed
+
+
+def _detect_missed_background_blocks(
+    frame, alpha_mask, color_ranges, block_size=32, tolerance_override=45
+):
+    """Detect blocks that have significant background color content."""
+    h, w = frame.shape[:2]
+    missed_blocks = []
+
+    for by in range(0, h, block_size):
+        for bx in range(0, w, block_size):
+            block_y = slice(by, min(by + block_size, h))
+            block_x = slice(bx, min(bx + block_size, w))
+
+            block_alpha = alpha_mask[block_y, block_x]
+            if block_alpha.sum() == 0:
+                continue
+
+            block_pixels = frame[block_y, block_x]
+            fg_pixels = block_pixels[block_alpha > 0]
+
+            if len(fg_pixels) == 0:
+                continue
+
+            bg_count = 0
+            total_fg = len(fg_pixels)
+
+            for pixel in fg_pixels:
+                b, g, r = pixel
+                for color_range in color_ranges:
+                    bg = color_range["color"]
+                    tol = (
+                        tolerance_override
+                        if tolerance_override
+                        else color_range["tolerance"]
+                    )
+                    if (
+                        abs(int(b) - bg[0]) <= tol
+                        and abs(int(g) - bg[1]) <= tol
+                        and abs(int(r) - bg[2]) <= tol
+                    ):
+                        bg_count += 1
+                        break
+
+            if bg_count > total_fg * 0.5:
+                missed_blocks.append((by, bx, block_size, block_size))
+
+    return missed_blocks
+
+
+def _detect_missed_background_regions(
+    frame, alpha_mask, color_ranges, tolerance_override=45
+):
+    """Detect connected regions that match background color."""
+    h, w = frame.shape[:2]
+
+    fg_mask = (alpha_mask > 0).astype(np.uint8)
+
+    kernel = np.ones((5, 5), np.uint8)
+    fg_mask = cv2.dilate(fg_mask, kernel, iterations=1)
+
+    contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    missed_regions = []
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < 50:
+            continue
+
+        mask = np.zeros((h, w), np.uint8)
+        cv2.drawContours(mask, [contour], -1, 255, -1)
+
+        fg_pixels = frame[mask > 0]
+
+        bg_count = 0
+        total = len(fg_pixels)
+
+        for pixel in fg_pixels:
+            b, g, r = pixel
+            for color_range in color_ranges:
+                bg = color_range["color"]
+                tol = (
+                    tolerance_override
+                    if tolerance_override
+                    else color_range["tolerance"]
+                )
+                if (
+                    abs(int(b) - bg[0]) <= tol
+                    and abs(int(g) - bg[1]) <= tol
+                    and abs(int(r) - bg[2]) <= tol
+                ):
+                    bg_count += 1
+                    break
+
+        if total > 0 and bg_count > total * 0.4:
+            missed_regions.append(contour)
+
+    return missed_regions
+
+
+def refine_background_removed_frames(
+    frames_dir,
+    background_color,
+    tolerance=45,
+    block_size=32,
+    interactive=False,
+    save_previews=False,
+    preview_dir=None,
+):
+    """
+    Refine frames to catch missed background-colored pixels.
+
+    Scans each frame using pixel-by-pixel, block-based, and region detection
+    methods to find background colors that weren't captured in initial removal.
+
+    Args:
+        frames_dir: Path to directory containing PNG frames
+        background_color: Base BGR background color [B, G, R]
+        tolerance: Color tolerance for detection (default: 45)
+        block_size: Block size for section analysis (default: 32)
+        interactive: Enable interactive manual review per frame
+        save_previews: Save preview images with flagged areas
+        preview_dir: Directory to save preview images
+
+    Returns:
+        Number of pixels/regions that were refined
+    """
+    frames_dir = Path(frames_dir)
+
+    if preview_dir is None:
+        preview_dir = frames_dir / "previews"
+    else:
+        preview_dir = Path(preview_dir)
+
+    if save_previews:
+        preview_dir.mkdir(parents=True, exist_ok=True)
+
+    color_ranges = generate_color_ranges(
+        background_color, num_ranges=3, base_tolerance=tolerance
+    )
+
+    frame_files = sorted(frames_dir.glob("frame_*.png"))
+    if not frame_files:
+        return 0
+
+    total_refined = 0
+
+    for frame_path in frame_files:
+        frame = cv2.imread(str(frame_path), cv2.IMREAD_UNCHANGED)
+        if frame is None:
+            continue
+
+        if frame.shape[2] == 4:
+            b, g, r, alpha = cv2.split(frame)
+            bgr_frame = cv2.merge([b, g, r])
+        else:
+            bgr_frame = frame
+            alpha = np.ones(frame.shape[:2], dtype=np.uint8) * 255
+
+        original_alpha = alpha.copy()
+
+        missed_pixels = []
+
+        fg_positions = np.where(alpha > 0)
+        foreground_pixels = list(
+            zip(
+                fg_positions[0],
+                fg_positions[1],
+                bgr_frame[fg_positions[0], fg_positions[1]],
+            )
+        )
+
+        if foreground_pixels:
+            missed_pixels = _detect_missed_background_pixel(
+                foreground_pixels, color_ranges, tolerance
+            )
+
+        missed_blocks = _detect_missed_background_blocks(
+            bgr_frame, alpha, color_ranges, block_size, tolerance
+        )
+
+        missed_regions = _detect_missed_background_regions(
+            bgr_frame, alpha, color_ranges, tolerance
+        )
+
+        for y, x in missed_pixels:
+            alpha[y, x] = 0
+
+        for by, bx, bh, bw in missed_blocks:
+            block_alpha = alpha[by : by + bh, bx : bx + bw]
+            if block_alpha.sum() > 0:
+                block_pixels = bgr_frame[by : by + bh, bx : bx + bw]
+                for py in range(bh):
+                    for px in range(bw):
+                        if block_alpha[py, px] > 0:
+                            pixel = block_pixels[py, px]
+                            for cr in color_ranges:
+                                bg = cr["color"]
+                                if (
+                                    abs(int(pixel[0]) - bg[0]) <= tolerance
+                                    and abs(int(pixel[1]) - bg[1]) <= tolerance
+                                    and abs(int(pixel[2]) - bg[2]) <= tolerance
+                                ):
+                                    alpha[by + py, bx + px] = 0
+                                    break
+
+        for contour in missed_regions:
+            mask = np.zeros(alpha.shape, np.uint8)
+            cv2.drawContours(mask, [contour], -1, 255, -1)
+            alpha = cv2.bitwise_and(alpha, cv2.bitwise_not(mask))
+
+        refined_count = np.sum(original_alpha > alpha)
+
+        if save_previews and (missed_pixels or missed_blocks or missed_regions):
+            preview_frame = bgr_frame.copy()
+
+            if len(preview_frame.shape) == 2:
+                preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_GRAY2BGR)
+
+            for y, x in missed_pixels[:100]:
+                cv2.circle(preview_frame, (x, y), 3, (0, 0, 255), -1)
+
+            for by, bx, bh, bw in missed_blocks:
+                cv2.rectangle(
+                    preview_frame, (bx, by), (bx + bw, by + bh), (0, 255, 255), 2
+                )
+
+            for contour in missed_regions:
+                cv2.drawContours(preview_frame, [contour], -1, (255, 0, 0), 2)
+
+            cv2.putText(
+                preview_frame,
+                f"Frame: {frame_path.name}",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2,
+            )
+            cv2.putText(
+                preview_frame,
+                f"Missed: {refined_count}",
+                (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 0),
+                2,
+            )
+
+            preview_path = (
+                preview_dir / f"preview_{frame_path.stem.replace('frame_', '')}.png"
+            )
+            cv2.imwrite(str(preview_path), preview_frame)
+
+        if interactive and (missed_pixels or missed_blocks or missed_regions):
+            preview_frame = bgr_frame.copy()
+
+            if len(preview_frame.shape) == 2:
+                preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_GRAY2BGR)
+
+            for y, x in missed_pixels[:100]:
+                cv2.circle(preview_frame, (x, y), 3, (0, 0, 255), -1)
+
+            for by, bx, bh, bw in missed_blocks:
+                cv2.rectangle(
+                    preview_frame, (bx, by), (bx + bw, by + bh), (0, 255, 255), 2
+                )
+
+            for contour in missed_regions:
+                cv2.drawContours(preview_frame, [contour], -1, (255, 0, 0), 2)
+
+            cv2.putText(
+                preview_frame,
+                f"Missed: {refined_count} - Press 'r' to refine, 's' to skip, 'q' to quit",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2,
+            )
+
+            cv2.imshow(
+                "Frame Preview - Red=pixels, Yellow=blocks, Blue=regions", preview_frame
+            )
+            key = cv2.waitKey(0) & 0xFF
+
+            if key == ord("q"):
+                cv2.destroyAllWindows()
+                break
+            elif key == ord("s"):
+                alpha = original_alpha
+                refined_count = 0
+
+        cv2.destroyAllWindows()
+
+        if frame.shape[2] == 4:
+            result = cv2.merge([b, g, r, alpha])
+        else:
+            result = alpha
+
+        cv2.imwrite(str(frame_path), result)
+
+        total_refined += refined_count
+
+    if save_previews:
+        print(f"\nPreviews saved to: {preview_dir}")
+
+    return total_refined
 
 
 def detect_motion_region(video_path, num_frames=30, threshold=15, dilate_kernel=11):
