@@ -10,7 +10,7 @@ Remove backgrounds from MP4 videos using color-based segmentation.
 - Soft edge transition for better quality
 - Auto-color detection from video
 - Multiple detection methods: color, motion, or combined
-- Hole filling and flood fill for cleaner masks
+- Refinement pass to catch missed background pixels
 - Multiple API options: CLI tool, Python library, or agent wrapper
 
 ## Installation
@@ -43,8 +43,11 @@ python cli.py input.mp4 output.webm -c "0,255,0" -t 30
 | | `--motion-frames` | 1-100 | 30 | Frames to analyze for motion detection |
 | | `--edge-cleanup` | 0-20 | 3 | Pixels to erode from edges to remove color spill |
 | | `--adaptive-bg` | flag | off | Detect background per-frame from borders |
-| | `--hole-fill` | 0-100 | 25 | Fill holes smaller than size (0=disable) |
-| | `--flood-fill` | flag | off | Fill trapped internal background pixels |
+| | `--refine` | flag | off | Enable refinement pass to catch missed background colors |
+| | `--refine-tolerance` | 0-100 | 45 | Color tolerance for refinement detection |
+| | `--refine-block-size` | 8-128 | 32 | Block size for section analysis in refinement |
+| | `--refine-interactive` | flag | off | Manual review per frame (requires display) |
+| | `--refine-save-previews` | flag | off | Save preview images with flagged areas |
 
 ### Detection Methods
 
@@ -90,28 +93,37 @@ python cli.py input.mp4 output.webm -m combined
 python cli.py input.mp4 output.webm --adaptive-bg
 ```
 
-#### With Hole Filling and Flood Fill
+#### With Refinement Pass
 
 ```bash
-python cli.py input.mp4 output.webm --hole-fill 25 --flood-fill
+python cli.py input.mp4 output.webm --refine --refine-tolerance 50
 ```
 
-#### Full Example with All Options
+#### Recommended: Combined + Adaptive + Refinement
 
 ```bash
 python cli.py input.mp4 output.webm \
-    -c "0,255,0" \
+    -e 0 \
     -t 30 \
-    -e 5 \
-    -n 10 \
-    -m combined \
-    --motion-frames 30 \
-    --edge-cleanup 3 \
     --adaptive-bg \
-    --hole-fill 25 \
-    --flood-fill \
-    -p
+    -m combined \
+    -p \
+    --refine \
+    --refine-block-size 20 \
+    --refine-tolerance 80 \
+    --edge-cleanup
 ```
+
+**Explanation:**
+- `-e 0` - No soft edges (hard edge for cleaner initial mask)
+- `-t 30` - Initial color tolerance
+- `--adaptive-bg` - Detect background per-frame (better for varying lighting)
+- `-m combined` - Use both color and motion detection
+- `-p` - Show progress
+- `--refine` - Enable refinement pass to catch missed background pixels
+- `--refine-block-size 20` - Smaller blocks for finer detection
+- `--refine-tolerance 80` - Higher tolerance in refinement to catch edge cases
+- `--edge-cleanup` - Run edge cleanup in refinement pass (after detecting missed backgrounds)
 
 ### Python Library
 
@@ -174,5 +186,5 @@ The format is automatically detected from the output file extension, or can be s
 - **Tuning**: Start with tolerance=30 and adjust based on your video's background uniformity
 - **Soft Edges**: Use soft_edges > 0 for smoother transitions around the subject
 - **Adaptive Background**: Use `--adaptive-bg` when lighting changes throughout the video
-- **Hole Filling**: Use `--hole-fill` to remove small gaps in the foreground mask
-- **Flood Fill**: Use `--flood-fill` to fill larger enclosed background regions
+- **Refinement Pass**: The refinement pass scans each frame for missed background-colored pixels using three methods: pixel-by-pixel, block-based, and region detection. It's especially useful for catching edge cases that the initial pass misses.
+- **Edge Cleanup**: When `--refine` is enabled, edge_cleanup runs in the refinement pass (after detecting missed backgrounds). When `--refine` is off, edge_cleanup runs in the first pass.
