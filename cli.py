@@ -1,29 +1,35 @@
 #!/usr/bin/env python3
 """
-CLI tool for removing backgrounds from videos with alpha channel support.
-
-Provides a simple command-line interface that validates inputs and calls
-the core bgremover library for processing.
+CLI tool for video processing with operations like background removal, FPS boost, etc.
 
 Usage:
-    python cli.py input.mp4 output.webm -c "0,255,0" -t 30 -p
+    python cli.py <input> <output> <operation> [options...]
+    python cli.py <input> <output> <operation> --config config.json
+
+Operations:
+    remove-bg - Remove background with alpha channel
+    fps-boost - Increase video frame rate
 
 Options:
-    -c, --color      Background color (BGR: "0,255,0", hex: "#00FF00")
-    -t, --tolerance  Color tolerance (default: 30)
-    -e, --edges      Soft edge size (default: 5)
-    -p, --progress   Show progress bar
-    -m, --method     Detection method: color (default), motion, combined
+    --config, -c  Path to JSON config file (exclusive with other options)
+
+Examples:
+    python cli.py input.mp4 output.webm remove-bg --tolerance 30
+    python cli.py input.mp4 output.mp4 fps-boost --to 60
+    python cli.py input.mp4 output.webm remove-bg --config pipeline.json
 """
 
 import argparse
 import sys
+import json
+from pathlib import Path
 
-from bgremover import remove_background as bg_remove
+# Import operations
+from ops import get_registry
 
 
 def parse_color(color_str):
-    """Parse color from BGR string, hex, or list."""
+    """Parse color from BGR string or hex."""
     if color_str is None:
         return None
 
@@ -57,135 +63,176 @@ def parse_color(color_str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Remove background with alpha channel")
-    parser.add_argument("input", help="Input video")
-    parser.add_argument("output", help="Output video")
+    registry = get_registry()
+    available_ops = registry.list_operations()
+
+    parser = argparse.ArgumentParser(
+        description="Video processing CLI with composable operations",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=f"""
+Operations:
+{chr(10).join(f"  {name}: {op["description"]}" for name, op in available_ops.items())}
+
+Examples:
+  python cli.py input.mp4 output.webm remove-bg --tolerance 30
+  python cli.py input.mp4 output.mp4 fps-boost --to 60
+  python cli.py input.mp4 output.webm remove-bg --config pipeline.json
+""",
+    )
+
+    parser.add_argument("input", help="Input video file")
+    parser.add_argument("output", help="Output video file")
+
+    # Add config flag (applies to all operations, exclusive with other args)
     parser.add_argument(
         "-c",
-        "--color",
-        default=None,
-        help="Background color (BGR: '0,255,0', hex: '#00FF00' or '00FF00'). Auto-detects if omitted.",
+        "--config",
+        dest="config",
+        help="Path to JSON config file (exclusive with other options)",
     )
-    parser.add_argument("-t", "--tolerance", type=int, default=30)
-    parser.add_argument("-e", "--edges", type=int, default=5)
-    parser.add_argument("-p", "--progress", action="store_true")
-    parser.add_argument(
-        "--auto-ranges",
-        action="store_true",
-        dest="auto_ranges",
-        default=True,
-        help="Auto-generate color ranges (default)",
+
+    # Add subparsers for each operation
+    subparsers = parser.add_subparsers(
+        dest="operation", required=True, help="Operation to perform"
     )
-    parser.add_argument(
-        "--no-auto-ranges",
-        action="store_false",
-        dest="auto_ranges",
-        help="Disable auto color ranges",
-    )
-    parser.add_argument(
-        "-n",
-        "--num-ranges",
-        type=int,
-        default=5,
-        help="Number of auto-generated color ranges",
-    )
-    parser.add_argument(
-        "-m",
-        "--method",
-        choices=["color", "motion", "combined"],
-        default="color",
-        help="Detection method: color (default), motion, combined",
-    )
-    parser.add_argument(
-        "--motion-frames",
-        type=int,
-        default=30,
-        help="Number of frames to analyze for motion detection (default: 30)",
-    )
-    parser.add_argument(
-        "--edge-cleanup",
-        type=int,
-        default=3,
-        help="Pixels to erode from edges to remove color spill (default: 3)",
-    )
-    parser.add_argument(
-        "--adaptive-bg",
-        action="store_true",
-        default=False,
-        help="Detect background per-frame from borders (better for varying lighting)",
-    )
-    parser.add_argument(
-        "--refine",
-        action="store_true",
-        default=False,
-        help="Enable refinement pass to catch missed background colors",
-    )
-    parser.add_argument(
-        "--refine-tolerance",
-        type=int,
-        default=45,
-        help="Color tolerance for refinement detection (default: 45)",
-    )
-    parser.add_argument(
-        "--refine-block-size",
-        type=int,
-        default=32,
-        help="Block size for section analysis in refinement (default: 32)",
-    )
-    parser.add_argument(
-        "--refine-interactive",
-        action="store_true",
-        default=False,
-        help="Enable interactive manual review for refinement (requires display)",
-    )
-    parser.add_argument(
-        "--refine-save-previews",
-        action="store_true",
-        default=False,
-        help="Save preview images with flagged areas to folder for review",
-    )
-    parser.add_argument(
-        "--loop",
-        action="store_true",
-        default=True,
-        help="Enable infinite loop for output video (default: on)",
-    )
-    parser.add_argument(
-        "--no-loop",
-        action="store_false",
-        dest="loop",
-        help="Disable infinite loop for output video",
-    )
+
+    # Track which subparsers we've added
+    added_ops = set()
+
+    for name, op_info in available_ops.items():
+        # Normalize name for argparse (replace hyphens with underscores for subcommand name)
+        normalized_name = name.replace("-", "_")
+
+        if normalized_name in added_ops:
+            continue
+        added_ops.add(normalized_name)
+
+        subparser = subparsers.add_parser(normalized_name, help=op_info["description"])
+
+        # Get args schema for this operation
+        schema = op_info["args_schema"]
+
+        for arg_name, arg_info in schema.items():
+            # Convert snake_case to --arg-name
+            flag_name = f"--{arg_name.replace('_', '-')}"
+            arg_type = arg_info.get("type", "string")
+
+            # Map types
+            if arg_type == "int":
+                type_func = int
+            elif arg_type == "float":
+                type_func = float
+            elif arg_type == "bool":
+                type_func = lambda x: x.lower() != "false"
+            else:
+                type_func = str
+
+            default = arg_info.get("default")
+
+            if arg_type == "bool":
+                subparser.add_argument(
+                    flag_name,
+                    dest=arg_name,
+                    default=default,
+                    help=arg_info.get("description", ""),
+                )
+            else:
+                subparser.add_argument(
+                    flag_name,
+                    type=type_func,
+                    default=default,
+                    dest=arg_name,
+                    help=arg_info.get("description", ""),
+                )
 
     args = parser.parse_args()
 
-    bg_color = parse_color(args.color)
+    # Get operation info
+    # Convert underscores back to hyphens for registry lookup
+    op_name = args.operation.replace("_", "-")
+    op_info = registry.get(op_name)
 
-    result = bg_remove(
-        input_path=args.input,
-        output_path=args.output,
-        background_color=bg_color,
-        tolerance=args.tolerance,
-        soft_edges=args.edges,
-        show_progress=args.progress,
-        auto_ranges=args.auto_ranges,
-        num_ranges=args.num_ranges,
-        method=args.method,
-        motion_frames=args.motion_frames,
-        edge_cleanup=args.edge_cleanup,
-        adaptive_bg=args.adaptive_bg,
-        refine=args.refine,
-        refine_tolerance=args.refine_tolerance,
-        refine_block_size=args.refine_block_size,
-        refine_interactive=args.refine_interactive,
-        refine_save_previews=args.refine_save_previews,
-        loop=args.loop,
-    )
+    if not op_info:
+        print(f"Error: Unknown operation '{op_name}'")
+        print(f"Available operations: {list(available_ops.keys())}")
+        sys.exit(1)
 
-    if result["success"]:
-        print(f"\n✅ Success! Output: {result['output_path']}")
+    # Check for config exclusivity
+    config = getattr(args, "config", None)
+
+    if config:
+        # Validate no other options were passed (except input/output/operation)
+        passed_args = {}
+
+        # Get all parsed args (exclude special keys)
+        parsed_args = {
+            k: v
+            for k, v in vars(args).items()
+            if k not in ["input", "output", "operation", "config"]
+        }
+
+        # Check which ones were explicitly passed vs default
+        schema = op_info["args_schema"]
+
+        for arg_name, value in parsed_args.items():
+            arg_info = schema.get(arg_name, {})
+            arg_type = arg_info.get("type", "string")
+            default = arg_info.get("default")
+
+            # Skip if value matches default
+            if arg_type == "bool":
+                # store_true stores False by default, True when flag passed
+                # store_false stores True by default, False when flag passed
+                actual_default = arg_info.get("default", False)
+                if value != actual_default:
+                    passed_args[arg_name] = value
+            elif value is not None and value != default:
+                passed_args[arg_name] = value
+
+        if passed_args:
+            print(
+                f"Error: --config is exclusive. Cannot use other flags when config is specified."
+            )
+            print(f"Passed conflicting args: {list(passed_args.keys())}")
+            sys.exit(1)
+
+        # Load config
+        config_path = Path(config)
+        if not config_path.exists():
+            print(f"Error: Config file not found: {config}")
+            sys.exit(1)
+
+        with open(config_path) as f:
+            config_data = json.load(f)
+
+        op_config = config_data.get(args.operation, {})
+        op_args = op_config
     else:
-        print(f"\n❌ Error: {result['error']}")
+        # Build args from parsed values (exclude None/empty)
+        op_args = {
+            k: v
+            for k, v in vars(args).items()
+            if k not in ["input", "output", "operation", "config"] and v is not None
+        }
+
+        # Convert color if provided
+        if "color" in op_args:
+            op_args["color"] = parse_color(op_args["color"])
+
+    # Execute operation
+    try:
+        result = op_info["func"](
+            input_path=args.input, output_path=args.output, **op_args
+        )
+
+        if result.get("success"):
+            print(f"\n✅ Success! Output: {result['output_path']}")
+        else:
+            print(f"\n❌ Error: {result.get('error', 'Unknown error')}")
+            sys.exit(1)
+
+    except Exception as e:
+        print(f"\n❌ Error: {str(e)}")
         sys.exit(1)
 
 

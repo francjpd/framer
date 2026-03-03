@@ -1,190 +1,154 @@
-# Background Remover for MP4 Videos
+# Frame - Composable Video Processing CLI
 
-Remove backgrounds from MP4 videos using color-based segmentation.
+Transform videos with composable operations. Built on FFmpeg, designed for pipelines.
 
-## Features
+## ✨ Features
 
-- Remove background from MP4 videos with transparent backgrounds
-- Support for green screen, blue screen, or any solid color background
-- Configurable color tolerance for imperfect backgrounds
-- Soft edge transition for better quality
-- Auto-color detection from video
-- Multiple detection methods: color, motion, or combined
-- Refinement pass to catch missed background pixels
-- Multiple API options: CLI tool, Python library, or agent wrapper
+- **Composable operations**: Chain multiple video transformations
+- **Simple CLI**: `python cli.py input.mp4 output.webm fps-boost --to 60`
+- **Config support**: Use JSON configs for complex operations
+- **Modular**: Each operation is independent and extensible
 
-## Installation
+## 🚀 Quick Start
 
 ```bash
+# Install dependencies
 pip install -r requirements.txt
+
+# Boost FPS to 60
+python cli.py input.mp4 output.mp4 fps-boost --to 60
+
+# Remove background
+python cli.py input.mp4 output.webm remove-bg --tolerance 30
+
+# Use config file for complex operations
+python cli.py input.mp4 output.webm remove-bg --config config.json
 ```
 
-## Usage
+## 📦 Operations
 
-### CLI Tool
+### `fps-boost`
+Increase video frame rate using FFmpeg's minterpolate filter.
 
 ```bash
-python cli.py input.mp4 output.webm -c "0,255,0" -t 30
+python cli.py input.mp4 output.mp4 fps-boost --to 60
 ```
 
-### CLI Options
+**Options:**
+- `--to` - Target FPS (default: 60)
 
-| Option | Alias | Values | Default | Description |
-|--------|-------|--------|---------|-------------|
-| `input` | - | file | *required | Input video file |
-| `output` | - | file | *required | Output video file |
-| `-c` | `--color` | BGR string or hex | auto-detect | Background color (e.g., "0,255,0" or "#00FF00") |
-| `-t` | `--tolerance` | 0-100 | 30 | Color matching tolerance |
-| `-e` | `--edges` | 0+ | 5 | Soft edge size (0 = hard edge) |
-| `-p` | `--progress` | flag | off | Show progress bar |
-| `-n` | `--num-ranges` | 1-20 | 5 | Number of auto-generated color ranges |
-| `-f` | `--format` | mov, webm | auto | Output format |
-| `-m` | `--method` | color, motion, combined | color | Detection method |
-| | `--motion-frames` | 1-100 | 30 | Frames to analyze for motion detection |
-| | `--edge-cleanup` | 0-20 | 3 | Pixels to erode from edges to remove color spill |
-| | `--adaptive-bg` | flag | off | Detect background per-frame from borders |
-| | `--refine` | flag | off | Enable refinement pass to catch missed background colors |
-| | `--refine-tolerance` | 0-100 | 45 | Color tolerance for refinement detection |
-| | `--refine-block-size` | 8-128 | 32 | Block size for section analysis in refinement |
-| | `--refine-interactive` | flag | off | Manual review per frame (requires display) |
-| | `--refine-save-previews` | flag | off | Save preview images with flagged areas |
+---
 
-### Detection Methods
-
-- **color** (default) - Uses color segmentation to detect background
-- **motion** - Detects moving objects as foreground (good for moving subjects against static background)
-- **combined** - Uses both color and motion for best results
-
-### Examples
-
-#### Remove Green Screen Background
+### `remove-bg`
+Remove background from video with alpha channel support.
 
 ```bash
-python cli.py input.mp4 output.webm -c "0,255,0" -t 30
+python cli.py input.mp4 output.webm remove-bg --tolerance 30 --edges 5
 ```
 
-#### Remove Blue Screen Background
+**Options:**
+- `--color` - Background color (BGR: "0,255,0" or hex: "#00FF00")
+- `--tolerance` - Color tolerance (default: 30)
+- `--edges` - Soft edge size (default: 5)
+- `--auto-ranges` - Auto-generate color ranges (default: on)
+- `--num-ranges` - Number of color ranges (default: 5)
+- `--method` - Detection: color, motion, or combined (default: color)
+- `--edge-cleanup` - Remove color spill from edges (default: 3)
+- `--adaptive-bg` - Detect background per-frame
+- `--refine` - Enable refinement pass
+- `--loop` - Enable infinite loop for output (default: on)
+
+---
+
+## 🔧 Configuration Files
+
+For complex operations with many options, use a JSON config:
+
+**config.json:**
+```json
+{
+  "bg": {
+    "tolerance": 30,
+    "edges": 5,
+    "method": "color",
+    "adaptive_bg": true,
+    "refine": true
+  },
+  "fps": {
+    "to": 60
+  }
+}
+```
 
 ```bash
-python cli.py input.mp4 output.webm -c "255,0,0" -t 30
+# Apply specific operation from config
+python cli.py input.mp4 output.webm remove-bg --config config.json
 ```
 
-#### Auto-Detect Background Color
+**Note**: When using `--config`, other CLI flags for that operation are not allowed (exclusive).
+
+## 💡 Examples
 
 ```bash
-python cli.py input.mp4 output.webm
+# Remove green screen and boost to 60fps (two separate operations)
+python cli.py input.mp4 output.webm remove-bg --tolerance 25
+python cli.py output.webm final.mp4 fps-boost --to 60
+
+# Using config for fine-tuned removal
+python cli.py input.mp4 output.webm remove-bg --config advanced_removal.json
+
+# Auto-detect background color
+python cli.py input.mp4 output.webm remove-bg
 ```
 
-#### Use Motion Detection (for moving subjects)
+## 📁 Project Structure
 
-```bash
-python cli.py input.mp4 output.webm -m motion
+```
+frame/
+├── cli.py              # Entry point
+├── core/               # Pipeline executor
+│   └── __init__.py
+├── ops/                # Operations
+│   ├── __init__.py    # Registry
+│   ├── remove_bg.py   # Background removal
+│   └── fps_boost.py   # FPS boost
+└── tests/
 ```
 
-#### Combined Method (best quality)
+## 🔌 Adding New Operations
 
-```bash
-python cli.py input.mp4 output.webm -m combined
-```
-
-#### Adaptive Background (varying lighting)
-
-```bash
-python cli.py input.mp4 output.webm --adaptive-bg
-```
-
-#### With Refinement Pass
-
-```bash
-python cli.py input.mp4 output.webm --refine --refine-tolerance 50
-```
-
-#### Recommended: Combined + Adaptive + Refinement
-
-```bash
-python cli.py input.mp4 output.webm \
-    -e 0 \
-    -t 30 \
-    --adaptive-bg \
-    -m combined \
-    -p \
-    --refine \
-    --refine-block-size 20 \
-    --refine-tolerance 80 \
-    --edge-cleanup
-```
-
-**Explanation:**
-- `-e 0` - No soft edges (hard edge for cleaner initial mask)
-- `-t 30` - Initial color tolerance
-- `--adaptive-bg` - Detect background per-frame (better for varying lighting)
-- `-m combined` - Use both color and motion detection
-- `-p` - Show progress
-- `--refine` - Enable refinement pass to catch missed background pixels
-- `--refine-block-size 20` - Smaller blocks for finer detection
-- `--refine-tolerance 80` - Higher tolerance in refinement to catch edge cases
-- `--edge-cleanup` - Run edge cleanup in refinement pass (after detecting missed backgrounds)
-
-### Python Library
+Operations are registered via decorator:
 
 ```python
-from bgremover import remove_background, VideoBackgroundRemover
+from core import register_operation
 
-# Simple usage
-remove_background(
-    input_path="input.mp4",
-    output_path="output.webm",
-    background_color=[0, 255, 0],  # Green
-    tolerance=30,
-    soft_edges=5
+@register_operation(
+    name="my-op",
+    args_schema={
+        "param1": {"type": "int", "default": 10, "description": "Param description"}
+    },
+    description="My operation description"
 )
-
-# Advanced usage with VideoBackgroundRemover
-remover = VideoBackgroundRemover(color_space="hsv")
-remover.add_color_range(
-    target_color=[0, 255, 0],
-    tolerance=30,
-    soft_edges=5,
-    min_saturation=50,
-    min_value=50
-)
-remover.process_video("input.mp4", "output.webm")
+def my_operation(input_path, output_path, param1=10):
+    # Process video
+    return {"success": True, "output_path": output_path}
 ```
 
-### Python API
+## 📋 Requirements
 
-```python
-from bgremover import remove_background
+- Python 3.9+
+- FFmpeg (installed and in PATH)
 
-result = remove_background(
-    input_path="input.mp4",
-    output_path="output.webm",
-    background_color=[0, 255, 0],
-    tolerance=30,
-    soft_edges=5,
-    show_progress=True
-)
+## 🛠️ Development
 
-if result["success"]:
-    print(f"Output: {result['output_path']}")
-else:
-    print(f"Error: {result['error']}")
+```bash
+# Run tests
+python -m pytest tests/
+
+# Test specific operation
+python cli.py test_input.mp4 test_output.mp4 fps-boost --to 60
 ```
 
-## Output Formats
+## 📄 License
 
-The tool supports two output formats that support alpha channels:
-
-- **WebM** (recommended) - VP9 codec with alpha channel
-- **MOV** - ProRes or PNG codec with alpha channel
-
-The format is automatically detected from the output file extension, or can be specified with `-f/--format`.
-
-## Notes
-
-- **Color Space**: HSV is recommended for better handling of lighting variations
-- **Tuning**: Start with tolerance=30 and adjust based on your video's background uniformity
-- **Soft Edges**: Use soft_edges > 0 for smoother transitions around the subject
-- **Adaptive Background**: Use `--adaptive-bg` when lighting changes throughout the video
-- **Refinement Pass**: The refinement pass scans each frame for missed background-colored pixels using three methods: pixel-by-pixel, block-based, and region detection. It's especially useful for catching edge cases that the initial pass misses.
-- **Edge Cleanup**: When `--refine` is enabled, edge_cleanup runs in the refinement pass (after detecting missed backgrounds). When `--refine` is off, edge_cleanup runs in the first pass.
+[MIT](LICENSE)
