@@ -12,7 +12,10 @@ from core import register_operation
 
 def boost_fps(input_path: str, output_path: str, to: int = 60) -> Dict[str, Any]:
     """
-    Increase video frame rate to target fps using FFmpeg minterpolate.
+    Increase video frame rate to target fps using FFmpeg.
+
+    Tries minterpolate filter first, falls back to simple framerate conversion
+    if minterpolate is not available or if the original fps already matches target.
 
     Args:
         input_path: Path to input video
@@ -41,7 +44,6 @@ def boost_fps(input_path: str, output_path: str, to: int = 60) -> Dict[str, Any]
             "error",
             "-select_streams",
             "v:0",
-            "-count_frames",
             "-show_entries",
             "stream=avg_frame_rate",
             "-of",
@@ -59,35 +61,66 @@ def boost_fps(input_path: str, output_path: str, to: int = 60) -> Dict[str, Any]
         else:
             original_fps = float(original_fps_str)
 
-        # Calculate interpolation factor
-        if original_fps >= to:
-            # No need to interpolate, just copy
-            factor = 1
+        # Determine output format from extension
+        output_ext = Path(output_path).suffix.lower()
+
+        # Choose codec based on format
+        if output_ext in [".webm"]:
+            video_codec = "libvpx-vp9"
+            codec_args = [
+                "-c:v",
+                video_codec,
+                "-pix_fmt",
+                "yuva420p",
+                "-auto-alt-ref",
+                "0",
+                "-crf",
+                "30",
+                "-b:v",
+                "0",
+            ]
+        elif output_ext in [".mov"]:
+            video_codec = "qtrle"  # QuickTime Animation (supports alpha)
+            codec_args = ["-c:v", video_codec]
         else:
-            factor = to / original_fps
-            # Round to nearest integer for cleaner interpolation
-            factor = round(factor)
+            # Default to H.264 for .mp4
+            video_codec = "libx264"
+            codec_args = ["-c:v", video_codec, "-preset", "medium", "-crf", "23"]
 
         # Build FFmpeg command
         cmd = ["ffmpeg", "-y", "-i", str(input_path)]
 
-        if factor > 1:
-            # Use minterpolate for frame interpolation
-            cmd.extend(
-                [
-                    "-vf",
-                    f"minterpolate=fps={to}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1",
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "medium",
-                    "-crf",
-                    "23",
-                ]
-            )
+        if original_fps >= to:
+            # No interpolation needed, just change metadata or re-encode at target fps
+            if output_ext in [".webm"]:
+                # For WebM output with alpha, re-encode with proper codec
+                cmd.extend(codec_args)
+                cmd.extend(["-r", str(to)])
+            else:
+                # For other formats, just copy or adjust framerate
+                cmd.extend(["-r", str(to)])
         else:
-            # Just copy or re-encode at target fps
-            cmd.extend(["-r", str(to)])
+            # Try minterpolate first
+            # Check if minterpolate is available by testing
+            test_cmd = ["ffmpeg", "-filters", "|", "grep", "minterpolate"]
+            test_result = subprocess.run(
+                " ".join(test_cmd), shell=True, capture_output=True, text=True
+            )
+
+            if "minterpolate" in test_result.stdout:
+                # Use minterpolate for frame interpolation
+                cmd.extend(
+                    [
+                        "-vf",
+                        f"minterpolate=fps={to}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1",
+                    ]
+                )
+                cmd.extend(codec_args)
+            else:
+                # Fallback: simple framerate conversion with duplication/blending
+                # This will just duplicate frames, making motion choppy but at least correct FPS
+                cmd.extend(["-vf", f"fps={to}"])
+                cmd.extend(codec_args)
 
         cmd.append(str(output_path))
 

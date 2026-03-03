@@ -71,12 +71,12 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 Operations:
-{chr(10).join(f"  {name}: {op["description"]}" for name, op in available_ops.items())}
+{chr(10).join(f"  {name.replace("-", "_")}: {op["description"]}" for name, op in available_ops.items())}
 
 Examples:
-  python cli.py input.mp4 output.webm remove-bg --tolerance 30
-  python cli.py input.mp4 output.mp4 fps-boost --to 60
-  python cli.py input.mp4 output.webm remove-bg --config pipeline.json
+  python cli.py input.mp4 output.webm remove_bg --tolerance 30
+  python cli.py input.mp4 output.mp4 fps_boost --to 60
+  python cli.py input.mp4 output.webm remove_bg --config pipeline.json
 """,
     )
 
