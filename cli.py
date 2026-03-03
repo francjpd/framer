@@ -144,6 +144,18 @@ def main():
         default=False,
         help="Save preview images with flagged areas to folder for review",
     )
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        default=True,
+        help="Enable infinite loop for output video (default: on)",
+    )
+    parser.add_argument(
+        "--no-loop",
+        action="store_false",
+        dest="loop",
+        help="Disable infinite loop for output video",
+    )
 
     args = parser.parse_args()
 
@@ -167,6 +179,7 @@ def main():
         refine_block_size=args.refine_block_size,
         refine_interactive=args.refine_interactive,
         refine_save_previews=args.refine_save_previews,
+        loop=args.loop,
     )
 
     if result["success"]:

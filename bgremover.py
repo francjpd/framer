@@ -475,10 +475,17 @@ def get_output_format(output_path: str, format_flag: str = None) -> str:
         return format_flag.lower()
 
     ext = Path(output_path).suffix.lower()
-    return "webm" if ext == ".webm" else "mov"
+    if ext == ".webm":
+        return "webm"
+    elif ext == ".gif":
+        return "gif"
+    else:
+        return "mov"
 
 
-def _encode_mov(frames_dir: Path, fps: float, output_path: str) -> str:
+def _encode_mov(
+    frames_dir: Path, fps: float, output_path: str, loop: bool = True
+) -> str:
     """Encode PNG sequence to MOV with alpha using qtrle codec."""
     output_file = Path(output_path)
     final_output = output_file.parent / f"{output_file.stem}.mov"
@@ -492,13 +499,19 @@ def _encode_mov(frames_dir: Path, fps: float, output_path: str) -> str:
         str(frames_dir / "frame_%05d.png"),
         "-c:v",
         "qtrle",
-        str(final_output),
     ]
+
+    if loop:
+        cmd.extend(["-loop", "0"])
+
+    cmd.append(str(final_output))
     subprocess.run(cmd, capture_output=True, check=True)
     return str(final_output)
 
 
-def _encode_webm(frames_dir: Path, fps: float, output_path: str) -> str:
+def _encode_webm(
+    frames_dir: Path, fps: float, output_path: str, loop: bool = True
+) -> str:
     """Encode PNG sequence to WebM with alpha using VP9 codec."""
     output_file = Path(output_path)
     final_output = output_file.parent / f"{output_file.stem}.webm"
@@ -520,9 +533,63 @@ def _encode_webm(frames_dir: Path, fps: float, output_path: str) -> str:
         "30",
         "-b:v",
         "0",
-        str(final_output),
     ]
+
+    if loop:
+        cmd.extend(["-loop", "0"])
+
+    cmd.append(str(final_output))
     subprocess.run(cmd, capture_output=True, check=True)
+    return str(final_output)
+
+
+def _encode_gif(
+    frames_dir: Path, fps: float, output_path: str, loop: bool = True
+) -> str:
+    """Encode PNG sequence to GIF with palette for better quality."""
+    output_file = Path(output_path)
+    final_output = output_file.parent / f"{output_file.stem}.gif"
+    palette_path = frames_dir / "palette.png"
+
+    palette_cmd = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        str(fps),
+        "-i",
+        str(frames_dir / "frame_%05d.png"),
+        "-vf",
+        "palettegen=stats_mode=max",
+        str(palette_path),
+    ]
+    subprocess.run(palette_cmd, capture_output=True, check=True)
+
+    gif_cmd = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        str(fps),
+        "-i",
+        str(frames_dir / "frame_%05d.png"),
+        "-i",
+        str(palette_path),
+        "-lavfi",
+        "paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+    ]
+
+    if loop:
+        gif_cmd.extend(["-loop", "0"])
+    else:
+        gif_cmd.extend(["-loop", "1"])
+
+    gif_cmd.append(str(final_output))
+    subprocess.run(gif_cmd, capture_output=True, check=True)
+
+    try:
+        palette_path.unlink()
+    except:
+        pass
+
     return str(final_output)
 
 
@@ -622,11 +689,12 @@ def remove_background(
     refine_block_size: int = 32,
     refine_interactive: bool = False,
     refine_save_previews: bool = False,
+    loop: bool = True,
 ) -> Dict[str, Any]:
     """
     Remove background from video and output with alpha channel.
 
-    Uses FFmpeg to encode MOV/WebM with alpha support.
+    Uses FFmpeg to encode MOV/WebM/GIF with alpha support.
 
     Args:
         input_path: Input video path
@@ -647,6 +715,7 @@ def remove_background(
         refine_block_size: Block size for section analysis (default: 32)
         refine_interactive: Enable manual review per frame (default: False)
         refine_save_previews: Save preview images with flagged areas (default: False)
+        loop: Enable infinite loop for output video (default: True)
 
     Returns:
         dict with success, output_path, error
@@ -784,11 +853,12 @@ def remove_background(
 
         # Encode to output format
         output_format = get_output_format(output_path, None)
-        final_output = (
-            _encode_webm(temp_dir, fps, output_path)
-            if output_format == "webm"
-            else _encode_mov(temp_dir, fps, output_path)
-        )
+        if output_format == "webm":
+            final_output = _encode_webm(temp_dir, fps, output_path, loop)
+        elif output_format == "gif":
+            final_output = _encode_gif(temp_dir, fps, output_path, loop)
+        else:
+            final_output = _encode_mov(temp_dir, fps, output_path, loop)
 
         result["success"] = True
         result["output_path"] = final_output
