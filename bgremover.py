@@ -557,7 +557,7 @@ def _process_frame(
     frame: np.ndarray,
     color_ranges: list,
     soft_edges: int,
-    edge_cleanup: int,
+    edge_cleanup=None,
     use_adaptive_bg: bool = False,
 ) -> np.ndarray:
     """Process single frame to create alpha channel using multiple color ranges."""
@@ -594,7 +594,9 @@ def _process_frame(
 
     foreground_mask = cv2.bitwise_not(combined_mask)
 
-    foreground_mask = _apply_edge_cleanup(foreground_mask, edge_cleanup)
+    if edge_cleanup is not None:
+        foreground_mask = _apply_edge_cleanup(foreground_mask, edge_cleanup)
+
     return _apply_soft_edges(foreground_mask, soft_edges)
 
 
@@ -706,12 +708,15 @@ def remove_background(
                 break
 
             # Create alpha mask
+            # If refine is enabled, edge_cleanup will be applied in refinement pass
+            first_pass_edge_cleanup = None if refine else edge_cleanup
+
             if method == "color":
                 alpha = _process_frame(
                     frame,
                     color_ranges,
                     soft_edges,
-                    edge_cleanup,
+                    first_pass_edge_cleanup,
                     adaptive_bg,
                 )
             elif method == "motion" and motion_mask is not None:
@@ -723,7 +728,7 @@ def remove_background(
                     frame,
                     color_ranges,
                     soft_edges,
-                    edge_cleanup,
+                    first_pass_edge_cleanup,
                     adaptive_bg,
                 )
                 motion_alpha = create_motion_based_mask(
@@ -735,7 +740,7 @@ def remove_background(
                     frame,
                     color_ranges,
                     soft_edges,
-                    edge_cleanup,
+                    first_pass_edge_cleanup,
                     adaptive_bg,
                 )
 
@@ -765,6 +770,7 @@ def remove_background(
                 background_color,
                 tolerance=refine_tolerance,
                 block_size=refine_block_size,
+                edge_cleanup=edge_cleanup,
                 interactive=refine_interactive,
                 save_previews=refine_save_previews,
             )
@@ -937,6 +943,7 @@ def refine_background_removed_frames(
     background_color,
     tolerance=45,
     block_size=32,
+    edge_cleanup=None,
     interactive=False,
     save_previews=False,
     preview_dir=None,
@@ -952,6 +959,7 @@ def refine_background_removed_frames(
         background_color: Base BGR background color [B, G, R]
         tolerance: Color tolerance for detection (default: 45)
         block_size: Block size for section analysis (default: 32)
+        edge_cleanup: Apply edge cleanup after refinement (default: None)
         interactive: Enable interactive manual review per frame
         save_previews: Save preview images with flagged areas
         preview_dir: Directory to save preview images
@@ -1126,6 +1134,9 @@ def refine_background_removed_frames(
                 refined_count = 0
 
         cv2.destroyAllWindows()
+
+        if edge_cleanup is not None:
+            alpha = _apply_edge_cleanup(alpha, edge_cleanup)
 
         if frame.shape[2] == 4:
             result = cv2.merge([b, g, r, alpha])
