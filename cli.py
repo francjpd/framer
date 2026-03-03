@@ -115,18 +115,6 @@ def main():
         help="Detect background per-frame from borders (better for varying lighting)",
     )
     parser.add_argument(
-        "--hole-fill",
-        type=int,
-        default=25,
-        help="Fill holes in mask smaller than this size (0 to disable, default: 25)",
-    )
-    parser.add_argument(
-        "--flood-fill",
-        action="store_true",
-        default=False,
-        help="Fill internal holes trapped between foreground pixels",
-    )
-    parser.add_argument(
         "--refine",
         action="store_true",
         default=False,
@@ -174,8 +162,6 @@ def main():
         motion_frames=args.motion_frames,
         edge_cleanup=args.edge_cleanup,
         adaptive_bg=args.adaptive_bg,
-        hole_fill=args.hole_fill,
-        flood_fill=args.flood_fill,
         refine=args.refine,
         refine_tolerance=args.refine_tolerance,
         refine_block_size=args.refine_block_size,

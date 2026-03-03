@@ -192,124 +192,6 @@ def detect_background_color_from_frame_border(frame, border_width=10):
     return [int(avg_color[0]), int(avg_color[1]), int(avg_color[2])]
 
 
-def fill_mask_holes(mask, hole_size_threshold=20):
-    """
-    Fill small holes in a binary mask using morphological closing.
-
-    Args:
-        mask: Binary mask (uint8, 0 or 255)
-        hole_size_threshold: Maximum hole size to fill (default: 20)
-
-    Returns:
-        Mask with small holes filled
-    """
-    if mask is None or mask.sum() == 0:
-        return mask
-
-    if hole_size_threshold <= 0:
-        return mask
-
-    kernel_size = hole_size_threshold // 2
-    if kernel_size < 3:
-        kernel_size = 3
-    if kernel_size % 2 == 0:
-        kernel_size += 1
-
-    kernel = np.ones((kernel_size, kernel_size), np.uint8)
-    closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-    return closed
-
-
-def fill_internal_holes(mask):
-    """
-    Fill internal holes trapped between foreground pixels using flood fill.
-
-    Any background pixel NOT connected to the outer frame edges is considered
-    an internal hole and will be filled.
-
-    Args:
-        mask: Binary mask (uint8, 0 or 255) - 255 = foreground
-
-    Returns:
-        Mask with internal holes filled
-    """
-    if mask is None or mask.sum() == 0:
-        return mask
-
-    h, w = mask.shape
-
-    # Invert mask so 0=foreground, 255=background (for flood fill)
-    mask_inv = cv2.bitwise_not(mask)
-
-    # Create mask with border for floodFill
-    flood_mask = np.zeros((h + 2, w + 2), np.uint8)
-
-    # Flood fill from all 4 edges - this marks "real" background as 255
-    # Background pixels not reached are "internal holes"
-    cv2.floodFill(mask_inv, flood_mask, (0, 0), 128)
-    cv2.floodFill(mask_inv, flood_mask, (w - 1, 0), 128)
-    cv2.floodFill(mask_inv, flood_mask, (0, h - 1), 128)
-    cv2.floodFill(mask_inv, flood_mask, (w - 1, h - 1), 128)
-
-    # Flood fill from all edge pixels
-    for x in range(w):
-        cv2.floodFill(mask_inv, flood_mask, (x, 0), 128)
-        cv2.floodFill(mask_inv, flood_mask, (x, h - 1), 128)
-    for y in range(h):
-        cv2.floodFill(mask_inv, flood_mask, (0, y), 128)
-        cv2.floodFill(mask_inv, flood_mask, (w - 1, y), 128)
-
-    # Pixels still at 0 are internal holes - set them to 255 (foreground)
-    holes = cv2.compare(mask_inv, np.zeros((h, w), np.uint8), cv2.CMP_EQ)
-    holes = cv2.convertScaleAbs(holes)
-
-    # Combine original foreground with filled holes
-    result = cv2.bitwise_or(mask, holes)
-
-    return result
-
-
-def fill_enclosed_background(mask, min_area=50):
-    """
-    Fill background pixels completely enclosed by foreground contours.
-
-    Uses contour detection to find the character outline and fills everything
-    inside it, including trapped background pixels between body parts.
-
-    Args:
-        mask: Binary mask (uint8, 0 or 255) - 255 = foreground
-        min_area: Minimum contour area to fill (default: 50)
-
-    Returns:
-        Mask with enclosed background filled
-    """
-    if mask is None or mask.sum() == 0:
-        return mask
-
-    result = mask.copy()
-
-    # Find external contours
-    contours, _ = cv2.findContours(result, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Fill all external contours
-    for contour in contours:
-        if cv2.contourArea(contour) >= min_area:
-            cv2.drawContours(result, [contour], -1, 255, -1)
-
-    # Also check for nested contours (holes within the character)
-    contours_hierarchy, _ = cv2.findContours(
-        result, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
-    )
-
-    # Fill all contours in the hierarchy (fills holes)
-    for contour in contours_hierarchy:
-        if cv2.contourArea(contour) >= min_area:
-            cv2.drawContours(result, [contour], -1, 255, -1)
-
-    return result
-
-
 class VideoBackgroundRemover:
     """Remove background from videos using color-based segmentation."""
 
@@ -677,8 +559,6 @@ def _process_frame(
     soft_edges: int,
     edge_cleanup: int,
     use_adaptive_bg: bool = False,
-    hole_fill_threshold: int = 15,
-    flood_fill: bool = False,
 ) -> np.ndarray:
     """Process single frame to create alpha channel using multiple color ranges."""
 
@@ -714,12 +594,6 @@ def _process_frame(
 
     foreground_mask = cv2.bitwise_not(combined_mask)
 
-    if hole_fill_threshold > 0:
-        foreground_mask = fill_mask_holes(foreground_mask, hole_fill_threshold)
-
-    if flood_fill:
-        foreground_mask = fill_enclosed_background(foreground_mask, min_area=30)
-
     foreground_mask = _apply_edge_cleanup(foreground_mask, edge_cleanup)
     return _apply_soft_edges(foreground_mask, soft_edges)
 
@@ -738,8 +612,6 @@ def remove_background(
     motion_threshold: int = 15,
     edge_cleanup: int = 3,
     adaptive_bg: bool = False,
-    hole_fill: int = 25,
-    flood_fill: bool = False,
     refine: bool = False,
     refine_tolerance: int = 45,
     refine_block_size: int = 32,
@@ -765,8 +637,6 @@ def remove_background(
         motion_threshold: Pixel difference threshold for motion (default: 15)
         edge_cleanup: Pixels to erode from edges (default: 3)
         adaptive_bg: Detect background per-frame from borders (default: False)
-        hole_fill: Fill holes smaller than size (default: 25)
-        flood_fill: Fill internal holes (default: False)
         refine: Enable refinement pass to catch missed background colors (default: False)
         refine_tolerance: Color tolerance for refinement (default: 45)
         refine_block_size: Block size for section analysis (default: 32)
@@ -843,8 +713,6 @@ def remove_background(
                     soft_edges,
                     edge_cleanup,
                     adaptive_bg,
-                    hole_fill,
-                    flood_fill,
                 )
             elif method == "motion" and motion_mask is not None:
                 alpha = create_motion_based_mask(
@@ -857,8 +725,6 @@ def remove_background(
                     soft_edges,
                     edge_cleanup,
                     adaptive_bg,
-                    hole_fill,
-                    flood_fill,
                 )
                 motion_alpha = create_motion_based_mask(
                     frame, motion_mask, background_color, tolerance
@@ -871,8 +737,6 @@ def remove_background(
                     soft_edges,
                     edge_cleanup,
                     adaptive_bg,
-                    hole_fill,
-                    flood_fill,
                 )
 
             # Create BGRA frame
