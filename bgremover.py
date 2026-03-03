@@ -556,7 +556,7 @@ def _apply_edge_cleanup(mask: np.ndarray, edge_cleanup: int) -> np.ndarray:
 def _process_frame(
     frame: np.ndarray,
     color_ranges: list,
-    soft_edges: int,
+    soft_edges=None,
     edge_cleanup=None,
     use_adaptive_bg: bool = False,
 ) -> np.ndarray:
@@ -597,7 +597,10 @@ def _process_frame(
     if edge_cleanup is not None:
         foreground_mask = _apply_edge_cleanup(foreground_mask, edge_cleanup)
 
-    return _apply_soft_edges(foreground_mask, soft_edges)
+    if soft_edges is not None:
+        foreground_mask = _apply_soft_edges(foreground_mask, soft_edges)
+
+    return foreground_mask
 
 
 def remove_background(
@@ -708,14 +711,15 @@ def remove_background(
                 break
 
             # Create alpha mask
-            # If refine is enabled, edge_cleanup will be applied in refinement pass
+            # If refine is enabled, edge_cleanup and soft_edges will be applied in refinement pass
             first_pass_edge_cleanup = None if refine else edge_cleanup
+            first_pass_soft_edges = None if refine else soft_edges
 
             if method == "color":
                 alpha = _process_frame(
                     frame,
                     color_ranges,
-                    soft_edges,
+                    first_pass_soft_edges,
                     first_pass_edge_cleanup,
                     adaptive_bg,
                 )
@@ -727,7 +731,7 @@ def remove_background(
                 color_alpha = _process_frame(
                     frame,
                     color_ranges,
-                    soft_edges,
+                    first_pass_soft_edges,
                     first_pass_edge_cleanup,
                     adaptive_bg,
                 )
@@ -739,7 +743,7 @@ def remove_background(
                 alpha = _process_frame(
                     frame,
                     color_ranges,
-                    soft_edges,
+                    first_pass_soft_edges,
                     first_pass_edge_cleanup,
                     adaptive_bg,
                 )
@@ -771,6 +775,7 @@ def remove_background(
                 tolerance=refine_tolerance,
                 block_size=refine_block_size,
                 edge_cleanup=edge_cleanup,
+                soft_edges=soft_edges,
                 interactive=refine_interactive,
                 save_previews=refine_save_previews,
             )
@@ -944,6 +949,7 @@ def refine_background_removed_frames(
     tolerance=45,
     block_size=32,
     edge_cleanup=None,
+    soft_edges=None,
     interactive=False,
     save_previews=False,
     preview_dir=None,
@@ -960,6 +966,7 @@ def refine_background_removed_frames(
         tolerance: Color tolerance for detection (default: 45)
         block_size: Block size for section analysis (default: 32)
         edge_cleanup: Apply edge cleanup after refinement (default: None)
+        soft_edges: Apply soft edges after refinement (default: None)
         interactive: Enable interactive manual review per frame
         save_previews: Save preview images with flagged areas
         preview_dir: Directory to save preview images
@@ -1137,6 +1144,9 @@ def refine_background_removed_frames(
 
         if edge_cleanup is not None:
             alpha = _apply_edge_cleanup(alpha, edge_cleanup)
+
+        if soft_edges is not None:
+            alpha = _apply_soft_edges(alpha, soft_edges)
 
         if frame.shape[2] == 4:
             result = cv2.merge([b, g, r, alpha])
