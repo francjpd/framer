@@ -8,6 +8,7 @@ Transform videos with composable operations. Built on FFmpeg, designed for pipel
 - **Simple CLI**: `python cli.py input.mp4 output.webm fps-boost --to 60`
 - **Config support**: Use JSON configs for complex operations
 - **Modular**: Each operation is independent and extensible
+- **Video looping**: Create seamless infinite loops with optical flow matching
 
 ## 🚀 Quick Start
 
@@ -60,6 +61,33 @@ python cli.py input.mp4 output.webm remove-bg --tolerance 30 --edges 5
 
 ---
 
+### `loop`
+Create seamless infinite video loops by matching frames between beginning and end.
+
+```bash
+# Auto method (recommended) - uses optical flow + full video scanning
+python cli.py input.webm output.webm loop --scan-frames 100 --match-threshold 60
+
+# Interpolation method - smoothest transitions (slower)
+python cli.py input.webm output.webm loop --method interpolate --transition-frames 15
+
+# Crossfade method - Gaussian blending
+python cli.py input.webm output.webm loop --method crossfade --transition-frames 10
+
+# Quick test with lower threshold
+python cli.py input.webm output.webm loop --scan-frames 50 --match-threshold 40
+```
+
+**Options:**
+- `--method` - Loop method: cut, crossfade, interpolate, stretch, or auto (default: auto)
+- `--scan-frames` - Frames to scan for matching, larger = more thorough (default: 100)
+- `--transition-frames` - Frames for crossfade/interpolation transition (default: 10)
+- `--match-threshold` - Minimum similarity threshold 0-100 (default: 70)
+- `--interpolate` - Add interpolated frames for smoother loop
+- `--similarity-method` - Similarity method: mse or optical_flow (default: optical_flow)
+
+---
+
 ## 🔧 Configuration Files
 
 For complex operations with many options, use a JSON config:
@@ -99,6 +127,15 @@ python cli.py input.mp4 output.webm remove-bg --config advanced_removal.json
 
 # Auto-detect background color
 python cli.py input.mp4 output.webm remove-bg
+
+# Create seamless video loop with auto detection
+python cli.py input.webm output.webm loop --scan-frames 100 --match-threshold 60
+
+# Create loop with frame interpolation for smoothest transition
+python cli.py input.webm output.webm loop --method interpolate --transition-frames 20
+
+# Quick loop test with lower threshold
+python cli.py input.webm output.webm loop --scan-frames 30 --match-threshold 40
 ```
 
 ## 📁 Project Structure
@@ -106,12 +143,14 @@ python cli.py input.mp4 output.webm remove-bg
 ```
 frame/
 ├── cli.py              # Entry point
+├── framer.py           # Core library
 ├── core/               # Pipeline executor
 │   └── __init__.py
 ├── ops/                # Operations
 │   ├── __init__.py    # Registry
 │   ├── remove_bg.py   # Background removal
-│   └── fps_boost.py   # FPS boost
+│   ├── fps_boost.py   # FPS boost
+│   └── loop.py        # Video looping
 └── tests/
 ```
 
