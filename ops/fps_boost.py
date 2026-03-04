@@ -62,6 +62,24 @@ def boost_fps(input_path: str, output_path: str, to: int = 60) -> Dict[str, Any]
             original_fps = float(original_fps_str)
 
         # Check if input has alpha channel
+        # VP9 with alpha reports pix_fmt=yuv420p but has alpha_mode=1 in tags
+        # So we need to check both alpha_mode (as tag) and pix_fmt
+        alpha_cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream_tags=alpha_mode",
+            "-of",
+            "csv=p=0",
+            str(input_path),
+        ]
+        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True)
+        has_alpha = "1" in alpha_result.stdout
+
+        # Also check pix_fmt as fallback for other formats
         pix_fmt_cmd = [
             "ffprobe",
             "-v",
@@ -76,8 +94,11 @@ def boost_fps(input_path: str, output_path: str, to: int = 60) -> Dict[str, Any]
         ]
         pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True)
         input_pix_fmt = pix_fmt_result.stdout.strip()
-        has_alpha = (
-            "yuva" in input_pix_fmt or "bgra" in input_pix_fmt or "gba" in input_pix_fmt
+        has_alpha = has_alpha or (
+            "yuva" in input_pix_fmt
+            or "bgra" in input_pix_fmt
+            or "argb" in input_pix_fmt
+            or "gba" in input_pix_fmt
         )
 
         # Determine output format from extension
