@@ -138,6 +138,273 @@ def extract_all_frames(
     return frames
 
 
+def create_pingpong_loop(frames: List[np.ndarray]) -> List[np.ndarray]:
+    """Create pingpong (boomerang) loop - forward then backward.
+
+    Best for: bouncing objects, pendulum, breathing, any reversible motion.
+    Plays video forward, then reverses, creating smooth yoyo effect.
+    """
+    if len(frames) < 2:
+        return frames
+
+    forward = frames[:]
+    backward = frames[:-1][::-1]
+
+    return forward + backward
+
+
+def create_reverse_loop(frames: List[np.ndarray]) -> List[np.ndarray]:
+    """Create reverse loop - forward then full reverse.
+
+    Best for: reversible motion like water ripples, fire, particles,
+    any motion that looks the same forwards and backwards.
+    """
+    if len(frames) < 2:
+        return frames
+
+    forward = frames[:]
+    reverse = frames[::-1]
+
+    return forward + reverse
+
+
+def create_hold_loop(
+    frames: List[np.ndarray], hold_frames: int = 2
+) -> List[np.ndarray]:
+    """Create hold loop - freeze briefly at transition point.
+
+    Best for: videos with natural pauses or holds in the motion.
+    Freezes the transition frame for a few frames to mask the seam.
+    """
+    if len(frames) < 4 or hold_frames < 1:
+        return frames
+
+    result = frames[:]
+
+    for _ in range(hold_frames):
+        result.append(frames[-1])
+
+    return result
+
+
+def create_fade_loop(
+    frames: List[np.ndarray],
+    fade_color: str = "transparent",
+    fade_frames: int = 10,
+    fade_type: str = "both",
+) -> List[np.ndarray]:
+    """Create fade loop - fade out/in at transition point.
+
+    Best for: when nothing else works - masks seams completely with fade.
+    Supports transparent (for alpha videos) or custom colors.
+    """
+    if len(frames) < fade_frames * 2:
+        return frames
+
+    color = parse_fade_color(fade_color)
+    fade_frames = min(fade_frames, len(frames) // 4)
+
+    result = []
+    n = len(frames)
+
+    fade_frame = np.full(
+        (frames[0].shape[0], frames[0].shape[1], 4), color, dtype=np.uint8
+    )
+    if len(frames[0].shape) == 3 and frames[0].shape[2] == 3:
+        fade_frame = fade_frame[:, :, :3]
+
+    for i in range(n):
+        frame = frames[i].copy()
+
+        if fade_type in ("out", "both"):
+            fade_out_start = n - fade_frames * 2
+            if i >= fade_out_start:
+                alpha = (i - fade_out_start) / fade_frames
+                alpha = min(1.0, alpha)
+                frame = cv2.addWeighted(frame, 1 - alpha, fade_frame, alpha, 0)
+
+        if fade_type in ("in", "both"):
+            if i < fade_frames * 2:
+                alpha = 1 - (i / fade_frames)
+                alpha = max(0, alpha)
+                frame = cv2.addWeighted(frame, 1 - alpha, fade_frame, alpha, 0)
+
+        result.append(frame)
+
+    return result
+
+
+def create_blend_loop(
+    frames: List[np.ndarray], blend_mode: str = "add", blend_frames: int = 5
+) -> List[np.ndarray]:
+    """Create blend loop - creative blend between end and start.
+
+    Best for: artistic effects, creative transitions.
+    Uses blend modes: add, multiply, screen, overlay.
+    """
+    if len(frames) < blend_frames * 2:
+        return frames
+
+    result = frames[:-blend_frames]
+
+    first_frames = frames[:blend_frames]
+    last_frames = frames[-blend_frames:][::-1]
+
+    for i in range(blend_frames):
+        w = (i + 1) / (blend_frames + 1)
+        blended = apply_blend_mode(last_frames[i], first_frames[i], blend_mode)
+        result.append(blended)
+
+    result.extend(frames[blend_frames:])
+
+    return result
+
+
+def create_speedramp_loop(
+    frames: List[np.ndarray], ramp_factor: float = 1.0
+) -> List[np.ndarray]:
+    """Create speedramp loop - adjust playback speed at transition.
+
+    Best for: when loop points almost match but need slight speed adjustment.
+    Slightly speeds up or slows down to make endpoints align.
+    """
+    if len(frames) < 4 or ramp_factor == 1.0:
+        return frames
+
+    ramp_factor = max(0.5, min(2.0, ramp_factor))
+
+    result = frames[:]
+
+    target_len = int(len(frames) * ramp_factor)
+    if target_len != len(frames):
+        indices = np.linspace(0, len(frames) - 1, target_len)
+        result = [frames[int(i)] for i in indices]
+
+    return result
+
+
+def create_morph_loop(
+    frames: List[np.ndarray], morph_steps: int = 10
+) -> List[np.ndarray]:
+    """Create morph loop - multiple warp steps between end and start.
+
+    Best for: complex motion where simple interpolation fails.
+    Uses optical flow to warp frames gradually from end to start.
+    """
+    if len(frames) < 10 or morph_steps <= 0:
+        return frames
+
+    end_frame = frames[-1]
+    start_frame = frames[0]
+
+    gray_end = cv2.cvtColor(end_frame, cv2.COLOR_BGR2GRAY)
+    gray_start = cv2.cvtColor(start_frame, cv2.COLOR_BGR2GRAY)
+
+    flow = cv2.calcOpticalFlowFarneback(
+        gray_end, gray_start, None, 0.5, 3, 15, 3, 5, 1.2, 0
+    )
+
+    h, w = gray_end.shape
+    morphed = []
+
+    for i in range(1, morph_steps + 1):
+        t = i / (morph_steps + 1)
+
+        flow_map = flow * t
+        x, y = np.meshgrid(np.arange(w), np.arange(h))
+        map_x = (x + flow_map[..., 0]).astype(np.float32)
+        map_y = (y + flow_map[..., 1]).astype(np.float32)
+
+        warped = cv2.remap(end_frame, map_x, map_y, cv2.INTER_LINEAR)
+        result = cv2.addWeighted(warped, 1 - t, start_frame, t, 0)
+        morphed.append(result)
+
+    return frames + morphed
+
+
+def create_periodic_loop(
+    frames: List[np.ndarray], cycle_frames: Optional[int] = None
+) -> List[np.ndarray]:
+    """Create periodic loop - loop at natural cycle points.
+
+    Best for: walking, running, waves - any rhythmic/repetitive motion.
+    Auto-detects cycle period or uses specified cycle length.
+    """
+    if len(frames) < 10:
+        return frames
+
+    if cycle_frames is None:
+        cycle_frames = detect_cycle_period(frames)
+
+    if cycle_frames is None or cycle_frames >= len(frames):
+        cycle_frames = len(frames) // 2
+
+    cycle_frames = max(1, min(cycle_frames, len(frames) - 1))
+
+    return frames[:cycle_frames]
+
+
+def analyze_best_method(frames: List[np.ndarray]) -> Dict[str, Any]:
+    """Analyze video and recommend best loop method.
+
+    Returns dict with:
+    - recommended: best method name
+    - alternatives: list of methods that could work
+    - analysis: dict with motion metrics
+    """
+    if len(frames) < 10:
+        return {"recommended": "hold", "alternatives": ["hold"], "analysis": {}}
+
+    first_frame = frames[0]
+    last_frame = frames[-1]
+
+    diff_first_last = np.mean(
+        np.abs(first_frame.astype(float) - last_frame.astype(float))
+    )
+
+    motion_scores = []
+    for i in range(1, min(30, len(frames))):
+        diff = np.mean(np.abs(frames[i].astype(float) - frames[i - 1].astype(float)))
+        motion_scores.append(diff)
+
+    avg_motion = np.mean(motion_scores) if motion_scores else 0
+
+    cycle = detect_cycle_period(frames)
+
+    analysis = {
+        "frame_count": len(frames),
+        "first_last_diff": float(diff_first_last),
+        "avg_motion": float(avg_motion),
+        "detected_cycle": cycle,
+    }
+
+    methods = []
+
+    if cycle and cycle < len(frames) * 0.8:
+        methods.append(("periodic", 90))
+
+    if avg_motion < 20:
+        methods.append(("fade", 80))
+    elif diff_first_last < 30:
+        methods.append(("cut", 85))
+
+    methods.append(("pingpong", 70))
+
+    if avg_motion > 50:
+        methods.append(("morph", 65))
+
+    methods.sort(key=lambda x: x[1], reverse=True)
+
+    alternatives = [m[0] for m in methods[1:4]]
+    recommended = methods[0][0] if methods else "hold"
+
+    return {
+        "recommended": recommended,
+        "alternatives": alternatives,
+        "analysis": analysis,
+    }
+
+
 def compute_frame_similarity(
     frame1: np.ndarray, frame2: np.ndarray, method: str = "optical_flow"
 ) -> float:

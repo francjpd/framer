@@ -1,0 +1,10 @@
+{
+  "bg": {
+    "tolerance": 30,
+    "edges": 5,
+    "method": "color"
+  },
+  "fps": {
+    "to": 60
+  }
+}

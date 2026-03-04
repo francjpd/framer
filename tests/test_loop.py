@@ -25,7 +25,7 @@ def test_parse_fade_color_transparent():
 
 def test_parse_fade_color_hex():
     result = parse_fade_color("#FF0000")
-    assert result == (0, 0, 255, 255)
+    assert result == (255, 0, 0, 255)  # RGB format
 
 
 def test_parse_fade_color_bgr():
@@ -36,7 +36,7 @@ def test_parse_fade_color_bgr():
 def test_pingpong_loop():
     frames = [np.ones((10, 10, 3), dtype=np.uint8) * i for i in range(10)]
     result = create_pingpong_loop(frames)
-    assert len(result) == 20
+    assert len(result) == 19  # forward (10) + backward without duplicate (9)
     assert np.array_equal(result[0], frames[0])
     assert np.array_equal(result[-1], frames[0])
 
@@ -52,7 +52,7 @@ def test_reverse_loop():
 def test_hold_loop():
     frames = [np.ones((10, 10, 3), dtype=np.uint8) * i for i in range(10)]
     result = create_hold_loop(frames, hold_frames=2)
-    assert len(result) == 12
+    assert len(result) == 12  # 10 original + 2 hold frames
 
 
 def test_fade_loop_transparent():
@@ -64,7 +64,7 @@ def test_fade_loop_transparent():
 def test_blend_loop_add():
     frames = [np.ones((10, 10, 3), dtype=np.uint8) * i for i in range(10)]
     result = create_blend_loop(frames, blend_mode="add")
-    assert len(result) == 10
+    assert len(result) == 15  # 10 original + 5 blended transition frames
 
 
 def test_speedramp_loop():

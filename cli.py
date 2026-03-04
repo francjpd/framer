@@ -234,6 +234,14 @@ Examples:
         if "color" in op_args:
             op_args["color"] = parse_color(op_args["color"])
 
+    # Import global flags and inject them into operation args
+    from core import GLOBAL_FLAGS
+
+    # Add global flags to operation args
+    for flag_name in GLOBAL_FLAGS.keys():
+        if hasattr(args, flag_name):
+            op_args[flag_name] = getattr(args, flag_name)
+
     # Execute operation
     try:
         result = op_info["func"](

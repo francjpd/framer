@@ -80,9 +80,11 @@ class OperationRegistry:
         description: str = "",
     ):
         """Register an operation."""
+        # Merge global flags into args_schema
+        merged_schema = {**GLOBAL_FLAGS, **args_schema}
         self._operations[name] = {
             "func": func,
-            "args_schema": args_schema,
+            "args_schema": merged_schema,
             "description": description,
         }
 
@@ -98,6 +100,17 @@ class OperationRegistry:
         """Get args schema for operation."""
         op = self._operations.get(name)
         return op["args_schema"] if op else {}
+
+
+# Global flags - automatically added to all operations
+GLOBAL_FLAGS = {
+    "progress": {
+        "type": "bool",
+        "default": False,
+        "short": "-p",
+        "description": "Show progress bar",
+    },
+}
 
 
 # Global registry instance

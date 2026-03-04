@@ -10,7 +10,9 @@ from typing import Dict, Any
 from core import register_operation
 
 
-def boost_fps(input_path: str, output_path: str, to: int = 60) -> Dict[str, Any]:
+def boost_fps(
+    input_path: str, output_path: str, to: int = 60, progress: bool = False
+) -> Dict[str, Any]:
     """
     Increase video frame rate to target fps using FFmpeg.
 
