@@ -62,29 +62,68 @@ python cli.py input.mp4 output.webm remove-bg --tolerance 30 --edges 5
 ---
 
 ### `loop`
-Create seamless infinite video loops by matching frames between beginning and end.
+Create seamless infinite video loops with various methods.
+
+**Which method to use:**
+
+| Method | Best For |
+|--------|----------|
+| `pingpong` | Bouncing objects, pendulum, breathing |
+| `morph` | Complex motion, fluid dynamics |
+| `periodic` | Walking, running, waves, rhythmic motion |
+| `hold` | Videos with natural pauses/holds |
+| `fade` | When nothing else works (masks seams) |
+| `blend` | Creative transitions |
+| `reverse` | Water ripples, fire, particles |
+| `speedramp` | Endpoints almost match, need speed tweak |
+| `auto` | Auto-detect best method |
 
 ```bash
-# Auto method (recommended) - uses optical flow + full video scanning
-python cli.py input.webm output.webm loop --scan-frames 100 --match-threshold 60
+# Pingpong - forward then backward (best for bouncing/breathing)
+python cli.py input.webm output.webm loop --method pingpong
 
-# Interpolation method - smoothest transitions (slower)
-python cli.py input.webm output.webm loop --method interpolate --transition-frames 15
+# Morph - optical flow warps (best for complex motion)
+python cli.py input.webm output.webm loop --method morph --morph-steps 15
 
-# Crossfade method - Gaussian blending
-python cli.py input.webm output.webm loop --method crossfade --transition-frames 10
+# Periodic - auto-detect walking/running cycles
+python cli.py input.webm output.webm loop --method periodic
 
-# Quick test with lower threshold
-python cli.py input.webm output.webm loop --scan-frames 50 --match-threshold 40
+# Hold - freeze briefly at transition
+python cli.py input.webm output.webm loop --method hold --hold-frames 3
+
+# Fade - fade to transparent (best for background-removed videos!)
+python cli.py input.webm output.webm loop --method fade --fade-color transparent
+
+# Fade - fade to custom color
+python cli.py input.webm output.webm loop --method fade --fade-color "#FF0000"
+
+# Blend - creative add blend
+python cli.py input.webm output.webm loop --method blend --blend-mode add
+
+# Reverse - forward then reverse
+python cli.py input.webm output.webm loop --method reverse
+
+# Speedramp - slight speed adjustment
+python cli.py input.webm output.webm loop --method speedramp --ramp-factor 1.1
+
+# Auto - analyze and pick best method
+python cli.py input.webm output.webm loop --method auto
+
+# Just analyze (don't process)
+python cli.py input.webm output.webm loop --method auto --analyze-only
 ```
 
 **Options:**
-- `--method` - Loop method: cut, crossfade, interpolate, stretch, or auto (default: auto)
-- `--scan-frames` - Frames to scan for matching, larger = more thorough (default: 100)
-- `--transition-frames` - Frames for crossfade/interpolation transition (default: 10)
-- `--match-threshold` - Minimum similarity threshold 0-100 (default: 70)
-- `--interpolate` - Add interpolated frames for smoother loop
-- `--similarity-method` - Similarity method: mse or optical_flow (default: optical_flow)
+- `--method` - Loop method (default: auto)
+- `--fade-color` - Color for fade: "transparent", hex (#RRGGBB), or BGR (default: transparent)
+- `--fade-frames` - Frames for fade (default: 10)
+- `--fade-type` - "in", "out", or "both" (default: both)
+- `--morph-steps` - Warp steps for morph (default: 10)
+- `--cycle-frames` - Manual cycle length for periodic
+- `--hold-frames` - Freeze frames for hold (default: 2)
+- `--blend-mode` - add, multiply, screen, overlay (default: add)
+- `--ramp-factor` - Speed 0.8-1.2 for speedramp (default: 1.0)
+- `--analyze-only` - Just analyze, don't process
 
 ---
 
@@ -128,11 +167,17 @@ python cli.py input.mp4 output.webm remove-bg --config advanced_removal.json
 # Auto-detect background color
 python cli.py input.mp4 output.webm remove-bg
 
-# Create seamless video loop with auto detection
-python cli.py input.webm output.webm loop --scan-frames 100 --match-threshold 60
+# Loop background-removed video with fade to transparent
+python cli.py input.webm output.webm loop --method fade --fade-color transparent
 
-# Create loop with frame interpolation for smoothest transition
-python cli.py input.webm output.webm loop --method interpolate --transition-frames 20
+# Loop with pingpong (forward + backward)
+python cli.py input.webm output.webm loop --method pingpong
+
+# Auto-detect best loop method
+python cli.py input.webm output.webm loop --method auto
+
+# Analyze video to find best method (no processing)
+python cli.py input.webm output.webm loop --method auto --analyze-only
 
 # Quick loop test with lower threshold
 python cli.py input.webm output.webm loop --scan-frames 30 --match-threshold 40
