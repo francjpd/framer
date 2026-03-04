@@ -11,7 +11,7 @@ from core import register_operation
 
 # Import existing functionality
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from bgremover import remove_background as _remove_background
+from framer import remove_background as _remove_background
 
 
 def remove_bg(

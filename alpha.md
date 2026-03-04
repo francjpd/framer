@@ -62,7 +62,7 @@ python cli.py input.mp4 output --format webm -t 30 -e 5 -p
 ### Python API
 
 ```python
-from bgremover import remove_background
+from framer import remove_background
 
 # Auto-detect background + WebM output
 result = remove_video_background(
@@ -86,7 +86,7 @@ else:
 ### Library Usage
 
 ```python
-from bgremover import VideoBackgroundRemover, detect_background_color_from_video
+from framer import VideoBackgroundRemover, detect_background_color_from_video
 
 # Auto-detect color
 colors = detect_background_color_from_video("input.mp4", tolerance=25)
@@ -159,7 +159,7 @@ Each frame samples 4 corners (5x5 pixels each), for 12 total samples. Colors wit
 
 | File | Description |
 |------|-------------|
-| `bgremover.py` | Core library (VideoBackgroundRemover class) |
+| `framer.py` | Core library (VideoBackgroundRemover class) |
 | `cli.py` | CLI tool with alpha support |
 | `cli.py` | Python API wrapper |
 
