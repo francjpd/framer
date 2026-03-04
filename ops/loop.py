@@ -13,39 +13,25 @@ from typing import Dict, Any, List, Tuple, Optional
 from core import register_operation
 
 
-def extract_frames(
-    video_path: str, first_n: int = 20, last_n: int = 20
-) -> Dict[str, List[np.ndarray]]:
-    """Extract first N and last N frames from video."""
+def extract_all_frames(video_path: str) -> List[np.ndarray]:
+    """Extract all frames from video."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Could not open video: {video_path}")
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-
-    all_frames = []
+    frames = []
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        all_frames.append(frame)
+        frames.append(frame)
 
     cap.release()
-
-    first_frames = all_frames[:first_n]
-    last_frames = all_frames[-last_n:] if len(all_frames) > last_n else all_frames
-
-    return {
-        "first": first_frames,
-        "last": last_frames,
-        "fps": fps,
-        "total_frames": total_frames,
-    }
+    return frames
 
 
 def compute_frame_similarity(
-    frame1: np.ndarray, frame2: np.ndarray, method: str = "mse"
+    frame1: np.ndarray, frame2: np.ndarray, method: str = "optical_flow"
 ) -> float:
     """
     Compute similarity between two frames.
@@ -61,28 +47,71 @@ def compute_frame_similarity(
         )
 
         magnitude = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2)
+
+        # Use inverse of average motion magnitude as similarity
+        # Less motion = more similar frames
         avg_motion = np.mean(magnitude)
 
-        similarity = max(0, 100 - avg_motion)
-        return similarity
+        # Scale: 0 motion = 100 similarity, 20+ motion = 0 similarity
+        similarity = max(0, 100 - avg_motion * 5)
+        return float(similarity)
 
     elif method == "mse":
         mse = np.mean((frame1.astype(float) - frame2.astype(float)) ** 2)
         similarity = max(0, 100 - mse / 10)
-        return similarity
+        return float(similarity)
 
     else:
         raise ValueError(f"Unknown method: {method}")
 
 
-def find_best_match_point(
-    first_frames: List[np.ndarray], last_frames: List[np.ndarray], threshold: int = 85
+def find_best_loop_points(
+    frames: List[np.ndarray],
+    scan_range: int = 100,
+    threshold: float = 70.0,
+    similarity_method: str = "optical_flow",
 ) -> Tuple[Optional[int], Optional[int], float]:
     """
-    Find best matching frame pair between first and last frames.
+    Scan video for best loop points (start and end).
 
-    Returns: (best_first_idx, best_last_idx, similarity_score)
+    Returns: (start_idx, end_idx, score)
     """
+    n = len(frames)
+    if n < scan_range * 2:
+        scan_range = n // 4
+
+    # Define scan ranges
+    start_range = min(scan_range, n - scan_range)
+    end_range_start = max(scan_range, n - scan_range)
+
+    best_score = 0.0
+    best_start = 0
+    best_end = n - 1
+
+    # Scan for best match points
+    for start_idx in range(start_range):
+        for end_idx in range(end_range_start, n):
+            score = compute_frame_similarity(
+                frames[start_idx], frames[end_idx], method=similarity_method
+            )
+
+            if score > best_score:
+                best_score = score
+                best_start = start_idx
+                best_end = end_idx
+
+    if best_score >= threshold:
+        return (best_start, best_end, best_score)
+    return (None, None, best_score)
+
+
+def find_best_match_point(
+    first_frames: List[np.ndarray],
+    last_frames: List[np.ndarray],
+    threshold: int = 85,
+    similarity_method: str = "mse",
+) -> Tuple[Optional[int], Optional[int], float]:
+    """Find best matching frame pair between first and last frames."""
     if not first_frames or not last_frames:
         return (None, None, 0.0)
 
@@ -92,7 +121,9 @@ def find_best_match_point(
 
     for i, first_frame in enumerate(first_frames):
         for j, last_frame in enumerate(last_frames):
-            score = compute_frame_similarity(first_frame, last_frame, method="mse")
+            score = compute_frame_similarity(
+                first_frame, last_frame, method=similarity_method
+            )
             if score > best_score:
                 best_score = score
                 best_first_idx = i
@@ -109,6 +140,44 @@ def create_loop_cut(
     """Create loop by cutting at match point."""
     loop_part = frames[cut_first_idx:]
     return loop_part
+
+
+def create_gaussian_crossfade(
+    frames: List[np.ndarray], start_idx: int, end_idx: int, transition_frames: int = 10
+) -> List[np.ndarray]:
+    """Create smooth crossfade using Gaussian-weighted blending."""
+    if transition_frames <= 0 or start_idx >= end_idx:
+        return frames[start_idx : end_idx + 1]
+
+    n = len(frames)
+    actual_trans = min(transition_frames, start_idx, n - 1 - end_idx)
+
+    if actual_trans < 1:
+        return frames[start_idx : end_idx + 1]
+
+    pre_start = start_idx - actual_trans
+    post_end = end_idx + actual_trans
+
+    pre_frames = frames[pre_start:start_idx]
+    post_frames = frames[end_idx + 1 : post_end + 1]
+
+    if not pre_frames or not post_frames:
+        return frames[start_idx : end_idx + 1]
+
+    # Create Gaussian-like weights (smooth curve)
+    t = np.linspace(0, np.pi, max(len(pre_frames), len(post_frames)))
+    weights = (np.sin(t) + 1) / 2
+
+    blended = []
+    min_len = min(len(pre_frames), len(post_frames))
+
+    for i in range(min_len):
+        w = weights[i] if i < len(weights) else weights[-1]
+        blended_frame = cv2.addWeighted(pre_frames[i], 1 - w, post_frames[i], w, 0)
+        blended.append(blended_frame)
+
+    result = frames[:pre_start] + blended + frames[post_end + 1 :]
+    return result
 
 
 def create_loop_crossfade(
@@ -132,6 +201,58 @@ def create_loop_crossfade(
     return result
 
 
+def interpolate_frames(
+    frame1: np.ndarray, frame2: np.ndarray, num_intermediate: int = 5
+) -> List[np.ndarray]:
+    """Generate intermediate frames using optical flow."""
+    if num_intermediate <= 0:
+        return []
+
+    gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+
+    flow = cv2.calcOpticalFlowFarneback(gray1, gray2, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+
+    interpolated = []
+    h, w = gray1.shape
+
+    for i in range(1, num_intermediate + 1):
+        t = i / (num_intermediate + 1)
+
+        flow_map = flow * t
+        x, y = np.meshgrid(np.arange(w), np.arange(h))
+        map_x = (x + flow_map[..., 0]).astype(np.float32)
+        map_y = (y + flow_map[..., 1]).astype(np.float32)
+
+        warped = cv2.remap(frame1, map_x, map_y, cv2.INTER_LINEAR)
+        result = cv2.addWeighted(warped, 1 - t, frame2, t, 0)
+        interpolated.append(result)
+
+    return interpolated
+
+
+def create_loop_interpolate(
+    frames: List[np.ndarray], start_idx: int, end_idx: int, num_interp: int = 10
+) -> List[np.ndarray]:
+    """Create loop with interpolated transition frames."""
+    if start_idx is None or end_idx is None:
+        return frames
+
+    if num_interp <= 0:
+        return frames[start_idx : end_idx + 1]
+
+    # Get frames to transition between
+    end_frame = frames[end_idx]
+    start_frame = frames[start_idx]
+
+    # Generate interpolated frames
+    interp_frames = interpolate_frames(end_frame, start_frame, num_interp)
+
+    # Build result: frames up to end + interpolated + frames from start
+    result = frames[:end_idx] + interp_frames + frames[start_idx:]
+    return result
+
+
 def create_loop_stretch(frames: List[np.ndarray]) -> List[np.ndarray]:
     """Time-stretch frames to make loop seamless (placeholder)."""
     return frames
@@ -141,8 +262,6 @@ def encode_video(frames: List[np.ndarray], output_path: str, fps: float) -> str:
     """Encode frames to video using FFmpeg."""
     if not frames:
         raise ValueError("No frames to encode")
-
-    h, w = frames[0].shape[:2]
 
     output_ext = Path(output_path).suffix.lower()
     is_webm = output_ext == ".webm"
@@ -195,9 +314,11 @@ def create_loop(
     input_path: str,
     output_path: str,
     method: str = "auto",
-    first_frames: int = 20,
-    last_frames: int = 20,
-    match_threshold: int = 85,
+    scan_frames: int = 100,
+    transition_frames: int = 10,
+    match_threshold: int = 70,
+    interpolate: bool = False,
+    similarity_method: str = "optical_flow",
     show_matches: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -208,39 +329,54 @@ def create_loop(
     result: Dict[str, Any] = {"success": False, "output_path": None, "error": None}
 
     try:
-        frames_data = extract_frames(input_path, first_frames, last_frames)
-        first = frames_data["first"]
-        last = frames_data["last"]
-        fps = frames_data["fps"]
+        all_frames = extract_all_frames(input_path)
 
-        if not first or not last:
+        if len(all_frames) < 10:
             result["error"] = "Video too short for loop detection"
             return result
 
-        first_idx, last_idx, score = find_best_match_point(first, last, match_threshold)
+        fps = 60.0  # Will be updated from actual video
 
-        if first_idx is None:
+        # Get FPS from video
+        cap = cv2.VideoCapture(input_path)
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            cap.release()
+
+        # Find best loop points using multi-point scanning
+        start_idx, end_idx, score = find_best_loop_points(
+            all_frames, scan_frames, match_threshold, similarity_method
+        )
+
+        if start_idx is None:
             result["error"] = (
                 f"No match found (best: {score:.1f}%, threshold: {match_threshold}%)"
             )
             return result
 
-        full_frames = first + last
-
+        # Apply loop method
         if method == "cut":
-            looped = create_loop_cut(full_frames, first_idx, last_idx)
+            looped = create_loop_cut(all_frames, start_idx, end_idx)
         elif method == "crossfade":
-            looped = create_loop_crossfade(
-                full_frames, first_idx + 1, len(last) - last_idx
+            looped = create_gaussian_crossfade(
+                all_frames, start_idx, end_idx, transition_frames
+            )
+        elif method == "interpolate" or interpolate:
+            looped = create_loop_interpolate(
+                all_frames, start_idx, end_idx, transition_frames
             )
         elif method == "stretch":
-            looped = create_loop_stretch(full_frames)
-        else:
-            if score >= 90:
-                looped = create_loop_cut(full_frames, first_idx, last_idx)
+            looped = create_loop_stretch(all_frames[start_idx : end_idx + 1])
+        else:  # auto
+            if score >= 85:
+                looped = create_loop_cut(all_frames, start_idx, end_idx)
+            elif score >= 60:
+                looped = create_gaussian_crossfade(
+                    all_frames, start_idx, end_idx, transition_frames
+                )
             else:
-                looped = create_loop_crossfade(
-                    full_frames, first_idx + 1, len(last) - last_idx
+                looped = create_loop_interpolate(
+                    all_frames, start_idx, end_idx, transition_frames
                 )
 
         encode_video(looped, output_path, fps)
@@ -261,22 +397,32 @@ register_operation(
         "method": {
             "type": "string",
             "default": "auto",
-            "description": "Loop method: cut, crossfade, stretch, or auto",
+            "description": "Loop method: cut, crossfade, interpolate, stretch, or auto",
         },
-        "first_frames": {
+        "scan_frames": {
             "type": "int",
-            "default": 20,
-            "description": "Number of frames to scan at start",
+            "default": 100,
+            "description": "Frames to scan for matching (larger = more thorough)",
         },
-        "last_frames": {
+        "transition_frames": {
             "type": "int",
-            "default": 20,
-            "description": "Number of frames to match at end",
+            "default": 10,
+            "description": "Frames for crossfade/interpolation transition",
         },
         "match_threshold": {
             "type": "int",
-            "default": 85,
+            "default": 70,
             "description": "Minimum similarity threshold (0-100)",
+        },
+        "interpolate": {
+            "type": "bool",
+            "default": False,
+            "description": "Add interpolated frames for smoother loop",
+        },
+        "similarity_method": {
+            "type": "string",
+            "default": "optical_flow",
+            "description": "Similarity method: mse or optical_flow",
         },
         "show_matches": {
             "type": "bool",
