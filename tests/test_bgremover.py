@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from bgremover import detect_background_color_from_frame_border
+from framer import detect_background_color_from_frame_border
 
 
 def test_detect_background_color_from_frame_border():
