@@ -709,75 +709,74 @@ def create_loop(
     input_path: str,
     output_path: str,
     method: str = "auto",
-    scan_frames: int = 100,
-    transition_frames: int = 10,
-    match_threshold: int = 70,
-    interpolate: bool = False,
-    similarity_method: str = "optical_flow",
-    show_matches: bool = False,
+    fade_color: str = "transparent",
+    fade_frames: int = 10,
+    fade_type: str = "both",
+    morph_steps: int = 10,
+    cycle_frames: Optional[int] = None,
+    hold_frames: int = 2,
+    blend_mode: str = "add",
+    ramp_factor: float = 1.0,
+    analyze_only: bool = False,
     progress: bool = False,
 ) -> Dict[str, Any]:
     """
     Main entry point for loop operation.
 
-    Creates seamless infinite loops by matching frames between beginning and end.
+    Creates seamless infinite loops using various methods.
+
+    Methods:
+    - pingpong: Forward then backward (best for bouncing/pendulum/breathing)
+    - morph: Optical flow warps (best for complex motion)
+    - periodic: Auto-detect cycles (best for walking/running/waves)
+    - hold: Freeze frames at transition (best for videos with pauses)
+    - fade: Fade to color/transparent (best when nothing else works)
+    - blend: Creative blend modes (best for artistic effects)
+    - reverse: Forward then full reverse (best for reversible motion)
+    - speedramp: Speed adjustment (best when endpoints almost match)
+    - auto: Analyze and pick best method
     """
     result: Dict[str, Any] = {"success": False, "output_path": None, "error": None}
 
     try:
         all_frames = extract_all_frames(input_path, show_progress=progress)
 
-        if len(all_frames) < 10:
-            result["error"] = "Video too short for loop detection"
+        if len(all_frames) < 4:
+            result["error"] = "Video too short for looping (minimum 4 frames)"
             return result
 
-        fps = 60.0  # Will be updated from actual video
-
-        # Get FPS from video
         cap = cv2.VideoCapture(input_path)
+        fps = 30.0
         if cap.isOpened():
             fps = cap.get(cv2.CAP_PROP_FPS)
             cap.release()
 
-        # Find best loop points using multi-point scanning
-        start_idx, end_idx, score = find_best_loop_points(
-            all_frames,
-            scan_frames,
-            match_threshold,
-            similarity_method,
-            show_progress=progress,
-        )
+        if method == "auto":
+            analysis = analyze_best_method(all_frames)
+            if analyze_only:
+                result["success"] = True
+                result["analysis"] = analysis
+                return result
+            method = analysis["recommended"]
 
-        if start_idx is None:
-            result["error"] = (
-                f"No match found (best: {score:.1f}%, threshold: {match_threshold}%)"
-            )
-            return result
-
-        # Apply loop method
-        if method == "cut":
-            looped = create_loop_cut(all_frames, start_idx, end_idx)
-        elif method == "crossfade":
-            looped = create_gaussian_crossfade(
-                all_frames, start_idx, end_idx, transition_frames
-            )
-        elif method == "interpolate" or interpolate:
-            looped = create_loop_interpolate(
-                all_frames, start_idx, end_idx, transition_frames
-            )
-        elif method == "stretch":
-            looped = create_loop_stretch(all_frames[start_idx : end_idx + 1])
-        else:  # auto
-            if score >= 85:
-                looped = create_loop_cut(all_frames, start_idx, end_idx)
-            elif score >= 60:
-                looped = create_gaussian_crossfade(
-                    all_frames, start_idx, end_idx, transition_frames
-                )
-            else:
-                looped = create_loop_interpolate(
-                    all_frames, start_idx, end_idx, transition_frames
-                )
+        if method == "pingpong":
+            looped = create_pingpong_loop(all_frames)
+        elif method == "morph":
+            looped = create_morph_loop(all_frames, morph_steps)
+        elif method == "periodic":
+            looped = create_periodic_loop(all_frames, cycle_frames)
+        elif method == "hold":
+            looped = create_hold_loop(all_frames, hold_frames)
+        elif method == "fade":
+            looped = create_fade_loop(all_frames, fade_color, fade_frames, fade_type)
+        elif method == "blend":
+            looped = create_blend_loop(all_frames, blend_mode)
+        elif method == "reverse":
+            looped = create_reverse_loop(all_frames)
+        elif method == "speedramp":
+            looped = create_speedramp_loop(all_frames, ramp_factor)
+        else:
+            looped = create_pingpong_loop(all_frames)
 
         encode_video(looped, output_path, fps)
 
@@ -797,38 +796,53 @@ register_operation(
         "method": {
             "type": "string",
             "default": "auto",
-            "description": "Loop method: cut, crossfade, interpolate, stretch, or auto",
+            "description": "Loop method: pingpong, morph, periodic, hold, fade, blend, reverse, speedramp, auto (default: auto)",
         },
-        "scan_frames": {
-            "type": "int",
-            "default": 100,
-            "description": "Frames to scan for matching (larger = more thorough)",
+        "fade_color": {
+            "type": "string",
+            "default": "transparent",
+            "description": "Fade color: 'transparent', hex (#RRGGBB), or BGR (0,255,0) (best for fade method)",
         },
-        "transition_frames": {
+        "fade_frames": {
             "type": "int",
             "default": 10,
-            "description": "Frames for crossfade/interpolation transition",
+            "description": "Number of frames for fade transition (best for fade method)",
         },
-        "match_threshold": {
-            "type": "int",
-            "default": 70,
-            "description": "Minimum similarity threshold (0-100)",
-        },
-        "interpolate": {
-            "type": "bool",
-            "default": False,
-            "description": "Add interpolated frames for smoother loop",
-        },
-        "similarity_method": {
+        "fade_type": {
             "type": "string",
-            "default": "optical_flow",
-            "description": "Similarity method: mse or optical_flow",
+            "default": "both",
+            "description": "Fade type: in, out, or both (best for fade method)",
         },
-        "show_matches": {
+        "morph_steps": {
+            "type": "int",
+            "default": 10,
+            "description": "Number of warp steps for morph transition (best for morph method)",
+        },
+        "cycle_frames": {
+            "type": "int",
+            "default": None,
+            "description": "Manual cycle length for periodic method (auto-detect if not set, best for periodic)",
+        },
+        "hold_frames": {
+            "type": "int",
+            "default": 2,
+            "description": "Number of frames to freeze at transition (best for hold method)",
+        },
+        "blend_mode": {
+            "type": "string",
+            "default": "add",
+            "description": "Blend mode: add, multiply, screen, overlay (best for blend method)",
+        },
+        "ramp_factor": {
+            "type": "float",
+            "default": 1.0,
+            "description": "Speed multiplier 0.8-1.2 for speedramp (best for speedramp method)",
+        },
+        "analyze_only": {
             "type": "bool",
             "default": False,
-            "description": "Show matched frame pairs for preview",
+            "description": "Just analyze and report best method, don't process video",
         },
     },
-    description="Create seamless infinite video loops",
+    description="Create seamless infinite video loops with various methods",
 )
