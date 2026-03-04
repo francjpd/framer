@@ -13,20 +13,128 @@ from typing import Dict, Any, List, Tuple, Optional
 from core import register_operation
 
 
-def extract_all_frames(video_path: str) -> List[np.ndarray]:
+def parse_fade_color(color_str: str) -> Tuple[int, int, int, int]:
+    """Parse fade color string to RGBA tuple.
+
+    Supports:
+    - "transparent" -> (0, 0, 0, 0)
+    - "#RRGGBB" or "#RGB" -> (R, G, B, 255)
+    - "B,G,R" -> (B, G, R, 255)
+    """
+    if not color_str or color_str.lower() == "transparent":
+        return (0, 0, 0, 0)
+
+    color_str = color_str.strip()
+
+    if color_str.startswith("#"):
+        color_str = color_str[1:]
+        if len(color_str) == 3:
+            r = int(color_str[0] * 2, 16)
+            g = int(color_str[1] * 2, 16)
+            b = int(color_str[2] * 2, 16)
+        elif len(color_str) == 6:
+            r = int(color_str[0:2], 16)
+            g = int(color_str[2:4], 16)
+            b = int(color_str[4:6], 16)
+        else:
+            raise ValueError(f"Invalid hex color: {color_str}")
+        return (r, g, b, 255)
+
+    try:
+        values = [int(x.strip()) for x in color_str.split(",")]
+        if len(values) == 3:
+            return (values[2], values[1], values[0], 255)
+    except ValueError:
+        pass
+
+    raise ValueError(f"Invalid color format: {color_str}")
+
+
+def apply_blend_mode(frame1: np.ndarray, frame2: np.ndarray, mode: str) -> np.ndarray:
+    """Apply blend mode between two frames."""
+    f1 = frame1.astype(float)
+    f2 = frame2.astype(float)
+
+    if mode == "add":
+        result = np.clip(f1 + f2, 0, 255).astype(np.uint8)
+    elif mode == "multiply":
+        result = (f1 * f2 / 255).astype(np.uint8)
+    elif mode == "screen":
+        result = 255 - (255 - f1) * (255 - f2) / 255
+        result = np.clip(result, 0, 255).astype(np.uint8)
+    elif mode == "overlay":
+        result = np.where(
+            f1 < 128, 2 * f1 * f2 / 255, 255 - 2 * (255 - f1) * (255 - f2) / 255
+        )
+        result = np.clip(result, 0, 255).astype(np.uint8)
+    else:
+        result = cv2.addWeighted(frame1, 0.5, frame2, 0.5, 0)
+
+    return result
+
+
+def detect_cycle_period(
+    frames: List[np.ndarray], max_period: int = 120
+) -> Optional[int]:
+    """Auto-detect periodic motion using frame differences.
+
+    Returns: Detected cycle period in frames, or None if no clear cycle.
+    """
+    if len(frames) < 10:
+        return None
+
+    n = min(len(frames), max_period)
+    diffs = []
+
+    for i in range(1, n):
+        diff = np.mean(np.abs(frames[i].astype(float) - frames[i - 1].astype(float)))
+        diffs.append(diff)
+
+    autocorr = np.correlate(diffs, diffs, mode="full")
+    autocorr = autocorr[len(autocorr) // 2 :]
+
+    peaks = []
+    for i in range(2, len(autocorr) - 1):
+        if autocorr[i] > autocorr[i - 1] and autocorr[i] > autocorr[i + 1]:
+            if autocorr[i] > np.mean(autocorr) * 1.2:
+                peaks.append(i)
+
+    if peaks:
+        return peaks[0]
+    return None
+
+
+def extract_all_frames(
+    video_path: str, show_progress: bool = False
+) -> List[np.ndarray]:
     """Extract all frames from video."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Could not open video: {video_path}")
 
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frames = []
+    frame_count = 0
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         frames.append(frame)
+        frame_count += 1
+
+        if show_progress:
+            prog = (frame_count / total_frames) * 100 if total_frames > 0 else 0
+            print(
+                f"\rExtracting frames: {prog:.1f}% ({frame_count}/{total_frames})",
+                end="",
+            )
 
     cap.release()
+
+    if show_progress:
+        print()
+
     return frames
 
 
@@ -70,6 +178,7 @@ def find_best_loop_points(
     scan_range: int = 100,
     threshold: float = 70.0,
     similarity_method: str = "optical_flow",
+    show_progress: bool = False,
 ) -> Tuple[Optional[int], Optional[int], float]:
     """
     Scan video for best loop points (start and end).
@@ -88,6 +197,9 @@ def find_best_loop_points(
     best_start = 0
     best_end = n - 1
 
+    total_comparisons = start_range * (n - end_range_start)
+    comparison_count = 0
+
     # Scan for best match points
     for start_idx in range(start_range):
         for end_idx in range(end_range_start, n):
@@ -95,10 +207,26 @@ def find_best_loop_points(
                 frames[start_idx], frames[end_idx], method=similarity_method
             )
 
+            comparison_count += 1
+
+            if show_progress and comparison_count % 100 == 0:
+                prog = (
+                    (comparison_count / total_comparisons) * 100
+                    if total_comparisons > 0
+                    else 0
+                )
+                print(
+                    f"\rScanning for loop points: {prog:.1f}% ({comparison_count}/{total_comparisons})",
+                    end="",
+                )
+
             if score > best_score:
                 best_score = score
                 best_start = start_idx
                 best_end = end_idx
+
+    if show_progress:
+        print()
 
     if best_score >= threshold:
         return (best_start, best_end, best_score)
@@ -320,6 +448,7 @@ def create_loop(
     interpolate: bool = False,
     similarity_method: str = "optical_flow",
     show_matches: bool = False,
+    progress: bool = False,
 ) -> Dict[str, Any]:
     """
     Main entry point for loop operation.
@@ -329,7 +458,7 @@ def create_loop(
     result: Dict[str, Any] = {"success": False, "output_path": None, "error": None}
 
     try:
-        all_frames = extract_all_frames(input_path)
+        all_frames = extract_all_frames(input_path, show_progress=progress)
 
         if len(all_frames) < 10:
             result["error"] = "Video too short for loop detection"
@@ -345,7 +474,11 @@ def create_loop(
 
         # Find best loop points using multi-point scanning
         start_idx, end_idx, score = find_best_loop_points(
-            all_frames, scan_frames, match_threshold, similarity_method
+            all_frames,
+            scan_frames,
+            match_threshold,
+            similarity_method,
+            show_progress=progress,
         )
 
         if start_idx is None:
