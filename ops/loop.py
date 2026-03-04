@@ -24,21 +24,17 @@ def extract_frames(
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
 
-    first_frames = []
-    for i in range(min(first_n, total_frames)):
-        ret, frame = cap.read()
-        if ret:
-            first_frames.append(frame)
-
-    cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, total_frames - last_n))
-    last_frames = []
+    all_frames = []
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        last_frames.append(frame)
+        all_frames.append(frame)
 
     cap.release()
+
+    first_frames = all_frames[:first_n]
+    last_frames = all_frames[-last_n:] if len(all_frames) > last_n else all_frames
 
     return {
         "first": first_frames,
