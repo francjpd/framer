@@ -30,6 +30,8 @@ def remove_bg(
     refine_tolerance: int = 45,
     refine_block_size: int = 32,
     loop: bool = True,
+    progress: bool = False,
+    refine_save_previews: bool = False,
     config: str | None = None,
 ) -> Dict[str, Any]:
     """
@@ -97,7 +99,7 @@ def remove_bg(
         background_color=bg_color,
         tolerance=tolerance,
         soft_edges=edges,
-        show_progress=False,
+        show_progress=progress,
         auto_ranges=auto_ranges,
         num_ranges=num_ranges,
         method=method,
@@ -150,16 +152,19 @@ register_operation(
         "color": {
             "type": "string",
             "default": None,
+            "short": "-c",
             "description": "Background color (BGR: '0,255,0', hex: '#00FF00')",
         },
         "tolerance": {
             "type": "int",
             "default": 30,
+            "short": "-t",
             "description": "Color tolerance (default: 30)",
         },
         "edges": {
             "type": "int",
             "default": 5,
+            "short": "-e",
             "description": "Soft edge size (default: 5)",
         },
         "auto_ranges": {
@@ -170,12 +175,66 @@ register_operation(
         "num_ranges": {
             "type": "int",
             "default": 5,
+            "short": "-n",
             "description": "Number of auto-generated ranges",
         },
         "method": {
             "type": "string",
             "default": "color",
+            "short": "-m",
             "description": "Detection method: color, motion, combined",
+        },
+        "motion_frames": {
+            "type": "int",
+            "default": 30,
+            "short": "-mf",
+            "description": "Frames for motion detection (default: 30)",
+        },
+        "edge_cleanup": {
+            "type": "int",
+            "default": 3,
+            "short": "-ec",
+            "description": "Edge cleanup pixels (default: 3)",
+        },
+        "adaptive_bg": {
+            "type": "bool",
+            "default": False,
+            "description": "Adaptive background detection",
+        },
+        "refine": {
+            "type": "bool",
+            "default": False,
+            "short": "-r",
+            "description": "Enable refinement pass to catch missed background colors",
+        },
+        "refine_tolerance": {
+            "type": "int",
+            "default": 45,
+            "short": "-rt",
+            "description": "Refinement tolerance (default: 45)",
+        },
+        "refine_block_size": {
+            "type": "int",
+            "default": 32,
+            "short": "-rb",
+            "description": "Refinement block size (default: 32)",
+        },
+        "loop": {
+            "type": "bool",
+            "default": True,
+            "short": "-l",
+            "description": "Enable infinite loop for GIF output",
+        },
+        "progress": {
+            "type": "bool",
+            "default": False,
+            "short": "-p",
+            "description": "Show progress bar",
+        },
+        "refine_save_previews": {
+            "type": "bool",
+            "default": False,
+            "description": "Save preview images with flagged areas for review",
         },
         "config": {
             "type": "string",

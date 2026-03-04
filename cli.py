@@ -129,16 +129,31 @@ Examples:
 
             default = arg_info.get("default")
 
+            # Build argument flags - support short flags
+            flag_args = [flag_name]
+            short_flag = arg_info.get("short")
+            if short_flag:
+                flag_args.insert(0, short_flag)
+
             if arg_type == "bool":
-                subparser.add_argument(
-                    flag_name,
-                    dest=arg_name,
-                    default=default,
-                    help=arg_info.get("description", ""),
-                )
+                # Use store_true/store_false for boolean flags
+                if default is False:
+                    subparser.add_argument(
+                        *flag_args,
+                        action="store_true",
+                        dest=arg_name,
+                        help=arg_info.get("description", ""),
+                    )
+                else:
+                    subparser.add_argument(
+                        *flag_args,
+                        action="store_false",
+                        dest=arg_name,
+                        help=arg_info.get("description", ""),
+                    )
             else:
                 subparser.add_argument(
-                    flag_name,
+                    *flag_args,
                     type=type_func,
                     default=default,
                     dest=arg_name,
