@@ -61,10 +61,36 @@ def boost_fps(input_path: str, output_path: str, to: int = 60) -> Dict[str, Any]
         else:
             original_fps = float(original_fps_str)
 
+        # Check if input has alpha channel
+        pix_fmt_cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=pix_fmt",
+            "-of",
+            "csv=p=0",
+            str(input_path),
+        ]
+        pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True)
+        input_pix_fmt = pix_fmt_result.stdout.strip()
+        has_alpha = (
+            "yuva" in input_pix_fmt or "bgra" in input_pix_fmt or "gba" in input_pix_fmt
+        )
+
         # Determine output format from extension
         output_ext = Path(output_path).suffix.lower()
 
-        # Choose codec based on format
+        # Warn if output to mp4 which doesn't support alpha
+        if has_alpha and output_ext == ".mp4":
+            result["error"] = (
+                "MP4 does not support alpha channel. Use .webm or .mov for output with alpha."
+            )
+            return result
+
+        # Choose codec based on format (always set before building command)
         if output_ext in [".webm"]:
             video_codec = "libvpx-vp9"
             codec_args = [
@@ -81,9 +107,12 @@ def boost_fps(input_path: str, output_path: str, to: int = 60) -> Dict[str, Any]
             ]
         elif output_ext in [".mov"]:
             video_codec = "qtrle"  # QuickTime Animation (supports alpha)
-            codec_args = ["-c:v", video_codec]
+            if has_alpha:
+                codec_args = ["-c:v", video_codec, "-pix_fmt", "yuva420p"]
+            else:
+                codec_args = ["-c:v", video_codec]
         else:
-            # Default to H.264 for .mp4
+            # Default to H.264 for .mp4 and others
             video_codec = "libx264"
             codec_args = ["-c:v", video_codec, "-preset", "medium", "-crf", "23"]
 
@@ -91,17 +120,10 @@ def boost_fps(input_path: str, output_path: str, to: int = 60) -> Dict[str, Any]
         cmd = ["ffmpeg", "-y", "-i", str(input_path)]
 
         if original_fps >= to:
-            # No interpolation needed, just change metadata or re-encode at target fps
-            if output_ext in [".webm"]:
-                # For WebM output with alpha, re-encode with proper codec
-                cmd.extend(codec_args)
-                cmd.extend(["-r", str(to)])
-            else:
-                # For other formats, just copy or adjust framerate
-                cmd.extend(["-r", str(to)])
+            # No interpolation needed, just adjust framerate
+            cmd.extend(["-r", str(to)])
         else:
             # Try minterpolate first
-            # Check if minterpolate is available by testing
             test_cmd = ["ffmpeg", "-filters", "|", "grep", "minterpolate"]
             test_result = subprocess.run(
                 " ".join(test_cmd), shell=True, capture_output=True, text=True
@@ -109,18 +131,19 @@ def boost_fps(input_path: str, output_path: str, to: int = 60) -> Dict[str, Any]
 
             if "minterpolate" in test_result.stdout:
                 # Use minterpolate for frame interpolation
-                cmd.extend(
-                    [
-                        "-vf",
-                        f"minterpolate=fps={to}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1",
-                    ]
-                )
-                cmd.extend(codec_args)
+                filter_str = f"minterpolate=fps={to}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
+                if has_alpha:
+                    filter_str += ",format=yuva420p"
+                cmd.extend(["-vf", filter_str])
             else:
-                # Fallback: simple framerate conversion with duplication/blending
-                # This will just duplicate frames, making motion choppy but at least correct FPS
-                cmd.extend(["-vf", f"fps={to}"])
-                cmd.extend(codec_args)
+                # Fallback: simple framerate conversion
+                filter_str = f"fps={to}"
+                if has_alpha:
+                    filter_str += ",format=yuva420p"
+                cmd.extend(["-vf", filter_str])
+
+        # Always add codec arguments after filters
+        cmd.extend(codec_args)
 
         cmd.append(str(output_path))
 
