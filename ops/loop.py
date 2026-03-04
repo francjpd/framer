@@ -144,27 +144,47 @@ def encode_video(frames: List[np.ndarray], output_path: str, fps: float) -> str:
 
     h, w = frames[0].shape[:2]
 
+    output_ext = Path(output_path).suffix.lower()
+    is_webm = output_ext == ".webm"
+
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
 
         for i, frame in enumerate(frames):
             cv2.imwrite(str(temp_path / f"frame_{i:05d}.png"), frame)
 
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-framerate",
-            str(fps),
-            "-i",
-            str(temp_path / "frame_%05d.png"),
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-crf",
-            "23",
-            output_path,
-        ]
+        if is_webm:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-framerate",
+                str(fps),
+                "-i",
+                str(temp_path / "frame_%05d.png"),
+                "-c:v",
+                "libvpx-vp9",
+                "-crf",
+                "30",
+                "-b:v",
+                "0",
+                output_path,
+            ]
+        else:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-framerate",
+                str(fps),
+                "-i",
+                str(temp_path / "frame_%05d.png"),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-crf",
+                "23",
+                output_path,
+            ]
 
         subprocess.run(cmd, capture_output=True, check=True)
 
