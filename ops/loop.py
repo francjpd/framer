@@ -11,43 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
 from core import register_operation
-
-
-def parse_fade_color(color_str: str) -> Tuple[int, int, int, int]:
-    """Parse fade color string to RGBA tuple.
-
-    Supports:
-    - "transparent" -> (0, 0, 0, 0)
-    - "#RRGGBB" or "#RGB" -> (R, G, B, 255)
-    - "B,G,R" -> (B, G, R, 255)
-    """
-    if not color_str or color_str.lower() == "transparent":
-        return (0, 0, 0, 0)
-
-    color_str = color_str.strip()
-
-    if color_str.startswith("#"):
-        color_str = color_str[1:]
-        if len(color_str) == 3:
-            r = int(color_str[0] * 2, 16)
-            g = int(color_str[1] * 2, 16)
-            b = int(color_str[2] * 2, 16)
-        elif len(color_str) == 6:
-            r = int(color_str[0:2], 16)
-            g = int(color_str[2:4], 16)
-            b = int(color_str[4:6], 16)
-        else:
-            raise ValueError(f"Invalid hex color: {color_str}")
-        return (r, g, b, 255)
-
-    try:
-        values = [int(x.strip()) for x in color_str.split(",")]
-        if len(values) == 3:
-            return (values[2], values[1], values[0], 255)
-    except ValueError:
-        pass
-
-    raise ValueError(f"Invalid color format: {color_str}")
+from core.utils import parse_color_rgba
 
 
 def apply_blend_mode(frame1: np.ndarray, frame2: np.ndarray, mode: str) -> np.ndarray:
@@ -201,7 +165,7 @@ def create_fade_loop(
     if len(frames) < fade_frames * 2:
         return frames
 
-    color = parse_fade_color(fade_color)
+    color = parse_color_rgba(fade_color)
     fade_frames = min(fade_frames, len(frames) // 4)
 
     result = []
@@ -654,53 +618,26 @@ def create_loop_stretch(frames: List[np.ndarray]) -> List[np.ndarray]:
 
 
 def encode_video(frames: List[np.ndarray], output_path: str, fps: float) -> str:
-    """Encode frames to video using FFmpeg."""
+    """Encode frames to video using FFmpeg without saving to disk."""
     if not frames:
         raise ValueError("No frames to encode")
 
-    output_ext = Path(output_path).suffix.lower()
-    is_webm = output_ext == ".webm"
+    from core.video import VideoStreamWriter
+    
+    # Check if frames have alpha channel
+    has_alpha = frames[0].shape[2] == 4 if len(frames[0].shape) == 3 else False
+    height, width = frames[0].shape[:2]
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_path = Path(temp_dir)
-
-        for i, frame in enumerate(frames):
-            cv2.imwrite(str(temp_path / f"frame_{i:05d}.png"), frame)
-
-        if is_webm:
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-framerate",
-                str(fps),
-                "-i",
-                str(temp_path / "frame_%05d.png"),
-                "-c:v",
-                "libvpx-vp9",
-                "-crf",
-                "30",
-                "-b:v",
-                "0",
-                output_path,
-            ]
-        else:
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-framerate",
-                str(fps),
-                "-i",
-                str(temp_path / "frame_%05d.png"),
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-crf",
-                "23",
-                output_path,
-            ]
-
-        subprocess.run(cmd, capture_output=True, check=True)
+    with VideoStreamWriter(
+        output_path=output_path,
+        fps=fps,
+        width=width,
+        height=height,
+        has_alpha=has_alpha,
+        loop=True
+    ) as writer:
+        for frame in frames:
+            writer.write_frame(frame)
 
     return output_path
 

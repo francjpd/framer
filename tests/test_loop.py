@@ -1,8 +1,10 @@
 import pytest
 import numpy as np
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/home/francjpd/projects/bg-remover")
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ops.loop import (
     create_pingpong_loop,
@@ -14,22 +16,22 @@ from ops.loop import (
     create_reverse_loop,
     create_speedramp_loop,
     analyze_best_method,
-    parse_fade_color,
 )
+from core.utils import parse_color_rgba
 
 
-def test_parse_fade_color_transparent():
-    result = parse_fade_color("transparent")
+def test_parse_color_rgba_transparent():
+    result = parse_color_rgba("transparent")
     assert result == (0, 0, 0, 0)
 
 
-def test_parse_fade_color_hex():
-    result = parse_fade_color("#FF0000")
+def test_parse_color_rgba_hex():
+    result = parse_color_rgba("#FF0000")
     assert result == (255, 0, 0, 255)  # RGB format
 
 
-def test_parse_fade_color_bgr():
-    result = parse_fade_color("0,255,0")
+def test_parse_color_rgba_bgr():
+    result = parse_color_rgba("0,255,0")
     assert result == (0, 255, 0, 255)
 
 

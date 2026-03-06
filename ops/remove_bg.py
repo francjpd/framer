@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from core import register_operation
+from core.utils import parse_color
 
 # Import existing functionality
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -90,7 +91,7 @@ def remove_bg(
     # Parse color
     bg_color = None
     if color:
-        bg_color = _parse_color(color)
+        bg_color = parse_color(color)
 
     # Call existing function
     return _remove_background(
@@ -111,37 +112,6 @@ def remove_bg(
         refine_block_size=refine_block_size,
         loop=loop,
     )
-
-    # Handle result
-    return result
-
-
-def _parse_color(color_str: str):
-    """Parse color from BGR string or hex."""
-    if color_str is None:
-        return None
-
-    color_str = color_str.strip()
-    if color_str.startswith("#"):
-        color_str = color_str[1:]
-
-    if len(color_str) == 6:
-        try:
-            r = int(color_str[0:2], 16)
-            g = int(color_str[2:4], 16)
-            b = int(color_str[4:6], 16)
-            return [b, g, r]
-        except ValueError:
-            pass
-
-    try:
-        values = [int(x.strip()) for x in color_str.split(",")]
-        if len(values) == 3:
-            return values
-    except ValueError:
-        pass
-
-    return None
 
 
 # Register operation

@@ -26,40 +26,7 @@ from pathlib import Path
 
 # Import operations
 from ops import get_registry
-
-
-def parse_color(color_str):
-    """Parse color from BGR string or hex."""
-    if color_str is None:
-        return None
-
-    if isinstance(color_str, (list, tuple)):
-        if len(color_str) == 3:
-            return list(color_str)
-        return None
-
-    if isinstance(color_str, str):
-        color_str = color_str.strip()
-        if color_str.startswith("#"):
-            color_str = color_str[1:]
-
-        if len(color_str) == 6:
-            try:
-                r = int(color_str[0:2], 16)
-                g = int(color_str[2:4], 16)
-                b = int(color_str[4:6], 16)
-                return [b, g, r]
-            except ValueError:
-                pass
-
-        try:
-            values = [int(x.strip()) for x in color_str.split(",")]
-            if len(values) == 3:
-                return values
-        except ValueError:
-            pass
-
-    return None
+from core.utils import parse_color
 
 
 def main():

@@ -483,116 +483,6 @@ def get_output_format(output_path: str, format_flag: str = None) -> str:
         return "mov"
 
 
-def _encode_mov(
-    frames_dir: Path, fps: float, output_path: str, loop: bool = True
-) -> str:
-    """Encode PNG sequence to MOV with alpha using qtrle codec."""
-    output_file = Path(output_path)
-    final_output = output_file.parent / f"{output_file.stem}.mov"
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-framerate",
-        str(fps),
-        "-i",
-        str(frames_dir / "frame_%05d.png"),
-        "-c:v",
-        "qtrle",
-    ]
-
-    if loop:
-        cmd.extend(["-loop", "0"])
-
-    cmd.append(str(final_output))
-    subprocess.run(cmd, capture_output=True, check=True)
-    return str(final_output)
-
-
-def _encode_webm(
-    frames_dir: Path, fps: float, output_path: str, loop: bool = True
-) -> str:
-    """Encode PNG sequence to WebM with alpha using VP9 codec."""
-    output_file = Path(output_path)
-    final_output = output_file.parent / f"{output_file.stem}.webm"
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-framerate",
-        str(fps),
-        "-i",
-        str(frames_dir / "frame_%05d.png"),
-        "-c:v",
-        "libvpx-vp9",
-        "-pix_fmt",
-        "yuva420p",
-        "-auto-alt-ref",
-        "0",
-        "-crf",
-        "30",
-        "-b:v",
-        "0",
-    ]
-
-    if loop:
-        cmd.extend(["-loop", "0"])
-
-    cmd.append(str(final_output))
-    subprocess.run(cmd, capture_output=True, check=True)
-    return str(final_output)
-
-
-def _encode_gif(
-    frames_dir: Path, fps: float, output_path: str, loop: bool = True
-) -> str:
-    """Encode PNG sequence to GIF with palette for better quality."""
-    output_file = Path(output_path)
-    final_output = output_file.parent / f"{output_file.stem}.gif"
-    palette_path = frames_dir / "palette.png"
-
-    palette_cmd = [
-        "ffmpeg",
-        "-y",
-        "-framerate",
-        str(fps),
-        "-i",
-        str(frames_dir / "frame_%05d.png"),
-        "-vf",
-        "palettegen=stats_mode=max",
-        str(palette_path),
-    ]
-    subprocess.run(palette_cmd, capture_output=True, check=True)
-
-    gif_cmd = [
-        "ffmpeg",
-        "-y",
-        "-framerate",
-        str(fps),
-        "-i",
-        str(frames_dir / "frame_%05d.png"),
-        "-i",
-        str(palette_path),
-        "-lavfi",
-        "paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
-    ]
-
-    if loop:
-        gif_cmd.extend(["-loop", "0"])
-    else:
-        gif_cmd.extend(["-loop", "1"])
-
-    gif_cmd.append(str(final_output))
-    subprocess.run(gif_cmd, capture_output=True, check=True)
-
-    try:
-        palette_path.unlink()
-    except:
-        pass
-
-    return str(final_output)
-
-
 def _apply_soft_edges(mask: np.ndarray, soft_edges: int) -> np.ndarray:
     """Apply soft edges to a binary mask."""
     if mask is None or mask.sum() == 0 or soft_edges <= 0:
@@ -692,36 +582,9 @@ def remove_background(
     loop: bool = True,
 ) -> Dict[str, Any]:
     """
-    Remove background from video and output with alpha channel.
-
-    Uses FFmpeg to encode MOV/WebM/GIF with alpha support.
-
-    Args:
-        input_path: Input video path
-        output_path: Output video path
-        background_color: BGR color [B, G, R]
-        tolerance: Color tolerance (default: 30)
-        soft_edges: Soft edge size (default: 5)
-        show_progress: Show progress (default: False)
-        auto_ranges: Auto-generate color ranges (default: True)
-        num_ranges: Number of auto-generated ranges (default: 5)
-        method: Detection method - 'color', 'motion', or 'combined' (default: 'color')
-        motion_frames: Frames to analyze for motion detection (default: 30)
-        motion_threshold: Pixel difference threshold for motion (default: 15)
-        edge_cleanup: Pixels to erode from edges (default: 3)
-        adaptive_bg: Detect background per-frame from borders (default: False)
-        refine: Enable refinement pass to catch missed background colors (default: False)
-        refine_tolerance: Color tolerance for refinement (default: 45)
-        refine_block_size: Block size for section analysis (default: 32)
-        refine_interactive: Enable manual review per frame (default: False)
-        refine_save_previews: Save preview images with flagged areas (default: False)
-        loop: Enable infinite loop for output video (default: True)
-
-    Returns:
-        dict with success, output_path, error
+    Remove background from video and output with alpha channel using stream encoding.
     """
     result: Dict[str, Any] = {"success": False, "output_path": None, "error": None}
-    temp_dir = None
 
     try:
         input_file = Path(input_path)
@@ -730,19 +593,14 @@ def remove_background(
             return result
 
         if shutil.which("ffmpeg") is None:
-            result["error"] = (
-                "FFmpeg not found. Please install FFmpeg for alpha channel support."
-            )
+            result["error"] = "FFmpeg not found. Please install FFmpeg."
             return result
 
-        # Auto-detect background color if not provided
         if background_color is None:
             detected = detect_background_color_from_video(
                 input_path, tolerance=tolerance
             )
             background_color = detected[0] if detected else [115, 188, 129]
-
-        temp_dir = Path(tempfile.mkdtemp())
 
         cap = cv2.VideoCapture(input_path)
         if not cap.isOpened():
@@ -750,9 +608,10 @@ def remove_background(
             return result
 
         fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # Generate color ranges
         if auto_ranges:
             color_ranges = generate_color_ranges(
                 background_color, num_ranges, tolerance
@@ -760,7 +619,6 @@ def remove_background(
         else:
             color_ranges = [{"color": background_color, "tolerance": tolerance}]
 
-        # Motion detection
         motion_mask = None
         if method in ("motion", "combined"):
             if show_progress:
@@ -772,109 +630,92 @@ def remove_background(
                 dilate_kernel=11,
             )
 
-        frame_count = 0
+        from core.video import VideoStreamWriter
+        
+        with VideoStreamWriter(
+            output_path=output_path,
+            fps=fps,
+            width=width,
+            height=height,
+            has_alpha=True,
+            loop=loop
+        ) as writer:
+            frame_count = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+                first_pass_edge_cleanup = None if refine else edge_cleanup
+                first_pass_soft_edges = None if refine else soft_edges
 
-            # Create alpha mask
-            # If refine is enabled, edge_cleanup and soft_edges will be applied in refinement pass
-            first_pass_edge_cleanup = None if refine else edge_cleanup
-            first_pass_soft_edges = None if refine else soft_edges
+                if method == "color":
+                    alpha = _process_frame(
+                        frame,
+                        color_ranges,
+                        first_pass_soft_edges,
+                        first_pass_edge_cleanup,
+                        adaptive_bg,
+                    )
+                elif method == "motion" and motion_mask is not None:
+                    alpha = create_motion_based_mask(
+                        frame, motion_mask, background_color, tolerance
+                    )
+                elif method == "combined" and motion_mask is not None:
+                    color_alpha = _process_frame(
+                        frame,
+                        color_ranges,
+                        first_pass_soft_edges,
+                        first_pass_edge_cleanup,
+                        adaptive_bg,
+                    )
+                    motion_alpha = create_motion_based_mask(
+                        frame, motion_mask, background_color, tolerance
+                    )
+                    alpha = cv2.bitwise_or(color_alpha, motion_alpha)
+                else:
+                    alpha = _process_frame(
+                        frame,
+                        color_ranges,
+                        first_pass_soft_edges,
+                        first_pass_edge_cleanup,
+                        adaptive_bg,
+                    )
 
-            if method == "color":
-                alpha = _process_frame(
-                    frame,
-                    color_ranges,
-                    first_pass_soft_edges,
-                    first_pass_edge_cleanup,
-                    adaptive_bg,
-                )
-            elif method == "motion" and motion_mask is not None:
-                alpha = create_motion_based_mask(
-                    frame, motion_mask, background_color, tolerance
-                )
-            elif method == "combined" and motion_mask is not None:
-                color_alpha = _process_frame(
-                    frame,
-                    color_ranges,
-                    first_pass_soft_edges,
-                    first_pass_edge_cleanup,
-                    adaptive_bg,
-                )
-                motion_alpha = create_motion_based_mask(
-                    frame, motion_mask, background_color, tolerance
-                )
-                alpha = cv2.bitwise_or(color_alpha, motion_alpha)
-            else:
-                alpha = _process_frame(
-                    frame,
-                    color_ranges,
-                    first_pass_soft_edges,
-                    first_pass_edge_cleanup,
-                    adaptive_bg,
-                )
+                if refine:
+                    alpha = refine_frame(
+                        bgr_frame=frame,
+                        alpha=alpha,
+                        background_color=background_color,
+                        tolerance=refine_tolerance,
+                        block_size=refine_block_size,
+                        edge_cleanup=edge_cleanup,
+                        soft_edges=soft_edges
+                    )
 
-            # Create BGRA frame
-            b, g, r = cv2.split(frame)
-            bgra = cv2.merge([b, g, r, alpha])
+                b, g, r = cv2.split(frame)
+                bgra = cv2.merge([b, g, r, alpha])
+                
+                writer.write_frame(bgra)
 
-            # Save as PNG
-            frame_path = temp_dir / f"frame_{frame_count:05d}.png"
-            cv2.imwrite(str(frame_path), bgra)
-
-            frame_count += 1
-            if show_progress and frame_count % 10 == 0:
-                print(
-                    f"\rProcessing: {(frame_count / total_frames) * 100:.1f}%", end=""
-                )
+                frame_count += 1
+                if show_progress and frame_count % 10 == 0:
+                    print(
+                        f"\rProcessing: {(frame_count / total_frames) * 100:.1f}%", end=""
+                    )
 
         cap.release()
         if show_progress:
             print(f"\rProcessing: 100%")
 
-        if refine:
-            if show_progress:
-                print("\nRunning refinement pass...")
-            refined_count = refine_background_removed_frames(
-                temp_dir,
-                background_color,
-                tolerance=refine_tolerance,
-                block_size=refine_block_size,
-                edge_cleanup=edge_cleanup,
-                soft_edges=soft_edges,
-                interactive=refine_interactive,
-                save_previews=refine_save_previews,
-            )
-            if show_progress:
-                print(f"Refinement complete: {refined_count} pixels/regions refined")
-
-        # Encode to output format
-        output_format = get_output_format(output_path, None)
-        if output_format == "webm":
-            final_output = _encode_webm(temp_dir, fps, output_path, loop)
-        elif output_format == "gif":
-            final_output = _encode_gif(temp_dir, fps, output_path, loop)
-        else:
-            final_output = _encode_mov(temp_dir, fps, output_path, loop)
-
         result["success"] = True
-        result["output_path"] = final_output
-
+        result["output_path"] = output_path
         return result
 
     except subprocess.CalledProcessError as e:
         result["error"] = f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}"
     except Exception as e:
         result["error"] = str(e)
-    finally:
-        if temp_dir is not None and temp_dir.exists():
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
-                pass
 
     return result
 
@@ -1013,224 +854,82 @@ def _detect_missed_background_regions(
     return missed_regions
 
 
-def refine_background_removed_frames(
-    frames_dir,
-    background_color,
-    tolerance=45,
-    block_size=32,
-    edge_cleanup=None,
-    soft_edges=None,
-    interactive=False,
-    save_previews=False,
-    preview_dir=None,
-):
+def refine_frame(
+    bgr_frame: np.ndarray,
+    alpha: np.ndarray,
+    background_color: list,
+    tolerance: int = 45,
+    block_size: int = 32,
+    edge_cleanup: int = None,
+    soft_edges: int = None,
+) -> np.ndarray:
     """
-    Refine frames to catch missed background-colored pixels.
-
-    Scans each frame using pixel-by-pixel, block-based, and region detection
-    methods to find background colors that weren't captured in initial removal.
-
-    Args:
-        frames_dir: Path to directory containing PNG frames
-        background_color: Base BGR background color [B, G, R]
-        tolerance: Color tolerance for detection (default: 45)
-        block_size: Block size for section analysis (default: 32)
-        edge_cleanup: Apply edge cleanup after refinement (default: None)
-        soft_edges: Apply soft edges after refinement (default: None)
-        interactive: Enable interactive manual review per frame
-        save_previews: Save preview images with flagged areas
-        preview_dir: Directory to save preview images
-
-    Returns:
-        Number of pixels/regions that were refined
+    Refine a single frame to catch missed background-colored pixels inline.
+    Returns the refined alpha mask.
     """
-    frames_dir = Path(frames_dir)
-
-    if preview_dir is None:
-        preview_dir = frames_dir / "previews"
-    else:
-        preview_dir = Path(preview_dir)
-
-    if save_previews:
-        preview_dir.mkdir(parents=True, exist_ok=True)
-
     color_ranges = generate_color_ranges(
         background_color, num_ranges=3, base_tolerance=tolerance
     )
 
-    frame_files = sorted(frames_dir.glob("frame_*.png"))
-    if not frame_files:
-        return 0
+    original_alpha = alpha.copy()
 
-    total_refined = 0
+    missed_pixels = []
 
-    for frame_path in frame_files:
-        frame = cv2.imread(str(frame_path), cv2.IMREAD_UNCHANGED)
-        if frame is None:
-            continue
+    fg_positions = np.where(alpha > 0)
+    foreground_pixels = list(
+        zip(
+            fg_positions[0],
+            fg_positions[1],
+            bgr_frame[fg_positions[0], fg_positions[1]],
+        )
+    )
 
-        if frame.shape[2] == 4:
-            b, g, r, alpha = cv2.split(frame)
-            bgr_frame = cv2.merge([b, g, r])
-        else:
-            bgr_frame = frame
-            alpha = np.ones(frame.shape[:2], dtype=np.uint8) * 255
-
-        original_alpha = alpha.copy()
-
-        missed_pixels = []
-
-        fg_positions = np.where(alpha > 0)
-        foreground_pixels = list(
-            zip(
-                fg_positions[0],
-                fg_positions[1],
-                bgr_frame[fg_positions[0], fg_positions[1]],
-            )
+    if foreground_pixels:
+        missed_pixels = _detect_missed_background_pixel(
+            foreground_pixels, color_ranges, tolerance
         )
 
-        if foreground_pixels:
-            missed_pixels = _detect_missed_background_pixel(
-                foreground_pixels, color_ranges, tolerance
-            )
+    missed_blocks = _detect_missed_background_blocks(
+        bgr_frame, alpha, color_ranges, block_size, tolerance
+    )
 
-        missed_blocks = _detect_missed_background_blocks(
-            bgr_frame, alpha, color_ranges, block_size, tolerance
-        )
+    missed_regions = _detect_missed_background_regions(
+        bgr_frame, alpha, color_ranges, tolerance
+    )
 
-        missed_regions = _detect_missed_background_regions(
-            bgr_frame, alpha, color_ranges, tolerance
-        )
+    for y, x in missed_pixels:
+        alpha[y, x] = 0
 
-        for y, x in missed_pixels:
-            alpha[y, x] = 0
+    for by, bx, bh, bw in missed_blocks:
+        block_alpha = alpha[by : by + bh, bx : bx + bw]
+        if block_alpha.sum() > 0:
+            block_pixels = bgr_frame[by : by + bh, bx : bx + bw]
+            for py in range(bh):
+                for px in range(bw):
+                    if block_alpha[py, px] > 0:
+                        pixel = block_pixels[py, px]
+                        for cr in color_ranges:
+                            bg = cr["color"]
+                            if (
+                                abs(int(pixel[0]) - bg[0]) <= tolerance
+                                and abs(int(pixel[1]) - bg[1]) <= tolerance
+                                and abs(int(pixel[2]) - bg[2]) <= tolerance
+                            ):
+                                alpha[by + py, bx + px] = 0
+                                break
 
-        for by, bx, bh, bw in missed_blocks:
-            block_alpha = alpha[by : by + bh, bx : bx + bw]
-            if block_alpha.sum() > 0:
-                block_pixels = bgr_frame[by : by + bh, bx : bx + bw]
-                for py in range(bh):
-                    for px in range(bw):
-                        if block_alpha[py, px] > 0:
-                            pixel = block_pixels[py, px]
-                            for cr in color_ranges:
-                                bg = cr["color"]
-                                if (
-                                    abs(int(pixel[0]) - bg[0]) <= tolerance
-                                    and abs(int(pixel[1]) - bg[1]) <= tolerance
-                                    and abs(int(pixel[2]) - bg[2]) <= tolerance
-                                ):
-                                    alpha[by + py, bx + px] = 0
-                                    break
+    for contour in missed_regions:
+        mask = np.zeros(alpha.shape, np.uint8)
+        cv2.drawContours(mask, [contour], -1, 255, -1)
+        alpha = cv2.bitwise_and(alpha, cv2.bitwise_not(mask))
 
-        for contour in missed_regions:
-            mask = np.zeros(alpha.shape, np.uint8)
-            cv2.drawContours(mask, [contour], -1, 255, -1)
-            alpha = cv2.bitwise_and(alpha, cv2.bitwise_not(mask))
+    if edge_cleanup is not None:
+        alpha = _apply_edge_cleanup(alpha, edge_cleanup)
 
-        refined_count = np.sum(original_alpha > alpha)
+    if soft_edges is not None:
+        alpha = _apply_soft_edges(alpha, soft_edges)
 
-        if save_previews and (missed_pixels or missed_blocks or missed_regions):
-            preview_frame = bgr_frame.copy()
-
-            if len(preview_frame.shape) == 2:
-                preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_GRAY2BGR)
-
-            for y, x in missed_pixels[:100]:
-                cv2.circle(preview_frame, (x, y), 3, (0, 0, 255), -1)
-
-            for by, bx, bh, bw in missed_blocks:
-                cv2.rectangle(
-                    preview_frame, (bx, by), (bx + bw, by + bh), (0, 255, 255), 2
-                )
-
-            for contour in missed_regions:
-                cv2.drawContours(preview_frame, [contour], -1, (255, 0, 0), 2)
-
-            cv2.putText(
-                preview_frame,
-                f"Frame: {frame_path.name}",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 255, 255),
-                2,
-            )
-            cv2.putText(
-                preview_frame,
-                f"Missed: {refined_count}",
-                (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2,
-            )
-
-            preview_path = (
-                preview_dir / f"preview_{frame_path.stem.replace('frame_', '')}.png"
-            )
-            cv2.imwrite(str(preview_path), preview_frame)
-
-        if interactive and (missed_pixels or missed_blocks or missed_regions):
-            preview_frame = bgr_frame.copy()
-
-            if len(preview_frame.shape) == 2:
-                preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_GRAY2BGR)
-
-            for y, x in missed_pixels[:100]:
-                cv2.circle(preview_frame, (x, y), 3, (0, 0, 255), -1)
-
-            for by, bx, bh, bw in missed_blocks:
-                cv2.rectangle(
-                    preview_frame, (bx, by), (bx + bw, by + bh), (0, 255, 255), 2
-                )
-
-            for contour in missed_regions:
-                cv2.drawContours(preview_frame, [contour], -1, (255, 0, 0), 2)
-
-            cv2.putText(
-                preview_frame,
-                f"Missed: {refined_count} - Press 'r' to refine, 's' to skip, 'q' to quit",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2,
-            )
-
-            cv2.imshow(
-                "Frame Preview - Red=pixels, Yellow=blocks, Blue=regions", preview_frame
-            )
-            key = cv2.waitKey(0) & 0xFF
-
-            if key == ord("q"):
-                cv2.destroyAllWindows()
-                break
-            elif key == ord("s"):
-                alpha = original_alpha
-                refined_count = 0
-
-        cv2.destroyAllWindows()
-
-        if edge_cleanup is not None:
-            alpha = _apply_edge_cleanup(alpha, edge_cleanup)
-
-        if soft_edges is not None:
-            alpha = _apply_soft_edges(alpha, soft_edges)
-
-        if frame.shape[2] == 4:
-            result = cv2.merge([b, g, r, alpha])
-        else:
-            result = alpha
-
-        cv2.imwrite(str(frame_path), result)
-
-        total_refined += refined_count
-
-    if save_previews:
-        print(f"\nPreviews saved to: {preview_dir}")
-
-    return total_refined
+    return alpha
 
 
 def detect_motion_region(video_path, num_frames=30, threshold=15, dilate_kernel=11):
