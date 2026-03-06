@@ -129,6 +129,7 @@ def loop_cmd(
     hold_frames: Annotated[int, typer.Option(help="Number of frames to freeze at transition")] = 2,
     blend_mode: Annotated[str, typer.Option(help="Blend mode: add, multiply, screen, overlay")] = "add",
     ramp_factor: Annotated[float, typer.Option(help="Speed multiplier 0.8-1.2 for speedramp")] = 1.0,
+    until: Annotated[Optional[float], typer.Option("-u", "--until", help="Start pingpong from this second (negative means from end)")] = None,
     analyze_only: Annotated[bool, typer.Option(help="Just analyze and report best method, don't process video")] = False,
     progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress bar")] = False,
     config: Annotated[Optional[str], typer.Option("--config", help="Path to JSON config file")] = None,
@@ -143,6 +144,7 @@ def loop_cmd(
         "hold_frames": hold_frames,
         "blend_mode": blend_mode,
         "ramp_factor": ramp_factor,
+        "until": until,
         "analyze_only": analyze_only,
         "progress": progress
     }

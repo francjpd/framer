@@ -102,7 +102,7 @@ def extract_all_frames(
     return frames
 
 
-def create_pingpong_loop(frames: List[np.ndarray]) -> List[np.ndarray]:
+def create_pingpong_loop(frames: List[np.ndarray], fps: float = 30.0, until: Optional[float] = None) -> List[np.ndarray]:
     """Create pingpong (boomerang) loop - forward then backward.
 
     Best for: bouncing objects, pendulum, breathing, any reversible motion.
@@ -111,10 +111,29 @@ def create_pingpong_loop(frames: List[np.ndarray]) -> List[np.ndarray]:
     if len(frames) < 2:
         return frames
 
-    forward = frames[:]
-    backward = frames[:-1][::-1]
+    if until is not None:
+        target_frame = int(until * fps)
+        if target_frame < 0:
+            target_frame = len(frames) + target_frame
+            
+        target_frame = max(0, min(target_frame, len(frames)))
+        
+        pre_loop = frames[:target_frame]
+        loop_part = frames[target_frame:]
+        
+        if len(loop_part) < 2:
+            return frames
+            
+        forward = loop_part[:]
+        backward = loop_part[:-1][::-1]
+        
+        return pre_loop + forward + backward
+    else:
+        forward = frames[:]
+        backward = frames[:-1][::-1]
 
-    return forward + backward
+        return forward + backward
+
 
 
 def create_reverse_loop(frames: List[np.ndarray]) -> List[np.ndarray]:
@@ -656,6 +675,7 @@ def create_loop(
     ramp_factor: float = 1.0,
     analyze_only: bool = False,
     progress: bool = False,
+    until: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Main entry point for loop operation.
@@ -697,7 +717,7 @@ def create_loop(
             method = analysis["recommended"]
 
         if method == "pingpong":
-            looped = create_pingpong_loop(all_frames)
+            looped = create_pingpong_loop(all_frames, fps, until)
         elif method == "morph":
             looped = create_morph_loop(all_frames, morph_steps)
         elif method == "periodic":
@@ -779,6 +799,12 @@ register_operation(
             "type": "bool",
             "default": False,
             "description": "Just analyze and report best method, don't process video",
+        },
+        "until": {
+            "type": "float",
+            "default": None,
+            "short": "-u",
+            "description": "Start pingpong from this second (negative means from end)",
         },
     },
     description="Create seamless infinite video loops with various methods",

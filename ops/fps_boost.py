@@ -170,7 +170,52 @@ def boost_fps(
 
         cmd.append(str(output_path))
 
-        subprocess.run(cmd, capture_output=True, check=True)
+        total_frames_est = 0
+        if progress:
+            try:
+                dur_cmd = [
+                    "ffprobe", "-v", "error", "-show_entries",
+                    "format=duration", "-of",
+                    "default=noprint_wrappers=1:nokey=1", str(input_path)
+                ]
+                dur_result = subprocess.run(dur_cmd, capture_output=True, text=True)
+                duration = float(dur_result.stdout.strip())
+                total_frames_est = int(duration * to)
+            except Exception:
+                pass
+
+        if progress:
+            cmd.insert(1, "-progress")
+            cmd.insert(2, "pipe:1")
+            
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            for line in process.stdout:
+                if line.startswith("frame="):
+                    try:
+                        frame_val = line.split("=")[1].strip()
+                        if frame_val and frame_val.isdigit():
+                            frame = int(frame_val)
+                            if total_frames_est > 0:
+                                perc = min(100.0, (frame / total_frames_est) * 100)
+                                print(f"\rProcessing: {perc:.1f}%", end="", flush=True)
+                    except Exception:
+                        pass
+            
+            process.wait()
+            if process.returncode != 0:
+                stderr_out = process.stderr.read() if process.stderr else ""
+                raise subprocess.CalledProcessError(
+                    process.returncode, cmd, stderr=stderr_out.encode("utf-8")
+                )
+            print("\rProcessing: 100.0%", flush=True)
+        else:
+            subprocess.run(cmd, capture_output=True, check=True)
 
         result["success"] = True
         result["output_path"] = str(output_path)
