@@ -113,11 +113,25 @@ class VideoStreamWriter:
     def close(self):
         """Close the stream and wait for FFmpeg to finish encoding."""
         if self.process:
-            self.process.stdin.close()
-            _, stderr = self.process.communicate()
-            if self.process.returncode != 0:
-                err_msg = stderr.decode() if stderr else "Unknown FFmpeg error"
+            try:
+                self.process.stdin.close()
+            except (BrokenPipeError, ValueError):
+                pass
+                
+            stderr_data = b""
+            try:
+                _, stderr_raw = self.process.communicate()
+                if stderr_raw:
+                    stderr_data = stderr_raw
+            except (BrokenPipeError, ValueError):
+                self.process.wait()
+                if self.process.stderr and not self.process.stderr.closed:
+                    stderr_data = self.process.stderr.read()
+                
+            if self.process.returncode != 0 and self.process.returncode is not None:
+                err_msg = stderr_data.decode('utf-8', errors='replace') if stderr_data else "Unknown FFmpeg error"
                 raise RuntimeError(f"FFmpeg error: {err_msg}")
+            
             self.process = None
 
     def __enter__(self):

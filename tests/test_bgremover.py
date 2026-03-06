@@ -1,7 +1,12 @@
 import pytest
 import numpy as np
-from framer import detect_background_color_from_frame_border
+import sys
+from pathlib import Path
 
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from core.bg_removal import detect_background_color_from_frame_border
 
 def test_detect_background_color_from_frame_border():
     """Test that we can detect background color from a frame's border."""

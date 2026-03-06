@@ -12,7 +12,7 @@ from core.utils import parse_color
 
 # Import existing functionality
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from framer import remove_background as _remove_background
+from core.bg_removal import remove_background as _remove_background
 
 
 def remove_bg(
@@ -30,7 +30,6 @@ def remove_bg(
     refine: bool = False,
     refine_tolerance: int = 45,
     refine_block_size: int = 32,
-    loop: bool = True,
     progress: bool = False,
     refine_save_previews: bool = False,
     config: str | None = None,
@@ -53,7 +52,6 @@ def remove_bg(
         refine: Enable refinement pass (default: False)
         refine_tolerance: Refinement tolerance (default: 45)
         refine_block_size: Refinement block size (default: 32)
-        loop: Enable infinite loop (default: True)
         config: Path to config JSON file (exclusive - no other args allowed)
 
     Returns:
@@ -86,7 +84,6 @@ def remove_bg(
         refine = bg_options.get("refine", refine)
         refine_tolerance = bg_options.get("refine_tolerance", refine_tolerance)
         refine_block_size = bg_options.get("refine_block_size", refine_block_size)
-        loop = bg_options.get("loop", loop)
 
     # Parse color
     bg_color = None
@@ -110,7 +107,6 @@ def remove_bg(
         refine=refine,
         refine_tolerance=refine_tolerance,
         refine_block_size=refine_block_size,
-        loop=loop,
     )
 
 
@@ -188,12 +184,6 @@ register_operation(
             "default": 32,
             "short": "-rb",
             "description": "Refinement block size (default: 32)",
-        },
-        "loop": {
-            "type": "bool",
-            "default": True,
-            "short": "-l",
-            "description": "Enable infinite loop for GIF output",
         },
         "progress": {
             "type": "bool",

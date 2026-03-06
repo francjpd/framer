@@ -5,25 +5,49 @@ Transform videos with composable operations. Built on FFmpeg, designed for pipel
 ## ✨ Features
 
 - **Composable operations**: Chain multiple video transformations
-- **Simple CLI**: `python cli.py input.mp4 output.webm fps-boost --to 60`
+- **Simple CLI**: `python cli.py remove-bg input.mp4 output.webm --color "0,255,0"`
 - **Config support**: Use JSON configs for complex operations
 - **Modular**: Each operation is independent and extensible
 - **Video looping**: Create seamless infinite loops with optical flow matching
 
 ## 🚀 Quick Start
 
+You can set up this project using either `venv` (Python's built-in tool) or `conda` (popular for data science and complex C-dependencies). 
+
+**Option 1: Python venv (Standard)**
 ```bash
+# Set up a virtual environment
+python -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+**Option 2: Conda**
+```bash
+# Set up a conda environment
+conda create -n framer python=3.10
+conda activate framer
+
+# Install dependencies
+pip install -r requirements.txt
+```
+# Set up a virtual environment (recommended to avoid PEP 668 issues)
+python -m venv venv
+source venv/bin/activate
+
 # Install dependencies
 pip install -r requirements.txt
 
 # Boost FPS to 60
-python cli.py input.mp4 output.mp4 fps-boost --to 60
+python cli.py fps-boost input.mp4 output.mp4 --to 60
 
 # Remove background
-python cli.py input.mp4 output.webm remove-bg --tolerance 30
+python cli.py remove-bg input.mp4 output.webm --tolerance 30
 
 # Use config file for complex operations
-python cli.py input.mp4 output.webm remove-bg --config config.json
+python cli.py remove-bg input.mp4 output.webm --config config.json
 ```
 
 ## 📦 Operations
@@ -32,7 +56,7 @@ python cli.py input.mp4 output.webm remove-bg --config config.json
 Increase video frame rate using FFmpeg's minterpolate filter.
 
 ```bash
-python cli.py input.mp4 output.mp4 fps-boost --to 60
+python cli.py fps-boost input.mp4 output.mp4 --to 60
 ```
 
 **Options:**
@@ -44,7 +68,7 @@ python cli.py input.mp4 output.mp4 fps-boost --to 60
 Remove background from video with alpha channel support.
 
 ```bash
-python cli.py input.mp4 output.webm remove-bg --tolerance 30 --edges 5
+python cli.py remove-bg input.mp4 output.webm --tolerance 30 --edges 5
 ```
 
 **Options:**
@@ -57,7 +81,6 @@ python cli.py input.mp4 output.webm remove-bg --tolerance 30 --edges 5
 - `--edge-cleanup` - Remove color spill from edges (default: 3)
 - `--adaptive-bg` - Detect background per-frame
 - `--refine` - Enable refinement pass
-- `--loop` - Enable infinite loop for output (default: on)
 
 ---
 
@@ -80,37 +103,37 @@ Create seamless infinite video loops with various methods.
 
 ```bash
 # Pingpong - forward then backward (best for bouncing/breathing)
-python cli.py input.webm output.webm loop --method pingpong
+python cli.py loop input.webm output.webm --method pingpong
 
 # Morph - optical flow warps (best for complex motion)
-python cli.py input.webm output.webm loop --method morph --morph-steps 15
+python cli.py loop input.webm output.webm --method morph --morph-steps 15
 
 # Periodic - auto-detect walking/running cycles
-python cli.py input.webm output.webm loop --method periodic
+python cli.py loop input.webm output.webm --method periodic
 
 # Hold - freeze briefly at transition
-python cli.py input.webm output.webm loop --method hold --hold-frames 3
+python cli.py loop input.webm output.webm --method hold --hold-frames 3
 
 # Fade - fade to transparent (best for background-removed videos!)
-python cli.py input.webm output.webm loop --method fade --fade-color transparent
+python cli.py loop input.webm output.webm --method fade --fade-color transparent
 
 # Fade - fade to custom color
-python cli.py input.webm output.webm loop --method fade --fade-color "#FF0000"
+python cli.py loop input.webm output.webm --method fade --fade-color "#FF0000"
 
 # Blend - creative add blend
-python cli.py input.webm output.webm loop --method blend --blend-mode add
+python cli.py loop input.webm output.webm --method blend --blend-mode add
 
 # Reverse - forward then reverse
-python cli.py input.webm output.webm loop --method reverse
+python cli.py loop input.webm output.webm --method reverse
 
 # Speedramp - slight speed adjustment
-python cli.py input.webm output.webm loop --method speedramp --ramp-factor 1.1
+python cli.py loop input.webm output.webm --method speedramp --ramp-factor 1.1
 
 # Auto - analyze and pick best method
-python cli.py input.webm output.webm loop --method auto
+python cli.py loop input.webm output.webm --method auto
 
 # Just analyze (don't process)
-python cli.py input.webm output.webm loop --method auto --analyze-only
+python cli.py loop input.webm output.webm --method auto --analyze-only
 ```
 
 **Options:**
@@ -149,7 +172,7 @@ For complex operations with many options, use a JSON config:
 
 ```bash
 # Apply specific operation from config
-python cli.py input.mp4 output.webm remove-bg --config config.json
+python cli.py remove-bg input.mp4 output.webm --config config.json
 ```
 
 **Note**: When using `--config`, other CLI flags for that operation are not allowed (exclusive).
@@ -158,29 +181,29 @@ python cli.py input.mp4 output.webm remove-bg --config config.json
 
 ```bash
 # Remove green screen and boost to 60fps (two separate operations)
-python cli.py input.mp4 output.webm remove-bg --tolerance 25
-python cli.py output.webm final.mp4 fps-boost --to 60
+python cli.py remove-bg input.mp4 output.webm --tolerance 25
+python cli.py fps-boost output.webm final.mp4 --to 60
 
 # Using config for fine-tuned removal
-python cli.py input.mp4 output.webm remove-bg --config advanced_removal.json
+python cli.py remove-bg input.mp4 output.webm --config advanced_removal.json
 
 # Auto-detect background color
-python cli.py input.mp4 output.webm remove-bg
+python cli.py remove-bg input.mp4 output.webm
 
 # Loop background-removed video with fade to transparent
-python cli.py input.webm output.webm loop --method fade --fade-color transparent
+python cli.py loop input.webm output.webm --method fade --fade-color transparent
 
 # Loop with pingpong (forward + backward)
-python cli.py input.webm output.webm loop --method pingpong
+python cli.py loop input.webm output.webm --method pingpong
 
 # Auto-detect best loop method
-python cli.py input.webm output.webm loop --method auto
+python cli.py loop input.webm output.webm --method auto
 
 # Analyze video to find best method (no processing)
-python cli.py input.webm output.webm loop --method auto --analyze-only
+python cli.py loop input.webm output.webm --method auto --analyze-only
 
 # Quick loop test with lower threshold
-python cli.py input.webm output.webm loop --scan-frames 30 --match-threshold 40
+python cli.py loop input.webm output.webm --scan-frames 30 --match-threshold 40
 ```
 
 ## 📁 Project Structure
@@ -188,9 +211,9 @@ python cli.py input.webm output.webm loop --scan-frames 30 --match-threshold 40
 ```
 frame/
 ├── cli.py              # Entry point
-├── framer.py           # Core library
 ├── core/               # Pipeline executor
-│   └── __init__.py
+│   ├── __init__.py
+│   └── bg_removal.py   # Core library for background removal
 ├── ops/                # Operations
 │   ├── __init__.py    # Registry
 │   ├── remove_bg.py   # Background removal
@@ -230,7 +253,7 @@ def my_operation(input_path, output_path, param1=10):
 python -m pytest tests/
 
 # Test specific operation
-python cli.py test_input.mp4 test_output.mp4 fps-boost --to 60
+python cli.py fps-boost test_input.mp4 test_output.mp4 --to 60
 ```
 
 ## 📄 License

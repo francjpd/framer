@@ -579,7 +579,6 @@ def remove_background(
     refine_block_size: int = 32,
     refine_interactive: bool = False,
     refine_save_previews: bool = False,
-    loop: bool = True,
 ) -> Dict[str, Any]:
     """
     Remove background from video and output with alpha channel using stream encoding.
@@ -637,8 +636,7 @@ def remove_background(
             fps=fps,
             width=width,
             height=height,
-            has_alpha=True,
-            loop=loop
+            has_alpha=True
         ) as writer:
             frame_count = 0
             while True:
