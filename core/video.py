@@ -24,6 +24,86 @@ def get_output_format(output_path: str, format_flag: Optional[str] = None) -> st
         return "mov"
 
 
+class VideoStreamReader:
+    """
+    Reads video frames directly from FFmpeg via stdout pipe.
+    Supports reading alpha channels (which OpenCV's VideoCapture drops).
+    """
+
+    def __init__(
+        self,
+        input_path: str,
+        fps: float,
+        width: int,
+        height: int,
+        has_alpha: bool = False,
+        start_frame: int = 0,
+        num_frames: int = -1
+    ):
+        self.input_path = input_path
+        self.fps = fps
+        self.width = width
+        self.height = height
+        self.has_alpha = has_alpha
+        self.start_frame = start_frame
+        self.num_frames = num_frames
+        
+        self.channels = 4 if has_alpha else 3
+        self.frame_size = width * height * self.channels
+        
+        self.process = None
+        self._start_process()
+
+    def _start_process(self):
+        start_time_sec = self.start_frame / self.fps
+        pix_fmt_out = "bgra" if self.has_alpha else "bgr24"
+        
+        cmd = [
+            "ffmpeg",
+            "-ss", str(start_time_sec),
+            "-i", str(self.input_path),
+        ]
+        
+        if self.num_frames > 0:
+            cmd.extend(["-vframes", str(self.num_frames)])
+            
+        cmd.extend([
+            "-f", "image2pipe",
+            "-pix_fmt", pix_fmt_out,
+            "-vcodec", "rawvideo",
+            "-loglevel", "error",
+            "-"
+        ])
+        
+        self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def read_frame(self) -> np.ndarray:
+        """Read a single frame. Returns None if EOF or error."""
+        if not self.process:
+            return None
+            
+        raw_frame = self.process.stdout.read(self.frame_size)
+        if not raw_frame or len(raw_frame) != self.frame_size:
+            return None
+            
+        frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((self.height, self.width, self.channels))
+        return frame
+
+    def close(self):
+        if self.process:
+            try:
+                self.process.stdout.close()
+            except Exception:
+                pass
+            self.process.kill()
+            self.process = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
 class VideoStreamWriter:
     """
     Writes video frames directly to FFmpeg via stdin pipe.

@@ -21,15 +21,42 @@ def _worker_wrapper(args):
         process_func, func_kwargs, show_progress
     ) = args
 
-    import cv2
     import os
-    from core.video import VideoStreamWriter
-    
-    cap = cv2.VideoCapture(input_path)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    
+    from core.video import VideoStreamWriter, VideoStreamReader
+
+    # Check if input has alpha (needed for VideoStreamReader to know whether to output 4 channels)
+    alpha_cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream_tags=alpha_mode", "-of", "csv=p=0", input_path
+    ]
+    has_alpha = False
+    try:
+        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True)
+        has_alpha = "1" in alpha_result.stdout
+        if not has_alpha:
+            pix_fmt_cmd = [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", input_path
+            ]
+            pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True)
+            has_alpha = any(x in pix_fmt_result.stdout for x in ["yuva", "bgra", "argb", "gba", "rgba"])
+    except Exception:
+        pass
+
+    frames_to_process = end_frame - start_frame
+
+    reader = VideoStreamReader(
+        input_path=input_path,
+        fps=fps,
+        width=width,
+        height=height,
+        has_alpha=has_alpha,
+        start_frame=start_frame,
+        num_frames=frames_to_process
+    )
+
     temp_output = os.path.join(temp_dir, f"part_{worker_id:04d}{output_ext}")
-    
+
     # We always write out as RGBA/BGRA if alpha is involved, but the user function 
     # should return a frame that is (H, W, 4) for alpha, or (H, W, 3) for no alpha.
     writer = VideoStreamWriter(
@@ -42,25 +69,24 @@ def _worker_wrapper(args):
         workers=1 # Individual writers only use 1 thread, the pool handles concurrency
     )
 
-    frames_to_process = end_frame - start_frame
     frames_processed = 0
 
     while frames_processed < frames_to_process:
-        ret, frame = cap.read()
-        if not ret:
+        frame = reader.read_frame()
+        if frame is None:
             break
 
         # Apply the custom operation to the frame
         processed_frame = process_func(frame, **func_kwargs)
-        
+
         writer.write_frame(processed_frame)
         frames_processed += 1
-        
+
         if show_progress and worker_id == 0 and frames_processed % 10 == 0:
-            print(f"\\rProcessing (Worker 0): {(frames_processed / frames_to_process) * 100:.1f}%", end="")
+            print(f"\rProcessing (Worker 0): {(frames_processed / frames_to_process) * 100:.1f}%", end="")
 
     writer.close()
-    cap.release()
+    reader.close()
     return temp_output
 
 
@@ -136,7 +162,7 @@ def process_video_parallel(
         concat_file = os.path.join(temp_dir, "concat.txt")
         with open(concat_file, "w") as f:
             for temp_file in temp_files:
-                f.write(f"file '{temp_file}'\\n")
+                f.write(f"file '{temp_file}'\n")
                 
         cmd = [
             "ffmpeg", "-y", "-v", "warning", "-f", "concat", "-safe", "0", "-i", concat_file,

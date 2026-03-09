@@ -9,6 +9,12 @@ Operations:
     remove-bg - Remove background with alpha channel
     fps-boost - Increase video frame rate
     loop - Create seamless infinite loops
+    resize - Resize or scale a video
+    trim - Trim a specific time segment
+    export - Export to optimized web formats (gif, webm, mp4)
+    recolor - Replace a specific color with a new color
+    glow - Add a soft glow behind an object with a transparent background
+    outline - Add a solid outline to a video with a transparent background
 """
 
 import sys
@@ -23,6 +29,12 @@ from core.utils import parse_color
 from ops.remove_bg import remove_bg as op_remove_bg
 from ops.fps_boost import boost_fps as op_boost_fps
 from ops.loop import create_loop as op_loop
+from ops.resize import resize_video as op_resize
+from ops.trim import trim_video as op_trim
+from ops.export import export_web as op_export
+from ops.recolor import recolor_video as op_recolor
+from ops.glow import add_glow as op_glow
+from ops.outline import add_outline as op_outline
 
 app = typer.Typer(
     help="Video processing CLI with composable operations",
@@ -169,6 +181,107 @@ def loop_cmd(
             print(result.get("analysis", {}))
         else:
             handle_result(result)
+    except Exception as e:
+        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        sys.exit(1)
+
+
+@app.command(name="resize", help="Resize or scale a video")
+def resize_cmd(
+    input_path: Annotated[str, typer.Argument(help="Input video file")],
+    output_path: Annotated[str, typer.Argument(help="Output video file")],
+    width: Annotated[int, typer.Option("-W", "--width", help="Target width (-1 to keep aspect ratio)")] = -1,
+    height: Annotated[int, typer.Option("-H", "--height", help="Target height (-1 to keep aspect ratio)")] = -1,
+    pad: Annotated[bool, typer.Option(help="Pad with transparency if aspect ratio changes")] = False,
+    progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress")] = False,
+    workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
+):
+    try:
+        result = op_resize(input_path=input_path, output_path=output_path, width=width, height=height, pad=pad, workers=workers, progress=progress)
+        handle_result(result)
+    except Exception as e:
+        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        sys.exit(1)
+
+@app.command(name="trim", help="Trim a segment of a video")
+def trim_cmd(
+    input_path: Annotated[str, typer.Argument(help="Input video file")],
+    output_path: Annotated[str, typer.Argument(help="Output video file")],
+    start: Annotated[Optional[float], typer.Option("-s", "--start", help="Start time in seconds")] = None,
+    end: Annotated[Optional[float], typer.Option("-e", "--end", help="End time in seconds")] = None,
+    duration: Annotated[Optional[float], typer.Option("-d", "--duration", help="Duration in seconds")] = None,
+    progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress")] = False,
+):
+    try:
+        result = op_trim(input_path=input_path, output_path=output_path, start=start, end=end, duration=duration, progress=progress)
+        handle_result(result)
+    except Exception as e:
+        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        sys.exit(1)
+
+@app.command(name="export", help="Export to optimized web formats (gif, webm, mp4)")
+def export_cmd(
+    input_path: Annotated[str, typer.Argument(help="Input video file")],
+    output_dir: Annotated[str, typer.Argument(help="Output directory")],
+    format: Annotated[str, typer.Option("-f", "--format", help="Format: webm, mp4, gif, all")] = "all",
+    fps: Annotated[int, typer.Option(help="Change framerate for export")] = -1,
+    scale: Annotated[int, typer.Option(help="Scale width (keeps aspect ratio)")] = -1,
+    progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress")] = False,
+    workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
+):
+    try:
+        result = op_export(input_path=input_path, output_dir=output_dir, format=format, fps=fps, scale=scale, workers=workers, progress=progress)
+        handle_result(result)
+    except Exception as e:
+        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        sys.exit(1)
+
+@app.command(name="recolor", help="Replace a specific color with a new color")
+def recolor_cmd(
+    input_path: Annotated[str, typer.Argument(help="Input video file")],
+    output_path: Annotated[str, typer.Argument(help="Output video file")],
+    target: Annotated[str, typer.Option("-t", "--target", help="Target color to replace (hex or BGR)")],
+    new_color: Annotated[str, typer.Option("-n", "--new-color", help="New color to apply (hex or BGR)")],
+    tolerance: Annotated[int, typer.Option(help="Color matching tolerance")] = 30,
+    progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress bar")] = False,
+    workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
+):
+    try:
+        result = op_recolor(input_path=input_path, output_path=output_path, target=target, new_color=new_color, tolerance=tolerance, workers=workers, progress=progress)
+        handle_result(result)
+    except Exception as e:
+        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        sys.exit(1)
+
+@app.command(name="glow", help="Add a soft glow behind an object with a transparent background")
+def glow_cmd(
+    input_path: Annotated[str, typer.Argument(help="Input video file")],
+    output_path: Annotated[str, typer.Argument(help="Output video file")],
+    color: Annotated[str, typer.Option("-c", "--color", help="Glow color (hex or BGR)")] = "#FFFFFF",
+    radius: Annotated[int, typer.Option("-r", "--radius", help="Blur radius size")] = 15,
+    intensity: Annotated[float, typer.Option("-i", "--intensity", help="Brightness multiplier")] = 1.0,
+    progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress bar")] = False,
+    workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
+):
+    try:
+        result = op_glow(input_path=input_path, output_path=output_path, color=color, radius=radius, intensity=intensity, workers=workers, progress=progress)
+        handle_result(result)
+    except Exception as e:
+        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        sys.exit(1)
+
+@app.command(name="outline", help="Add a solid outline to a video with a transparent background")
+def outline_cmd(
+    input_path: Annotated[str, typer.Argument(help="Input video file")],
+    output_path: Annotated[str, typer.Argument(help="Output video file")],
+    color: Annotated[str, typer.Option("-c", "--color", help="Outline color (hex or BGR)")] = "#FFFFFF",
+    thickness: Annotated[int, typer.Option("-t", "--thickness", help="Outline thickness in pixels")] = 5,
+    progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress bar")] = False,
+    workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
+):
+    try:
+        result = op_outline(input_path=input_path, output_path=output_path, color=color, thickness=thickness, workers=workers, progress=progress)
+        handle_result(result)
     except Exception as e:
         print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
         sys.exit(1)
