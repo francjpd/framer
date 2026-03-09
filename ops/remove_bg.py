@@ -32,6 +32,7 @@ def remove_bg(
     refine_block_size: int = 32,
     progress: bool = False,
     refine_save_previews: bool = False,
+    workers: int = 1,
     config: str | None = None,
 ) -> Dict[str, Any]:
     """
@@ -84,6 +85,7 @@ def remove_bg(
         refine = bg_options.get("refine", refine)
         refine_tolerance = bg_options.get("refine_tolerance", refine_tolerance)
         refine_block_size = bg_options.get("refine_block_size", refine_block_size)
+        workers = bg_options.get("workers", workers)
 
     # Parse color
     bg_color = None
@@ -107,6 +109,7 @@ def remove_bg(
         refine=refine,
         refine_tolerance=refine_tolerance,
         refine_block_size=refine_block_size,
+        workers=workers,
     )
 
 
@@ -195,6 +198,12 @@ register_operation(
             "type": "bool",
             "default": False,
             "description": "Save preview images with flagged areas for review",
+        },
+        "workers": {
+            "type": "int",
+            "default": 1,
+            "short": "-w",
+            "description": "Number of worker threads (default: 1)",
         },
         "config": {
             "type": "string",

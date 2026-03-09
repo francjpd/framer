@@ -636,7 +636,7 @@ def create_loop_stretch(frames: List[np.ndarray]) -> List[np.ndarray]:
     return frames
 
 
-def encode_video(frames: List[np.ndarray], output_path: str, fps: float) -> str:
+def encode_video(frames: List[np.ndarray], output_path: str, fps: float, workers: int = 1) -> str:
     """Encode frames to video using FFmpeg without saving to disk."""
     if not frames:
         raise ValueError("No frames to encode")
@@ -653,7 +653,8 @@ def encode_video(frames: List[np.ndarray], output_path: str, fps: float) -> str:
         width=width,
         height=height,
         has_alpha=has_alpha,
-        loop=True
+        loop=True,
+        workers=workers
     ) as writer:
         for frame in frames:
             writer.write_frame(frame)
@@ -676,6 +677,7 @@ def create_loop(
     analyze_only: bool = False,
     progress: bool = False,
     until: Optional[float] = None,
+    workers: int = 1,
 ) -> Dict[str, Any]:
     """
     Main entry point for loop operation.
@@ -735,7 +737,7 @@ def create_loop(
         else:
             looped = create_pingpong_loop(all_frames)
 
-        encode_video(looped, output_path, fps)
+        encode_video(looped, output_path, fps, workers)
 
         result["success"] = True
         result["output_path"] = output_path
@@ -805,6 +807,12 @@ register_operation(
             "default": None,
             "short": "-u",
             "description": "Start pingpong from this second (negative means from end)",
+        },
+        "workers": {
+            "type": "int",
+            "default": 1,
+            "short": "-w",
+            "description": "Number of worker threads (default: 1)",
         },
     },
     description="Create seamless infinite video loops with various methods",

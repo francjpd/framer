@@ -12,6 +12,7 @@ Operations:
 """
 
 import sys
+import os
 import json
 from pathlib import Path
 from typing import Optional, Annotated
@@ -28,6 +29,9 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True
 )
+
+def get_default_workers() -> int:
+    return os.cpu_count() or 4
 
 def load_config(config_path: str, operation_name: str) -> dict:
     if not config_path:
@@ -68,6 +72,7 @@ def remove_bg_cmd(
     refine_tolerance: Annotated[int, typer.Option("-rt", "--refine-tolerance", help="Refinement tolerance")] = 45,
     refine_block_size: Annotated[int, typer.Option("-rb", "--refine-block-size", help="Refinement block size")] = 32,
     progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress bar")] = False,
+    workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
     config: Annotated[Optional[str], typer.Option("--config", help="Path to JSON config file")] = None,
 ):
     kwargs = {
@@ -83,7 +88,8 @@ def remove_bg_cmd(
         "refine": refine,
         "refine_tolerance": refine_tolerance,
         "refine_block_size": refine_block_size,
-        "progress": progress
+        "progress": progress,
+        "workers": workers
     }
     
     if config:
@@ -103,9 +109,10 @@ def fps_boost_cmd(
     output_path: Annotated[str, typer.Argument(help="Output video file")],
     to: Annotated[int, typer.Option(help="Target FPS")] = 60,
     progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress bar")] = False,
+    workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
     config: Annotated[Optional[str], typer.Option("--config", help="Path to JSON config file")] = None,
 ):
-    kwargs = {"to": to, "progress": progress}
+    kwargs = {"to": to, "progress": progress, "workers": workers}
     if config:
         kwargs.update(load_config(config, "fps-boost"))
         
@@ -132,6 +139,7 @@ def loop_cmd(
     until: Annotated[Optional[float], typer.Option("-u", "--until", help="Start pingpong from this second (negative means from end)")] = None,
     analyze_only: Annotated[bool, typer.Option(help="Just analyze and report best method, don't process video")] = False,
     progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress bar")] = False,
+    workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
     config: Annotated[Optional[str], typer.Option("--config", help="Path to JSON config file")] = None,
 ):
     kwargs = {
@@ -146,7 +154,8 @@ def loop_cmd(
         "ramp_factor": ramp_factor,
         "until": until,
         "analyze_only": analyze_only,
-        "progress": progress
+        "progress": progress,
+        "workers": workers
     }
     
     if config:

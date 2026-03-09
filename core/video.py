@@ -38,6 +38,7 @@ class VideoStreamWriter:
         height: int,
         has_alpha: bool = False,
         loop: bool = True,
+        workers: int = 1,
     ):
         self.output_path = output_path
         self.fps = fps
@@ -45,6 +46,7 @@ class VideoStreamWriter:
         self.height = height
         self.has_alpha = has_alpha
         self.loop = loop
+        self.workers = workers
         self.format = get_output_format(output_path)
         self.process = None
         self._start_process()
@@ -56,6 +58,7 @@ class VideoStreamWriter:
         cmd = [
             "ffmpeg",
             "-y",
+            "-threads", str(self.workers),
             "-f", "rawvideo",
             "-vcodec", "rawvideo",
             "-s", f"{self.width}x{self.height}",

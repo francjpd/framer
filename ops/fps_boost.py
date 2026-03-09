@@ -11,7 +11,7 @@ from core import register_operation
 
 
 def boost_fps(
-    input_path: str, output_path: str, to: int = 60, progress: bool = False
+    input_path: str, output_path: str, to: int = 60, progress: bool = False, workers: int = 1
 ) -> Dict[str, Any]:
     """
     Increase video frame rate to target fps using FFmpeg.
@@ -140,7 +140,7 @@ def boost_fps(
             codec_args = ["-c:v", video_codec, "-preset", "medium", "-crf", "23"]
 
         # Build FFmpeg command
-        cmd = ["ffmpeg", "-y", "-i", str(input_path)]
+        cmd = ["ffmpeg", "-y", "-threads", str(workers), "-i", str(input_path)]
 
         if original_fps >= to:
             # No interpolation needed, just adjust framerate
@@ -234,7 +234,8 @@ register_operation(
     name="fps-boost",
     func=boost_fps,
     args_schema={
-        "to": {"type": "int", "default": 60, "description": "Target FPS (default: 60)"}
+        "to": {"type": "int", "default": 60, "description": "Target FPS (default: 60)"},
+        "workers": {"type": "int", "default": 1, "description": "Number of worker threads (default: 1)", "short": "-w"}
     },
     description="Increase video frame rate to make it smoother",
 )

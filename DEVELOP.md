@@ -53,51 +53,37 @@ python cli.py input.mp4 output.webm -c "0,255,0" -p
 Input Video (MP4)
        │
        ▼
-┌──────────────────┐
-│  cv2.VideoCapture│
-│    Read frames   │
-└────────┬─────────┘
-         │
-         ▼
+┌────────────────────────────────────────┐
+│      Multiprocessing Engine            │
+│   Split video into N chunks based on   │
+│   number of available CPU workers.     │
+└──────────────────┬─────────────────────┘
+                   │
+                   ▼
 ┌──────────────────────────────────┐
-│      Detection Method            │
-│  ┌─────────┐     ┌──────────┐    │
-│  │  Color  │     │  Motion  │    │
-│  │Based    │     │Based     │    │
-│  └────┬────┘     └────┬─────┘    │
-│       │               │          │
-│       └───────┬───────┘          │
-│               ▼                  │
-│        Combine Masks             │
-└──────────────┼───────────────────┘
-               │
-               ▼
-┌──────────────────────────────────┐
-│       Mask Refinement            │
-│  - Soft edges (Gaussian blur)    │
-│  - Edge cleanup (erode)          │
-│  - Hole filling (morphology)     │
-│  - Flood fill (optional)         │
-└──────────────┼───────────────────┘
-               │
-               ▼
-┌──────────────────────────────────┐
-│      Create BGRA frame           │
-│   Merge B,G,R channels + Alpha   │
+│  Worker Process (1 to N)         │
+│  cv2.VideoCapture read chunks    │
+│  - Apply Detection Method        │
+│  - Refine Masks                  │
+│  - Merge BGRA Channels           │
 └──────────────┼───────────────────┘
                │
                ▼
 ┌───────────────────────────────────┐
-│    Save to PNG sequence           │
-│    (temp directory)               │
+│    Pipe to FFmpeg Subprocess      │
+│    (Raw Video Stream via Stdin)   │
 └──────────────┼────────────────────┘
                │
                ▼
 ┌───────────────────────────────────┐
-│       FFmpeg Encode               │
-│  - MOV: qtrle codec               │
-│  - WebM: VP9 codec                │
-│         (with alpha)              │
+│     Write Temp Video Chunks       │
+│     (One per worker process)      │
+└──────────────┼────────────────────┘
+               │
+               ▼
+┌───────────────────────────────────┐
+│   FFmpeg Concat Demuxer           │
+│   Stitch chunks without re-encode │
 └──────────────┼────────────────────┘
                │
                ▼
@@ -174,12 +160,14 @@ result = remove_background(
 
 ## Important Notes
 
-### Why PNG + FFmpeg?
+### Why Direct Pipe + Concat?
 
-OpenCV's `VideoWriter` doesn't support 4-channel (BGRA) video output natively. The workaround:
+Originally, the codebase wrote intermediate PNGs to disk and encoded them using FFmpeg. This was slow due to disk I/O. The current architecture bypasses disk writes (except for temporary encoded chunks):
 
-1. Process frames and save as PNG with alpha
-2. Use FFmpeg to encode PNG sequence to MOV/WebM with alpha
+1. `multiprocessing.Pool` divides video frames by `os.cpu_count()`.
+2. Each worker processes frames in memory and pipes them as a raw byte stream (`stdin`) directly to an isolated FFmpeg process using `VideoStreamWriter`.
+3. FFmpeg processes encode to the requested extension chunks (e.g. `.webm`, `.mov`).
+4. We use FFmpeg's `concat` demuxer to instantly stitch the final chunks together without re-encoding.
 
 ### Alpha Encoding
 

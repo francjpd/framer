@@ -9,6 +9,7 @@ Transform videos with composable operations. Built on FFmpeg, designed for pipel
 - **Config support**: Use JSON configs for complex operations
 - **Modular**: Each operation is independent and extensible
 - **Video looping**: Create seamless infinite loops with optical flow matching
+- **Multi-Core Processing**: Operations are automatically parallelized across all available CPU threads for maximum speed.
 
 ## 🚀 Quick Start
 
@@ -61,6 +62,7 @@ python cli.py fps-boost input.mp4 output.mp4 --to 60
 
 **Options:**
 - `--to` - Target FPS (default: 60)
+- `--workers` or `-w` - Number of CPU threads to use (defaults to all cores)
 
 ---
 
@@ -81,6 +83,7 @@ python cli.py remove-bg input.mp4 output.webm --tolerance 30 --edges 5
 - `--edge-cleanup` - Remove color spill from edges (default: 3)
 - `--adaptive-bg` - Detect background per-frame
 - `--refine` - Enable refinement pass
+- `--workers` or `-w` - Number of CPU threads to use (defaults to all cores)
 
 ---
 
@@ -147,6 +150,7 @@ python cli.py loop input.webm output.webm --method auto --analyze-only
 - `--blend-mode` - add, multiply, screen, overlay (default: add)
 - `--ramp-factor` - Speed 0.8-1.2 for speedramp (default: 1.0)
 - `--analyze-only` - Just analyze, don't process
+- `--workers` or `-w` - Number of CPU threads to use (defaults to all cores)
 
 ---
 
