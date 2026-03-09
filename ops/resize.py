@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from core import register_operation
+from core.video import has_alpha_channel
 
 def resize_video(
     input_path: str, output_path: str, width: int = -1, height: int = -1, 
@@ -27,20 +28,7 @@ def resize_video(
         scale_str = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black@0"
         
     # Check for alpha
-    alpha_cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream_tags=alpha_mode", "-of", "csv=p=0", str(input_path)
-    ]
-    alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True)
-    has_alpha = "1" in alpha_result.stdout
-
-    if not has_alpha:
-        pix_fmt_cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", str(input_path)
-        ]
-        pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True)
-        has_alpha = any(x in pix_fmt_result.stdout for x in ["yuva", "bgra", "argb", "gba", "rgba"])
+    has_alpha = has_alpha_channel(input_path)
         
     cmd.extend(["-vf", scale_str])
     

@@ -24,6 +24,28 @@ def get_output_format(output_path: str, format_flag: Optional[str] = None) -> st
         return "mov"
 
 
+def has_alpha_channel(video_path: str) -> bool:
+    """Check if the video has an alpha channel using ffprobe."""
+    try:
+        alpha_cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream_tags=alpha_mode", "-of", "csv=p=0", str(video_path)
+        ]
+        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True)
+        if "1" in alpha_result.stdout:
+            return True
+
+        pix_fmt_cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", str(video_path)
+        ]
+        pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True)
+        pix_fmt = pix_fmt_result.stdout.strip()
+        return any(x in pix_fmt for x in ["yuva", "bgra", "argb", "gba", "rgba"])
+    except Exception:
+        return False
+
+
 class VideoStreamReader:
     """
     Reads video frames directly from FFmpeg via stdout pipe.

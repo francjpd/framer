@@ -22,26 +22,10 @@ def _worker_wrapper(args):
     ) = args
 
     import os
-    from core.video import VideoStreamWriter, VideoStreamReader
+    from core.video import VideoStreamWriter, VideoStreamReader, has_alpha_channel
 
-    # Check if input has alpha (needed for VideoStreamReader to know whether to output 4 channels)
-    alpha_cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream_tags=alpha_mode", "-of", "csv=p=0", input_path
-    ]
-    has_alpha = False
-    try:
-        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True)
-        has_alpha = "1" in alpha_result.stdout
-        if not has_alpha:
-            pix_fmt_cmd = [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", input_path
-            ]
-            pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True)
-            has_alpha = any(x in pix_fmt_result.stdout for x in ["yuva", "bgra", "argb", "gba", "rgba"])
-    except Exception:
-        pass
+    # Check if input has alpha
+    has_alpha = has_alpha_channel(input_path)
 
     frames_to_process = end_frame - start_frame
 

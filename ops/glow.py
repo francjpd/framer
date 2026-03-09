@@ -10,7 +10,7 @@ from typing import Dict, Any
 from core import register_operation
 from core.parallel import process_video_parallel
 from core.utils import parse_color
-from ops.outline import check_alpha_channel
+from core.video import has_alpha_channel
 
 def _apply_glow(frame: np.ndarray, color_bgr: tuple, radius: int, intensity: float) -> np.ndarray:
     """
@@ -59,7 +59,7 @@ def add_glow(
 ) -> Dict[str, Any]:
     """Add a soft glow/drop-shadow to a transparent video."""
     
-    if not check_alpha_channel(input_path):
+    if not has_alpha_channel(input_path):
         return {
             "success": False, 
             "output_path": None, 

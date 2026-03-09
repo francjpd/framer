@@ -9,28 +9,8 @@ from typing import Dict, Any
 
 from core import register_operation
 from core.parallel import process_video_parallel
-from core.utils import parse_color
+from core.video import VideoStreamWriter, VideoStreamReader, has_alpha_channel
 
-def check_alpha_channel(video_path: str) -> bool:
-    """Check if the video has an alpha channel using ffprobe."""
-    try:
-        alpha_cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream_tags=alpha_mode", "-of", "csv=p=0", video_path
-        ]
-        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True)
-        if "1" in alpha_result.stdout:
-            return True
-
-        pix_fmt_cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", video_path
-        ]
-        pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True)
-        pix_fmt = pix_fmt_result.stdout.strip()
-        return any(x in pix_fmt for x in ["yuva", "bgra", "argb", "gba", "rgba"])
-    except Exception:
-        return False
 
 def _apply_outline(frame: np.ndarray, color_bgr: tuple, thickness: int) -> np.ndarray:
     """
@@ -85,7 +65,7 @@ def add_outline(
 ) -> Dict[str, Any]:
     """Add a solid outline around objects in an alpha-channel video."""
     
-    if not check_alpha_channel(input_path):
+    if not has_alpha_channel(input_path):
         return {
             "success": False, 
             "output_path": None, 

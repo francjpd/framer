@@ -146,13 +146,16 @@ def boost_fps(
             # No interpolation needed, just adjust framerate
             cmd.extend(["-r", str(to)])
         else:
-            # Try minterpolate first
-            test_cmd = ["ffmpeg", "-filters", "|", "grep", "minterpolate"]
-            test_result = subprocess.run(
-                " ".join(test_cmd), shell=True, capture_output=True, text=True
-            )
+            # Check for minterpolate filter availability
+            try:
+                test_result = subprocess.run(
+                    ["ffmpeg", "-filters"], capture_output=True, text=True
+                )
+                has_minterpolate = "minterpolate" in test_result.stdout
+            except Exception:
+                has_minterpolate = False
 
-            if "minterpolate" in test_result.stdout:
+            if has_minterpolate:
                 # Use minterpolate for frame interpolation
                 filter_str = f"minterpolate=fps={to}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
                 if has_alpha:

@@ -14,6 +14,9 @@ import re
 from pathlib import Path
 from typing import Dict, Any
 
+from core.video import get_output_format
+from core.parallel import process_video_parallel
+
 
 def generate_color_ranges(base_bgr_color, num_ranges=5, base_tolerance=25):
     """
@@ -338,36 +341,9 @@ class VideoBackgroundRemover:
 
     def _apply_soft_edges(self, mask, soft_edges=None):
         """Apply soft edges to mask using dilation and blending."""
-        if mask is None or mask.sum() == 0:
-            return mask
-
-        soft_mask = mask.astype(np.float32) / 255.0
-
         if soft_edges is None:
             soft_edges = self.default_soft_edges
-
-        # Get kernel size based on soft_edges parameter
-        kernel_size = 2 * soft_edges + 1 if soft_edges > 0 else 3
-
-        if soft_edges > 0 and kernel_size > 1:
-            # Create distance transform for soft edges
-            if kernel_size % 2 == 0:
-                kernel_size += 1
-
-            kernel = np.ones((kernel_size, kernel_size), np.uint8)
-
-            # Dilate the mask
-            dilated = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
-
-            # Create gradient (transition zone)
-            gradient = dilated - mask
-
-            # Create soft transition
-            soft_mask = mask.astype(np.float32) / 255.0
-            transition = gradient.astype(np.float32) / 255.0
-            soft_mask = soft_mask + (transition * 0.5)  # 50% opacity in transition zone
-
-        return (soft_mask * 255).astype(np.uint8)
+        return _apply_soft_edges(mask, soft_edges)
 
     def process_frame(self, frame):
         """
@@ -469,20 +445,6 @@ class VideoBackgroundRemover:
         return output_path
 
 
-def get_output_format(output_path: str, format_flag: str = None) -> str:
-    """Determine output format from path extension or flag."""
-    if format_flag is not None:
-        return format_flag.lower()
-
-    ext = Path(output_path).suffix.lower()
-    if ext == ".webm":
-        return "webm"
-    elif ext == ".gif":
-        return "gif"
-    else:
-        return "mov"
-
-
 def _apply_soft_edges(mask: np.ndarray, soft_edges: int) -> np.ndarray:
     """Apply soft edges to a binary mask."""
     if mask is None or mask.sum() == 0 or soft_edges <= 0:
@@ -560,100 +522,75 @@ def _process_frame(
     return foreground_mask
 
 
-def _worker_process_chunk(args):
-    (
-        worker_id, input_path, start_frame, end_frame, color_ranges,
-        method, motion_mask, background_color, tolerance,
-        refine, refine_tolerance, refine_block_size, edge_cleanup,
-        soft_edges, adaptive_bg, temp_dir, fps, width, height, show_progress,
-        output_ext
-    ) = args
+def _remove_bg_frame_processor(frame: np.ndarray, **kwargs) -> np.ndarray:
+    """Frame processor function for parallel background removal."""
+    color_ranges = kwargs.get("color_ranges")
+    method = kwargs.get("method", "color")
+    motion_mask = kwargs.get("motion_mask")
+    background_color = kwargs.get("background_color")
+    tolerance = kwargs.get("tolerance", 30)
+    refine = kwargs.get("refine", False)
+    refine_tolerance = kwargs.get("refine_tolerance", 45)
+    refine_block_size = kwargs.get("refine_block_size", 32)
+    edge_cleanup = kwargs.get("edge_cleanup", 3)
+    soft_edges = kwargs.get("soft_edges", 5)
+    adaptive_bg = kwargs.get("adaptive_bg", False)
 
-    import cv2
-    import os
-    from core.video import VideoStreamWriter
-    
-    cap = cv2.VideoCapture(input_path)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    
-    temp_output = os.path.join(temp_dir, f"part_{worker_id:04d}{output_ext}")
-    
-    writer = VideoStreamWriter(
-        output_path=temp_output,
-        fps=fps,
-        width=width,
-        height=height,
-        has_alpha=True,
-        loop=False
-    )
+    first_pass_edge_cleanup = None if refine else edge_cleanup
+    first_pass_soft_edges = None if refine else soft_edges
 
-    frames_to_process = end_frame - start_frame
-    frames_processed = 0
+    if method == "color":
+        alpha = _process_frame(
+            frame,
+            color_ranges,
+            first_pass_soft_edges,
+            first_pass_edge_cleanup,
+            adaptive_bg,
+        )
+    elif method == "motion" and motion_mask is not None:
+        alpha = create_motion_based_mask(
+            frame, motion_mask, background_color, tolerance
+        )
+    elif method == "combined" and motion_mask is not None:
+        color_alpha = _process_frame(
+            frame,
+            color_ranges,
+            first_pass_soft_edges,
+            first_pass_edge_cleanup,
+            adaptive_bg,
+        )
+        motion_alpha = create_motion_based_mask(
+            frame, motion_mask, background_color, tolerance
+        )
+        alpha = cv2.bitwise_or(color_alpha, motion_alpha)
+    else:
+        alpha = _process_frame(
+            frame,
+            color_ranges,
+            first_pass_soft_edges,
+            first_pass_edge_cleanup,
+            adaptive_bg,
+        )
 
-    while frames_processed < frames_to_process:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    if refine:
+        alpha = refine_frame(
+            bgr_frame=frame,
+            alpha=alpha,
+            background_color=background_color,
+            tolerance=refine_tolerance,
+            block_size=refine_block_size,
+            edge_cleanup=edge_cleanup,
+            soft_edges=soft_edges
+        )
 
-        first_pass_edge_cleanup = None if refine else edge_cleanup
-        first_pass_soft_edges = None if refine else soft_edges
+    b, g, r = cv2.split(frame)
+    if frame.shape[2] == 4:
+        # If input already has alpha, we might want to respect it or override it
+        # Here we override it with our new alpha
+        return cv2.merge([b, g, r, alpha])
+    else:
+        return cv2.merge([b, g, r, alpha])
 
-        if method == "color":
-            alpha = _process_frame(
-                frame,
-                color_ranges,
-                first_pass_soft_edges,
-                first_pass_edge_cleanup,
-                adaptive_bg,
-            )
-        elif method == "motion" and motion_mask is not None:
-            alpha = create_motion_based_mask(
-                frame, motion_mask, background_color, tolerance
-            )
-        elif method == "combined" and motion_mask is not None:
-            color_alpha = _process_frame(
-                frame,
-                color_ranges,
-                first_pass_soft_edges,
-                first_pass_edge_cleanup,
-                adaptive_bg,
-            )
-            motion_alpha = create_motion_based_mask(
-                frame, motion_mask, background_color, tolerance
-            )
-            alpha = cv2.bitwise_or(color_alpha, motion_alpha)
-        else:
-            alpha = _process_frame(
-                frame,
-                color_ranges,
-                first_pass_soft_edges,
-                first_pass_edge_cleanup,
-                adaptive_bg,
-            )
-
-        if refine:
-            alpha = refine_frame(
-                bgr_frame=frame,
-                alpha=alpha,
-                background_color=background_color,
-                tolerance=refine_tolerance,
-                block_size=refine_block_size,
-                edge_cleanup=edge_cleanup,
-                soft_edges=soft_edges
-            )
-
-        b, g, r = cv2.split(frame)
-        bgra = cv2.merge([b, g, r, alpha])
-        
-        writer.write_frame(bgra)
-        frames_processed += 1
-        
-        if show_progress and worker_id == 0 and frames_processed % 10 == 0:
-            print(f"\rProcessing (Worker 0): {(frames_processed / frames_to_process) * 100:.1f}%", end="")
-
-    writer.close()
-    cap.release()
-    return temp_output
 
 def remove_background(
     input_path: str,
@@ -726,57 +663,29 @@ def remove_background(
             )
 
         if workers > 1:
-            import multiprocessing as mp
-            import math
-            import os
-            
-            cap.release()
-            
-            frames_per_thread = math.ceil(total_frames / workers)
-            temp_dir = tempfile.mkdtemp()
-            
-            tasks = []
-            output_ext = Path(output_path).suffix.lower()
-            if not output_ext:
-                output_ext = ".mov"
-                
-            for i in range(workers):
-                start_frame = i * frames_per_thread
-                end_frame = min(start_frame + frames_per_thread, total_frames)
-                if start_frame >= total_frames:
-                    break
-                tasks.append((
-                    i, input_path, start_frame, end_frame, color_ranges,
-                    method, motion_mask, background_color, tolerance,
-                    refine, refine_tolerance, refine_block_size, edge_cleanup,
-                    soft_edges, adaptive_bg, temp_dir, fps, width, height, show_progress,
-                    output_ext
-                ))
-            
-            if show_progress:
-                print(f"Starting {len(tasks)} workers...")
-            
-            with mp.Pool(workers) as pool:
-                temp_files = pool.map(_worker_process_chunk, tasks)
-                
-            concat_file = os.path.join(temp_dir, "concat.txt")
-            with open(concat_file, "w") as f:
-                for temp_file in temp_files:
-                    f.write(f"file '{temp_file}'\n")
-                    
-            cmd = [
-                "ffmpeg", "-y", "-v", "warning", "-f", "concat", "-safe", "0", "-i", concat_file,
-                "-c", "copy", output_path
-            ]
-            subprocess.run(cmd, check=True)
-            
-            if show_progress:
-                print(f"\rProcessing: 100%                 ")
-                
-            result["success"] = True
-            result["output_path"] = output_path
-            return result
-            
+            func_kwargs = {
+                "color_ranges": color_ranges,
+                "method": method,
+                "motion_mask": motion_mask,
+                "background_color": background_color,
+                "tolerance": tolerance,
+                "refine": refine,
+                "refine_tolerance": refine_tolerance,
+                "refine_block_size": refine_block_size,
+                "edge_cleanup": edge_cleanup,
+                "soft_edges": soft_edges,
+                "adaptive_bg": adaptive_bg,
+            }
+
+            return process_video_parallel(
+                input_path=input_path,
+                output_path=output_path,
+                process_func=_remove_bg_frame_processor,
+                func_kwargs=func_kwargs,
+                workers=workers,
+                show_progress=show_progress
+            )
+
         else:
             from core.video import VideoStreamWriter
             
