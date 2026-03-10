@@ -110,6 +110,11 @@ GLOBAL_FLAGS = {
         "short": "-p",
         "description": "Show progress bar",
     },
+    "force_cpu": {
+        "type": "bool",
+        "default": False,
+        "description": "Force CPU mode, disable GPU acceleration",
+    },
 }
 
 

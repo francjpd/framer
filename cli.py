@@ -43,7 +43,7 @@ app = typer.Typer(
 )
 
 def get_default_workers() -> int:
-    return os.cpu_count() or 4
+    return max(1, int((os.cpu_count() or 4) * 2 / 3))
 
 def load_config(config_path: str, operation_name: str) -> dict:
     if not config_path:

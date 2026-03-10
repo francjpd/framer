@@ -16,6 +16,8 @@ from typing import Dict, Any
 
 from core.video import get_output_format
 from core.parallel import process_video_parallel
+from core.gpu import is_available
+from core import gpu_ops
 
 
 def generate_color_ranges(base_bgr_color, num_ranges=5, base_tolerance=25):
@@ -431,8 +433,10 @@ class VideoBackgroundRemover:
 
             if show_progress:
                 progress = (frame_count / total_frames) * 100
+                from core.gpu import get_progress_string
+                accel_str = get_progress_string()
                 print(
-                    f"\rProcessing: {progress:.1f}% ({frame_count}/{total_frames})",
+                    f"\rProcessing{accel_str}: {progress:.1f}% ({frame_count}/{total_frames})",
                     end="",
                 )
 
@@ -522,6 +526,58 @@ def _process_frame(
     return foreground_mask
 
 
+def _process_frame_gpu(
+    frame: np.ndarray,
+    color_ranges: list,
+    soft_edges: int = None,
+    edge_cleanup: int = None,
+    use_adaptive_bg: bool = False,
+) -> np.ndarray:
+    """GPU-accelerated version of _process_frame."""
+    if use_adaptive_bg:
+        bg_color = detect_background_color_from_frame_border(frame, border_width=10)
+        color_ranges = [{"color": bg_color, "tolerance": 30}]
+
+    combined_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    for color_range in color_ranges:
+        bg_b, bg_g, bg_r = color_range["color"]
+        tolerance = color_range["tolerance"]
+
+        lower = np.array(
+            [
+                max(0, bg_b - tolerance),
+                max(0, bg_g - tolerance),
+                max(0, bg_r - tolerance),
+            ],
+            dtype=np.uint8,
+        )
+        upper = np.array(
+            [
+                min(255, bg_b + tolerance),
+                min(255, bg_g + tolerance),
+                min(255, bg_r + tolerance),
+            ],
+            dtype=np.uint8,
+        )
+
+        range_mask = gpu_ops.in_range(frame, lower, upper)
+        combined_mask = gpu_ops.bitwise_or(combined_mask, range_mask)
+
+    foreground_mask = gpu_ops.bitwise_not(combined_mask)
+
+    if edge_cleanup is not None and edge_cleanup > 0:
+        foreground_mask = gpu_ops.erode(
+            foreground_mask, edge_cleanup * 2 + 1, iterations=1
+        )
+
+    if soft_edges is not None and soft_edges > 0:
+        blurred = gpu_ops.gaussian_blur(foreground_mask, soft_edges * 2 + 1)
+        foreground_mask = gpu_ops.threshold(blurred, 127)
+
+    return foreground_mask
+
+
 def _remove_bg_frame_processor(frame: np.ndarray, **kwargs) -> np.ndarray:
     """Frame processor function for parallel background removal."""
     color_ranges = kwargs.get("color_ranges")
@@ -535,42 +591,79 @@ def _remove_bg_frame_processor(frame: np.ndarray, **kwargs) -> np.ndarray:
     edge_cleanup = kwargs.get("edge_cleanup", 3)
     soft_edges = kwargs.get("soft_edges", 5)
     adaptive_bg = kwargs.get("adaptive_bg", False)
+    use_gpu = kwargs.get("use_gpu", True)
 
     first_pass_edge_cleanup = None if refine else edge_cleanup
     first_pass_soft_edges = None if refine else soft_edges
 
-    if method == "color":
-        alpha = _process_frame(
-            frame,
-            color_ranges,
-            first_pass_soft_edges,
-            first_pass_edge_cleanup,
-            adaptive_bg,
-        )
-    elif method == "motion" and motion_mask is not None:
-        alpha = create_motion_based_mask(
-            frame, motion_mask, background_color, tolerance
-        )
-    elif method == "combined" and motion_mask is not None:
-        color_alpha = _process_frame(
-            frame,
-            color_ranges,
-            first_pass_soft_edges,
-            first_pass_edge_cleanup,
-            adaptive_bg,
-        )
-        motion_alpha = create_motion_based_mask(
-            frame, motion_mask, background_color, tolerance
-        )
-        alpha = cv2.bitwise_or(color_alpha, motion_alpha)
+    # Use GPU-accelerated processing if available
+    if use_gpu and is_available() and not refine:
+        if method == "color":
+            alpha = _process_frame_gpu(
+                frame,
+                color_ranges,
+                first_pass_soft_edges,
+                first_pass_edge_cleanup,
+                adaptive_bg,
+            )
+        elif method == "motion" and motion_mask is not None:
+            alpha = create_motion_based_mask(
+                frame, motion_mask, background_color, tolerance
+            )
+        elif method == "combined" and motion_mask is not None:
+            color_alpha = _process_frame_gpu(
+                frame,
+                color_ranges,
+                first_pass_soft_edges,
+                first_pass_edge_cleanup,
+                adaptive_bg,
+            )
+            motion_alpha = create_motion_based_mask(
+                frame, motion_mask, background_color, tolerance
+            )
+            alpha = gpu_ops.bitwise_or(color_alpha, motion_alpha)
+        else:
+            alpha = _process_frame_gpu(
+                frame,
+                color_ranges,
+                first_pass_soft_edges,
+                first_pass_edge_cleanup,
+                adaptive_bg,
+            )
     else:
-        alpha = _process_frame(
-            frame,
-            color_ranges,
-            first_pass_soft_edges,
-            first_pass_edge_cleanup,
-            adaptive_bg,
-        )
+        # CPU fallback
+        if method == "color":
+            alpha = _process_frame(
+                frame,
+                color_ranges,
+                first_pass_soft_edges,
+                first_pass_edge_cleanup,
+                adaptive_bg,
+            )
+        elif method == "motion" and motion_mask is not None:
+            alpha = create_motion_based_mask(
+                frame, motion_mask, background_color, tolerance
+            )
+        elif method == "combined" and motion_mask is not None:
+            color_alpha = _process_frame(
+                frame,
+                color_ranges,
+                first_pass_soft_edges,
+                first_pass_edge_cleanup,
+                adaptive_bg,
+            )
+            motion_alpha = create_motion_based_mask(
+                frame, motion_mask, background_color, tolerance
+            )
+            alpha = cv2.bitwise_or(color_alpha, motion_alpha)
+        else:
+            alpha = _process_frame(
+                frame,
+                color_ranges,
+                first_pass_soft_edges,
+                first_pass_edge_cleanup,
+                adaptive_bg,
+            )
 
     if refine:
         alpha = refine_frame(
@@ -580,7 +673,7 @@ def _remove_bg_frame_processor(frame: np.ndarray, **kwargs) -> np.ndarray:
             tolerance=refine_tolerance,
             block_size=refine_block_size,
             edge_cleanup=edge_cleanup,
-            soft_edges=soft_edges
+            soft_edges=soft_edges,
         )
 
     b, g, r = cv2.split(frame)
@@ -612,6 +705,7 @@ def remove_background(
     refine_interactive: bool = False,
     refine_save_previews: bool = False,
     workers: int = 1,
+    use_gpu: bool = True,
 ) -> Dict[str, Any]:
     """
     Remove background from video and output with alpha channel using stream encoding.
@@ -675,6 +769,7 @@ def remove_background(
                 "edge_cleanup": edge_cleanup,
                 "soft_edges": soft_edges,
                 "adaptive_bg": adaptive_bg,
+                "use_gpu": is_available(),
             }
 
             return process_video_parallel(
@@ -683,28 +778,28 @@ def remove_background(
                 process_func=_remove_bg_frame_processor,
                 func_kwargs=func_kwargs,
                 workers=workers,
-                show_progress=show_progress
+                show_progress=show_progress,
             )
 
         else:
             from core.video import VideoStreamWriter
-            
+
             with VideoStreamWriter(
                 output_path=output_path,
                 fps=fps,
                 width=width,
                 height=height,
-                has_alpha=True
+                has_alpha=True,
             ) as writer:
                 frame_count = 0
                 while True:
                     ret, frame = cap.read()
                     if not ret:
                         break
-    
+
                     first_pass_edge_cleanup = None if refine else edge_cleanup
                     first_pass_soft_edges = None if refine else soft_edges
-    
+
                     if method == "color":
                         alpha = _process_frame(
                             frame,
@@ -737,7 +832,7 @@ def remove_background(
                             first_pass_edge_cleanup,
                             adaptive_bg,
                         )
-    
+
                     if refine:
                         alpha = refine_frame(
                             bgr_frame=frame,
@@ -746,24 +841,27 @@ def remove_background(
                             tolerance=refine_tolerance,
                             block_size=refine_block_size,
                             edge_cleanup=edge_cleanup,
-                            soft_edges=soft_edges
+                            soft_edges=soft_edges,
                         )
-    
+
                     b, g, r = cv2.split(frame)
                     bgra = cv2.merge([b, g, r, alpha])
-                    
+
                     writer.write_frame(bgra)
-    
+
                     frame_count += 1
                     if show_progress and frame_count % 10 == 0:
+                        from core.gpu import get_progress_string
+                        accel_str = get_progress_string()
                         print(
-                            f"\rProcessing: {(frame_count / total_frames) * 100:.1f}%", end=""
+                            f"\rProcessing{accel_str}: {(frame_count / total_frames) * 100:.1f}%",
+                            end="",
                         )
-    
+
             cap.release()
             if show_progress:
                 print(f"\rProcessing: 100%")
-    
+
             result["success"] = True
             result["output_path"] = output_path
             return result

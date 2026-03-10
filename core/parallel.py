@@ -7,6 +7,12 @@ import math
 import tempfile
 import subprocess
 import multiprocessing as mp
+
+try:
+    mp.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass
+
 from pathlib import Path
 from typing import Callable, Any, Dict, Optional
 
@@ -23,6 +29,9 @@ def _worker_wrapper(args):
 
     import os
     from core.video import VideoStreamWriter, VideoStreamReader, has_alpha_channel
+    from core.gpu import get_progress_string
+    
+    accel_str = get_progress_string()
 
     # Check if input has alpha
     has_alpha = has_alpha_channel(input_path)
@@ -66,8 +75,9 @@ def _worker_wrapper(args):
         writer.write_frame(processed_frame)
         frames_processed += 1
 
-        if show_progress and worker_id == 0 and frames_processed % 10 == 0:
-            print(f"\rProcessing (Worker 0): {(frames_processed / frames_to_process) * 100:.1f}%", end="")
+        if show_progress and worker_id == 0:
+            if frames_to_process < 100 or frames_processed % max(1, frames_to_process // 100) == 0:
+                print(f"\rProcessing (Worker 0){accel_str}: {(frames_processed / frames_to_process) * 100:.1f}%", end="", flush=True)
 
     writer.close()
     reader.close()
@@ -94,8 +104,11 @@ def process_video_parallel(
         workers: Number of threads (defaults to os.cpu_count())
         show_progress: Show progress in terminal
     """
+    max_workers = os.cpu_count() or 4
     if workers is None:
-        workers = os.cpu_count() or 4
+        workers = max(1, int(max_workers * 2 / 3))
+    else:
+        workers = min(workers, max_workers)
     if func_kwargs is None:
         func_kwargs = {}
 

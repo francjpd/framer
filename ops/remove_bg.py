@@ -34,6 +34,7 @@ def remove_bg(
     refine_save_previews: bool = False,
     workers: int = 1,
     config: str | None = None,
+    force_cpu: bool = False,
 ) -> Dict[str, Any]:
     """
     Remove background from video.
@@ -54,10 +55,16 @@ def remove_bg(
         refine_tolerance: Refinement tolerance (default: 45)
         refine_block_size: Refinement block size (default: 32)
         config: Path to config JSON file (exclusive - no other args allowed)
+        force_cpu: Force CPU mode, disable GPU acceleration
 
     Returns:
         dict with success, output_path, error
     """
+    from core.gpu import is_available, notify_gpu_usage
+
+    use_gpu = is_available() and not force_cpu
+    if use_gpu:
+        notify_gpu_usage()
     # Load config if provided
     if config:
         config_path = Path(config)
@@ -110,6 +117,7 @@ def remove_bg(
         refine_tolerance=refine_tolerance,
         refine_block_size=refine_block_size,
         workers=workers,
+        use_gpu=use_gpu,
     )
 
 
