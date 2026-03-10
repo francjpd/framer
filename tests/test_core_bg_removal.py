@@ -7,13 +7,17 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.bg_removal import (
+from core.color_ranges import (
     generate_color_ranges,
     _color_distance,
     _cluster_colors,
     detect_background_color_from_frame_border,
+)
+from core.mask_refinement import (
     _apply_soft_edges,
     _apply_edge_cleanup,
+)
+from core.bg_removal import (
     _process_frame,
     VideoBackgroundRemover
 )
