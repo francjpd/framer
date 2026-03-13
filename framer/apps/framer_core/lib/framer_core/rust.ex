@@ -15,8 +15,21 @@ defmodule FramerCore.Rust do
   # New operation NIFs
   def boost_fps(_input, _output, _target_fps), do: :erlang.nif_error(:nif_not_loaded)
 
-  def remove_bg(_input, _output, _color, _tolerance, _edges, _method),
-    do: :erlang.nif_error(:nif_not_loaded)
+  def remove_bg(
+        _input,
+        _output,
+        _color,
+        _tolerance,
+        _edges,
+        _method,
+        _auto_ranges \\ true,
+        _num_ranges \\ 5,
+        _edge_cleanup \\ 3,
+        _refine \\ false,
+        _refine_tolerance \\ 45,
+        _refine_block_size \\ 32
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   def create_loop(
         _input,

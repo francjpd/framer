@@ -216,10 +216,31 @@ defmodule FramerCore.CLI do
     tolerance = parse_opt(opts, "--tolerance", "30") |> String.to_integer()
     edges = parse_opt(opts, "--edges", "5") |> String.to_integer()
     method = parse_opt(opts, "--method", "color")
+    auto_ranges = parse_opt(opts, "--auto-ranges", "true") |> parse_bool()
+    num_ranges = parse_opt(opts, "--num-ranges", "5") |> String.to_integer()
+    edge_cleanup = parse_opt(opts, "--edge-cleanup", "3") |> String.to_integer()
+    refine = parse_opt(opts, "--refine", "false") |> parse_bool()
+    refine_tolerance = parse_opt(opts, "--refine-tolerance", "45") |> String.to_integer()
+    refine_block_size = parse_opt(opts, "--refine-block-size", "32") |> String.to_integer()
 
-    IO.puts("Remove BG: #{input} -> #{output} (color: #{color}, tol: #{tolerance})")
+    IO.puts(
+      "Remove BG: #{input} -> #{output} (color: #{color}, tol: #{tolerance}, auto_ranges: #{auto_ranges}, num_ranges: #{num_ranges}, refine: #{refine})"
+    )
 
-    case FramerCore.Rust.remove_bg(input, output, color, tolerance, edges, method) do
+    case FramerCore.Rust.remove_bg(
+           input,
+           output,
+           color,
+           tolerance,
+           edges,
+           method,
+           auto_ranges,
+           num_ranges,
+           edge_cleanup,
+           refine,
+           refine_tolerance,
+           refine_block_size
+         ) do
       {:ok, json} ->
         result = Jason.decode!(json)
 
@@ -293,6 +314,12 @@ defmodule FramerCore.CLI do
 
   defp maybe_float(nil), do: nil
   defp maybe_float(str), do: String.to_float(str)
+
+  defp parse_bool("true"), do: true
+  defp parse_bool("false"), do: false
+  defp parse_bool("1"), do: true
+  defp parse_bool("0"), do: false
+  defp parse_bool(other) when is_binary(other), do: String.downcase(other) == "true"
 
   defp help do
     IO.puts("""

@@ -11,15 +11,19 @@ pub fn remove_bg(
     tolerance: u32,
     edges: u32,
     method: &str,
+    auto_ranges: bool,
+    num_ranges: u32,
+    edge_cleanup: u32,
+    refine: bool,
+    refine_tolerance: u32,
+    _refine_block_size: u32,
 ) -> Result<String, Error> {
     let _resolved_input: PathBuf = validate_path(input)?;
 
-    // Ensure output directory exists
     let output_path = ensure_output_dir(output)?;
 
     let ext = get_extension(output);
 
-    // Validate output format supports alpha
     if ext == ".mp4" {
         let result = serde_json::json!({
             "success": false,
@@ -29,39 +33,82 @@ pub fn remove_bg(
         return Ok(result.to_string());
     }
 
-    // Parse color to FFmpeg hex format
     let hex_color = parse_color_to_hex(color)?;
 
-    // Convert tolerance from 0-255 range to FFmpeg similarity 0.0-1.0
     let similarity = (tolerance as f64) / 255.0;
     let similarity = similarity.min(1.0).max(0.01);
 
-    // Build filter chain based on method
-    let filter = match method {
-        "chromakey" => {
-            let mut f = format!(
+    let mut filters: Vec<String> = Vec::new();
+
+    if auto_ranges && num_ranges > 1 {
+        let mut range_filters = String::new();
+        let base_similarity = similarity;
+
+        for i in 0..num_ranges {
+            let offset = (i as f64 - num_ranges as f64 / 2.0) * 0.05;
+            let range_sim = (base_similarity + offset).max(0.01).min(1.0);
+
+            let single_filter = match method {
+                "chromakey" => format!(
+                    "chromakey=color={}:similarity={:.2}:blend=0.1",
+                    hex_color, range_sim
+                ),
+                _ => format!(
+                    "colorkey=color={}:similarity={:.2}:blend=0.1",
+                    hex_color, range_sim
+                ),
+            };
+
+            if i == 0 {
+                range_filters.push_str(&single_filter);
+            } else {
+                range_filters.push_str(&format!(",{},", single_filter));
+            }
+        }
+        filters.push(range_filters);
+    } else {
+        let base_filter = match method {
+            "chromakey" => format!(
                 "chromakey=color={}:similarity={:.2}:blend=0.1",
                 hex_color, similarity
-            );
-            if edges > 0 {
-                f.push_str(&format!(",gblur=sigma={}", edges));
-            }
-            f
-        }
-        _ => {
-            let mut f = format!(
-                "colorkey=color={}:similarity={:.2}:blend=0.1,format=yuva420p",
+            ),
+            _ => format!(
+                "colorkey=color={}:similarity={:.2}:blend=0.1",
                 hex_color, similarity
-            );
-            if edges > 0 {
-                f.push_str(&format!(
-                    ",split[rgb][alpha];[alpha]alphaextract,gblur=sigma={}[softedge];[rgb][softedge]alphamerge",
-                    edges
-                ));
-            }
-            f
+            ),
+        };
+        filters.push(base_filter);
+    }
+
+    if edges > 0 {
+        if method == "chromakey" {
+            filters.push(format!("gblur=sigma={}", edges));
+        } else {
+            filters.push(format!(
+                "split[rgb][alpha];[alpha]alphaextract,gblur=sigma={}[softedge];[rgb][softedge]alphamerge",
+                edges
+            ));
         }
-    };
+    }
+
+    if edge_cleanup > 0 {
+        filters.push(format!(
+            " erosion=kernel={}:iterations={},dilate=kernel={}:iterations={}",
+            edge_cleanup, edge_cleanup, edge_cleanup, edge_cleanup
+        ));
+    }
+
+    if refine {
+        let refine_sim = (refine_tolerance as f64) / 255.0;
+        let refine_sim = refine_sim.max(0.01).min(1.0);
+
+        filters.push(format!(
+            "colorkey=color={}:similarity={:.2}:blend=0.0",
+            hex_color, refine_sim
+        ));
+    }
+
+    let filter = filters.join(",");
 
     // Build codec args for alpha output
     let codec_args: Vec<String> = match ext.as_str() {

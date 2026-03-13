@@ -36,8 +36,27 @@ pub fn remove_bg(
     tolerance: u32,
     edges: u32,
     method: String,
+    auto_ranges: bool,
+    num_ranges: u32,
+    edge_cleanup: u32,
+    refine: bool,
+    refine_tolerance: u32,
+    refine_block_size: u32,
 ) -> NifResult<(Atom, String)> {
-    match ops::remove_bg::remove_bg(&input, &output, &color, tolerance, edges, &method) {
+    match ops::remove_bg::remove_bg(
+        &input,
+        &output,
+        &color,
+        tolerance,
+        edges,
+        &method,
+        auto_ranges,
+        num_ranges,
+        edge_cleanup,
+        refine,
+        refine_tolerance,
+        refine_block_size,
+    ) {
         Ok(result) => Ok((atoms::ok(), result)),
         Err(e) => Err(e),
     }

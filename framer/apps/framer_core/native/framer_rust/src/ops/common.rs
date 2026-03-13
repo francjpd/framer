@@ -250,14 +250,26 @@ pub fn get_codec_args(ext: &str, has_alpha: bool) -> Vec<String> {
 
 /// Parse a color string in BGR ("0,255,0") or hex ("#00FF00") format
 /// and return as a hex color string "0x00FF00" for FFmpeg.
+/// FFmpeg colorkey/chromakey expects BGR format, so we must convert:
+/// - Input "0,255,0" means B=0, G=255, R=0 (green in BGR)
+/// - FFmpeg expects "0x0000FF" (BGR: B=00, G=00, R=FF) to remove green
 pub fn parse_color_to_hex(color: &str) -> Result<String, Error> {
     let trimmed = color.trim();
 
     if trimmed.starts_with('#') {
-        // "#00FF00" -> "0x00FF00"
-        Ok(format!("0x{}", &trimmed[1..]))
+        // "#00FF00" is RGB (green), convert to BGR for FFmpeg: "0x0000FF"
+        let hex = &trimmed[1..];
+        if hex.len() == 6 {
+            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| Error::Atom("invalid_color"))?;
+            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| Error::Atom("invalid_color"))?;
+            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| Error::Atom("invalid_color"))?;
+            // Convert RGB to BGR for FFmpeg
+            Ok(format!("0x{:02X}{:02X}{:02X}", b, g, r))
+        } else {
+            Err(Error::Atom("invalid_color"))
+        }
     } else if trimmed.contains(',') {
-        // "0,255,0" (BGR) -> "0x00FF00" (RGB)
+        // "0,255,0" is already BGR format (B=0, G=255, R=0)
         let parts: Vec<&str> = trimmed.split(',').collect();
         if parts.len() == 3 {
             let b: u8 = parts[0]
@@ -272,13 +284,25 @@ pub fn parse_color_to_hex(color: &str) -> Result<String, Error> {
                 .trim()
                 .parse()
                 .map_err(|_| Error::Atom("invalid_color"))?;
-            Ok(format!("0x{:02X}{:02X}{:02X}", r, g, b))
+            // Input is BGR, pass directly to FFmpeg (which expects BGR)
+            Ok(format!("0x{:02X}{:02X}{:02X}", b, g, r))
+        } else {
+            Err(Error::Atom("invalid_color"))
+        }
+    } else if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+        // "0x00FF00" is RGB hex, convert to BGR for FFmpeg
+        let hex = &trimmed[2..];
+        if hex.len() == 6 {
+            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| Error::Atom("invalid_color"))?;
+            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| Error::Atom("invalid_color"))?;
+            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| Error::Atom("invalid_color"))?;
+            // Convert RGB to BGR for FFmpeg
+            Ok(format!("0x{:02X}{:02X}{:02X}", b, g, r))
         } else {
             Err(Error::Atom("invalid_color"))
         }
     } else {
-        // Assume it's already a hex-like value
-        Ok(trimmed.to_string())
+        Err(Error::Atom("invalid_color"))
     }
 }
 
