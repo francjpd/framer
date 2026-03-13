@@ -28,7 +28,7 @@ pub fn boost_fps(input: String, output: String, target_fps: u32) -> NifResult<(A
     }
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 pub fn remove_bg(
     input: String,
     output: String,

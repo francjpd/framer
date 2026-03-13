@@ -41,7 +41,7 @@ pub fn remove_bg(
     let mut filters: Vec<String> = Vec::new();
 
     if auto_ranges && num_ranges > 1 {
-        let mut range_filters = String::new();
+        let mut range_filters = Vec::new();
         let base_similarity = similarity;
 
         for i in 0..num_ranges {
@@ -58,14 +58,9 @@ pub fn remove_bg(
                     hex_color, range_sim
                 ),
             };
-
-            if i == 0 {
-                range_filters.push_str(&single_filter);
-            } else {
-                range_filters.push_str(&format!(",{},", single_filter));
-            }
+            range_filters.push(single_filter);
         }
-        filters.push(range_filters);
+        filters.push(range_filters.join(","));
     } else {
         let base_filter = match method {
             "chromakey" => format!(
@@ -92,10 +87,8 @@ pub fn remove_bg(
     }
 
     if edge_cleanup > 0 {
-        filters.push(format!(
-            " erosion=kernel={}:iterations={},dilate=kernel={}:iterations={}",
-            edge_cleanup, edge_cleanup, edge_cleanup, edge_cleanup
-        ));
+        // Use unsharp filter for edge cleanup instead of erosion/dilate
+        filters.push(format!("unsharp=5:5:1.0:5:5:0.0"));
     }
 
     if refine {

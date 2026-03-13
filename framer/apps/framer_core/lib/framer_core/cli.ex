@@ -244,15 +244,17 @@ defmodule FramerCore.CLI do
       {:ok, json} ->
         result = Jason.decode!(json)
 
-        if result["success"],
-          do: IO.puts("Success: #{result["output_path"]}"),
-          else: IO.puts("Error: #{result["error"]}")
+        if result["success"] do
+          IO.puts("✓ Success: #{result["output_path"]}")
+        else
+          IO.puts("✗ Error: #{result["error"]}")
+        end
 
       {:error, reason} ->
-        IO.puts("NIF Error: #{inspect(reason)}")
+        IO.puts("✗ NIF Error: #{reason}")
 
       other ->
-        IO.puts("NIF Failure: #{inspect(other)}")
+        IO.puts("✗ Unexpected response: #{inspect(other)}")
     end
   end
 

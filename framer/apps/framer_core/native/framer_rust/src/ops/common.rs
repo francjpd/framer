@@ -7,28 +7,77 @@ pub fn run_ffmpeg(args: &[&str]) -> Result<String, Error> {
     use std::io::Read;
     use std::process::Stdio;
 
-    let mut child = Command::new("/usr/bin/ffmpeg")
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|_| Error::Atom("ffmpeg_not_found"))?;
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to spawn ffmpeg: {}", e);
+            return Err(Error::Atom("ffmpeg_not_found"));
+        }
+    };
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_end(&mut stdout);
-    }
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_end(&mut stderr);
-    }
+    let mut out = match child.stdout.take() {
+        Some(o) => o,
+        None => return Err(Error::Atom("ffmpeg_io_error")),
+    };
+    let mut err = match child.stderr.take() {
+        Some(e) => e,
+        None => return Err(Error::Atom("ffmpeg_io_error")),
+    };
 
-    // We don't wait() here to avoid ECHILD (os error 10) if BEAM reaped it.
-    // Instead we check if we captured output or if it's likely a success.
-    // For ffmpeg, success is usually indicated by the absence of critical errors in stderr
-    // or simply by the fact that it finished.
-    Ok(String::from_utf8_lossy(&stdout).to_string())
+    // Read all output
+    let _ = out.read_to_end(&mut stdout);
+    let _ = err.read_to_end(&mut stderr);
+
+    // Wait with retries for BEAM reaping
+    let mut retries = 0;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {
+                retries += 1;
+                if retries > 50 {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if retries > 100 {
+                    let _ = child.kill();
+                    return Err(Error::Atom("ffmpeg_timeout"));
+                }
+            }
+            // Process was reaped by BEAM - check if we got output
+            Err(_) => {
+                if !stdout.is_empty() || !stderr.is_empty() {
+                    // Check stderr for errors
+                    let stderr_str = String::from_utf8_lossy(&stderr);
+                    if stderr_str.contains("error")
+                        || stderr_str.contains("Error")
+                        || stderr_str.contains("failed")
+                    {
+                        eprintln!("{}", stderr_str.trim());
+                        return Err(Error::Atom("ffmpeg_failed"));
+                    }
+                    // No error in output, assume success
+                    return Ok(String::from_utf8_lossy(&stdout).to_string());
+                }
+                return Err(Error::Atom("ffmpeg_wait_failed"));
+            }
+        }
+    };
+
+    if status.success() {
+        Ok(String::from_utf8_lossy(&stdout).to_string())
+    } else {
+        let stderr_str = String::from_utf8_lossy(&stderr).to_string();
+        let stderr_trimmed = stderr_str.trim().to_string();
+
+        eprintln!("{}", stderr_trimmed);
+        Err(Error::Atom("ffmpeg_failed"))
+    }
 }
 
 /// Run ffprobe and return stdout as a string.
