@@ -49,22 +49,18 @@ pub fn run_ffmpeg(args: &[&str]) -> Result<String, Error> {
                     return Err(Error::Atom("ffmpeg_timeout"));
                 }
             }
-            // Process was reaped by BEAM - check if we got output
+            // Process was reaped by BEAM - check if we got output or if it's a silent success
             Err(_) => {
-                if !stdout.is_empty() || !stderr.is_empty() {
-                    // Check stderr for errors
-                    let stderr_str = String::from_utf8_lossy(&stderr);
-                    if stderr_str.contains("error")
-                        || stderr_str.contains("Error")
-                        || stderr_str.contains("failed")
-                    {
-                        eprintln!("{}", stderr_str.trim());
-                        return Err(Error::Atom("ffmpeg_failed"));
-                    }
-                    // No error in output, assume success
-                    return Ok(String::from_utf8_lossy(&stdout).to_string());
+                let stderr_str = String::from_utf8_lossy(&stderr);
+                if stderr_str.contains("error")
+                    || stderr_str.contains("Error")
+                    || stderr_str.contains("failed")
+                {
+                    eprintln!("{}", stderr_str.trim());
+                    return Err(Error::Atom("ffmpeg_failed"));
                 }
-                return Err(Error::Atom("ffmpeg_wait_failed"));
+                // If there's no error in stderr, assume it finished successfully (even if silent)
+                return Ok(String::from_utf8_lossy(&stdout).to_string());
             }
         }
     };
@@ -297,28 +293,23 @@ pub fn get_codec_args(ext: &str, has_alpha: bool) -> Vec<String> {
     }
 }
 
-/// Parse a color string in BGR ("0,255,0") or hex ("#00FF00") format
-/// and return as a hex color string "0x00FF00" for FFmpeg.
-/// FFmpeg colorkey/chromakey expects BGR format, so we must convert:
-/// - Input "0,255,0" means B=0, G=255, R=0 (green in BGR)
-/// - FFmpeg expects "0x0000FF" (BGR: B=00, G=00, R=FF) to remove green
+/// Parse a color string in BGR ("B,G,R" like "0,255,0") or RGB hex ("#00FF00") format
+/// and return a hex color string in the format FFmpeg expects for colorkey/chromakey.
+///
+/// FFmpeg colorkey filter expects colors in **RGB** hex: "#RRGGBB".
+/// The CLI convention (matching OpenCV/Python) is that comma-separated values are B,G,R.
+/// So "0,255,0" = B=0, G=255, R=0 (pure green in BGR). For FFmpeg we need #00FF00.
+///
+/// The conversion: output "#{R:02X}{G:02X}{B:02X}" — i.e. swap parts[0](B) with parts[2](R).
 pub fn parse_color_to_hex(color: &str) -> Result<String, Error> {
     let trimmed = color.trim();
 
     if trimmed.starts_with('#') {
-        // "#00FF00" is RGB (green), convert to BGR for FFmpeg: "0x0000FF"
-        let hex = &trimmed[1..];
-        if hex.len() == 6 {
-            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| Error::Atom("invalid_color"))?;
-            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| Error::Atom("invalid_color"))?;
-            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| Error::Atom("invalid_color"))?;
-            // Convert RGB to BGR for FFmpeg
-            Ok(format!("0x{:02X}{:02X}{:02X}", b, g, r))
-        } else {
-            Err(Error::Atom("invalid_color"))
-        }
+        // "#RRGGBB" — already RGB, return as is (FFmpeg likes #)
+        Ok(trimmed.to_string())
     } else if trimmed.contains(',') {
-        // "0,255,0" is already BGR format (B=0, G=255, R=0)
+        // "B,G,R" comma-separated (CLI convention matches OpenCV BGR)
+        // Must convert to "#RRGGBB" for FFmpeg (swap B and R).
         let parts: Vec<&str> = trimmed.split(',').collect();
         if parts.len() == 3 {
             let b: u8 = parts[0]
@@ -333,20 +324,20 @@ pub fn parse_color_to_hex(color: &str) -> Result<String, Error> {
                 .trim()
                 .parse()
                 .map_err(|_| Error::Atom("invalid_color"))?;
-            // Input is BGR, pass directly to FFmpeg (which expects BGR)
-            Ok(format!("0x{:02X}{:02X}{:02X}", b, g, r))
+
+            // Output as #RRGGBB for FFmpeg
+            Ok(format!("#{:02X}{:02X}{:02X}", r, g, b))
         } else {
             Err(Error::Atom("invalid_color"))
         }
     } else if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-        // "0x00FF00" is RGB hex, convert to BGR for FFmpeg
+        // "0xRRGGBB" — already RGB hex, pass straight through
         let hex = &trimmed[2..];
         if hex.len() == 6 {
-            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| Error::Atom("invalid_color"))?;
-            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| Error::Atom("invalid_color"))?;
-            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| Error::Atom("invalid_color"))?;
-            // Convert RGB to BGR for FFmpeg
-            Ok(format!("0x{:02X}{:02X}{:02X}", b, g, r))
+            u8::from_str_radix(&hex[0..2], 16).map_err(|_| Error::Atom("invalid_color"))?;
+            u8::from_str_radix(&hex[2..4], 16).map_err(|_| Error::Atom("invalid_color"))?;
+            u8::from_str_radix(&hex[4..6], 16).map_err(|_| Error::Atom("invalid_color"))?;
+            Ok(format!("0x{}", hex.to_uppercase()))
         } else {
             Err(Error::Atom("invalid_color"))
         }

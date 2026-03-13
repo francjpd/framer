@@ -212,10 +212,24 @@ defmodule FramerCore.CLI do
   end
 
   defp remove_bg(input, output, opts) do
-    color = parse_opt(opts, "--color", "0,255,0")
-    tolerance = parse_opt(opts, "--tolerance", "30") |> String.to_integer()
+    color_opt = parse_opt_or_nil(opts, "--color")
+
+    color =
+      if is_nil(color_opt) or color_opt == "auto" do
+        case detect_bg_color(input) do
+          {:ok, detected} ->
+            detected
+
+          _ ->
+            "0,255,0"
+        end
+      else
+        color_opt
+      end
+
+    tolerance = parse_opt(opts, "--tolerance", "20") |> String.to_integer()
     edges = parse_opt(opts, "--edges", "5") |> String.to_integer()
-    method = parse_opt(opts, "--method", "color")
+    method = parse_opt(opts, "--method", "colorkey")
     auto_ranges = parse_opt(opts, "--auto-ranges", "true") |> parse_bool()
     num_ranges = parse_opt(opts, "--num-ranges", "5") |> String.to_integer()
     edge_cleanup = parse_opt(opts, "--edge-cleanup", "3") |> String.to_integer()
@@ -224,7 +238,7 @@ defmodule FramerCore.CLI do
     refine_block_size = parse_opt(opts, "--refine-block-size", "32") |> String.to_integer()
 
     IO.puts(
-      "Remove BG: #{input} -> #{output} (color: #{color}, tol: #{tolerance}, auto_ranges: #{auto_ranges}, num_ranges: #{num_ranges}, refine: #{refine})"
+      "Remove BG: #{input} -> #{output} (color: #{color}, tol: #{tolerance}, method: #{method})"
     )
 
     case FramerCore.Rust.remove_bg(
@@ -255,6 +269,51 @@ defmodule FramerCore.CLI do
 
       other ->
         IO.puts("✗ Unexpected response: #{inspect(other)}")
+    end
+  end
+
+  defp detect_bg_color(input) do
+    # Sample 4 corners (top-left, top-right, bottom-left, bottom-right)
+    # Using small 5x5 areas to avoid single-pixel noise.
+    corners = [
+      "crop=5:5:0:0",
+      "crop=5:5:in_w-5:0",
+      "crop=5:5:0:in_h-5",
+      "crop=5:5:in_w-5:in_h-5"
+    ]
+
+    results = Enum.map(corners, fn filter ->
+      case System.cmd("ffmpeg", [
+             "-hide_banner",
+             "-loglevel", "error",
+             "-i", input,
+             "-vf", filter,
+             "-vframes", "1",
+             "-f", "rawvideo",
+             "-pix_fmt", "bgr24",
+             "-"
+           ], stderr_to_stdout: true) do
+        {data, 0} ->
+          # Calculate avg for this 5x5 block
+          bytes = :erlang.binary_to_list(data)
+          {b_sum, g_sum, r_sum, count} = Enum.chunk_every(bytes, 3)
+          |> Enum.reduce({0, 0, 0, 0}, fn [b, g, r], {bs, gs, rs, c} ->
+            {bs + b, gs + g, rs + r, c + 1}
+          end)
+          {b_sum / count, g_sum / count, r_sum / count}
+        _ -> nil
+      end
+    end) |> Enum.reject(&is_nil/1)
+
+    if results == [] do
+      {:error, :detection_failed}
+    else
+      {b, g, r} = Enum.reduce(results, {0, 0, 0}, fn {bs, gs, rs}, {bc, gc, rc} ->
+        {bc + bs, gc + gs, rc + rs}
+      end)
+      count = length(results)
+      # Format as "B,G,R" for NIF
+      {:ok, "#{round(b/count)},#{round(g/count)},#{round(r/count)}"}
     end
   end
 

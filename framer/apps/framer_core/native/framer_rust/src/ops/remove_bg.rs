@@ -11,8 +11,8 @@ pub fn remove_bg(
     tolerance: u32,
     edges: u32,
     method: &str,
-    auto_ranges: bool,
-    num_ranges: u32,
+    _auto_ranges: bool,
+    _num_ranges: u32,
     edge_cleanup: u32,
     refine: bool,
     refine_tolerance: u32,
@@ -35,70 +35,55 @@ pub fn remove_bg(
 
     let hex_color = parse_color_to_hex(color)?;
 
-    let similarity = (tolerance as f64) / 255.0;
-    let similarity = similarity.min(1.0).max(0.01);
+    let similarity = ((tolerance as f64) / 255.0).min(1.0).max(0.01);
+
+    // Map edges (pixel count, e.g. 1–20) to colorkey's blend parameter (0.0–0.5).
+    // colorkey blend feathers the transition region at the key colour boundary.
+    // Values above ~0.3 start keying adjacent non-background colours, so we cap at 0.2.
+    let blend = if edges > 0 {
+        ((edges as f64) * 0.01).min(0.2_f64)
+    } else {
+        0.0
+    };
 
     let mut filters: Vec<String> = Vec::new();
 
-    if auto_ranges && num_ranges > 1 {
-        let mut range_filters = Vec::new();
-        let base_similarity = similarity;
+    // Single colorkey/chromakey filter — the correct approach.
+    // Multiple chained colorkey filters do NOT accumulate transparency;
+    // each one only sees the already-processed output of the previous.
+    let filter_name = match method {
+        "chromakey" => "chromakey",
+        _ => "colorkey",
+    };
+    filters.push(format!(
+        "{}=color='{}':similarity={:.4}:blend={:.4}",
+        filter_name, hex_color, similarity, blend
+    ));
 
-        for i in 0..num_ranges {
-            let offset = (i as f64 - num_ranges as f64 / 2.0) * 0.05;
-            let range_sim = (base_similarity + offset).max(0.01).min(1.0);
-
-            let single_filter = match method {
-                "chromakey" => format!(
-                    "chromakey=color={}:similarity={:.2}:blend=0.1",
-                    hex_color, range_sim
-                ),
-                _ => format!(
-                    "colorkey=color={}:similarity={:.2}:blend=0.1",
-                    hex_color, range_sim
-                ),
-            };
-            range_filters.push(single_filter);
-        }
-        filters.push(range_filters.join(","));
-    } else {
-        let base_filter = match method {
-            "chromakey" => format!(
-                "chromakey=color={}:similarity={:.2}:blend=0.1",
-                hex_color, similarity
-            ),
-            _ => format!(
-                "colorkey=color={}:similarity={:.2}:blend=0.1",
-                hex_color, similarity
-            ),
-        };
-        filters.push(base_filter);
-    }
-
-    if edges > 0 {
-        if method == "chromakey" {
-            filters.push(format!("gblur=sigma={}", edges));
-        } else {
-            filters.push(format!(
-                "split[rgb][alpha];[alpha]alphaextract,gblur=sigma={}[softedge];[rgb][softedge]alphamerge",
-                edges
-            ));
-        }
-    }
-
+    // edge_cleanup: a small gblur on the whole frame softens jagged key edges.
+    // This is a best-effort approximation; true alpha-only erosion would need
+    // alphaextract → morphology → alphamerge, which requires libavfilter morphology.
     if edge_cleanup > 0 {
-        // Use unsharp filter for edge cleanup instead of erosion/dilate
-        filters.push(format!("unsharp=5:5:1.0:5:5:0.0"));
+        let sigma = ((edge_cleanup as f64) * 0.03).min(2.0_f64).max(0.1);
+        filters.push(format!("gblur=sigma={:.2}", sigma));
     }
 
     if refine {
         let refine_sim = (refine_tolerance as f64) / 255.0;
         let refine_sim = refine_sim.max(0.01).min(1.0);
 
+        // Add a second colorkey pass for refinement, with a very low blend for precision
         filters.push(format!(
-            "colorkey=color={}:similarity={:.2}:blend=0.0",
+            "colorkey=color={}:similarity={:.4}:blend=0.01", // Small blend for refinement
             hex_color, refine_sim
         ));
+    }
+
+    if ext == ".webm" {
+        // Explicitly force alpha-aware format at the end of the filter chain.
+        filters.push("format=yuva420p".to_string());
+    } else if ext == ".mov" {
+        filters.push("format=argb".to_string());
     }
 
     let filter = filters.join(",");
@@ -137,7 +122,16 @@ pub fn remove_bg(
         ],
     };
 
-    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), input.into(), "-vf".into(), filter];
+    let mut args: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-y".into(),
+        "-i".into(),
+        input.into(),
+        "-vf".into(),
+        filter,
+    ];
 
     args.extend(codec_args);
     args.push("-an".into());
