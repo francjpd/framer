@@ -185,21 +185,74 @@ defmodule FramerCore.CLI do
 
   defp fps_boost(input, output, opts) do
     target_fps = parse_opt(opts, "--to", "60") |> String.to_integer()
+    
+    IO.puts("🚀 Parallel FPS Boost: #{input} -> #{output} (target: #{target_fps}fps)")
 
-    IO.puts("FPS Boost: #{input} -> #{output} (target: #{target_fps}fps)")
-
-    case FramerCore.Rust.boost_fps(input, output, target_fps) do
-      {:ok, json} ->
-        handle_nif_result(json)
+    # Get total frames and FPS to split the job correctly
+    case info_json(input) do
+      {:ok, %{total_frames: total_frames, fps: fps}} ->
+        
+        fps = 
+          case fps do
+            v when is_binary(v) -> String.to_float(v)
+            v when is_number(v) -> v * 1.0
+            _ -> 30.0
+          end
+       
+        total_frames = if is_binary(total_frames), do: String.to_integer(total_frames), else: total_frames
+        
+        # Submit job to Orchestrator
+        {:ok, job_id} = FramerCore.Orchestrator.submit_job(input, output, total_frames: total_frames, chunk_size: 50, fps: fps)
+        
+        IO.puts("📝 Job #{job_id} submitted with #{total_frames} frames @ #{fps}fps.")
+        
+        # Wait for completion (simple polling for CLI)
+        wait_for_job(job_id)
 
       {:error, reason} ->
-        IO.puts("NIF Error: #{inspect(reason)}")
+        IO.puts("Error getting video info: #{reason}")
+    end
+  end
 
-      json when is_binary(json) ->
-        handle_nif_result(json)
+  defp wait_for_job(job_id) do
+    state = FramerCore.Orchestrator.get_status()
+    
+    if state.job && state.job.id == job_id && state.job.status == :completed do
+      IO.puts("🎉 Job completed successfully!")
+      # In a real impl, we'd merge chunks here
+      merge_chunks(state.job)
+    else
+      Process.sleep(1000)
+      wait_for_job(job_id)
+    end
+  end
 
-      other ->
-        IO.puts("NIF Failure: #{inspect(other)}")
+  defp merge_chunks(job) do
+    state = FramerCore.Orchestrator.get_status()
+    chunks = state.completed_chunks
+    
+    IO.puts("🔗 Merging #{length(chunks)} chunks into final output: #{job.output_path}")
+    
+    # Create temp concat file
+    concat_file_path = "/tmp/framer_concat_#{job.id}.txt"
+    content = chunks 
+              |> Enum.sort_by(&(&1.start_frame))
+              |> Enum.map(fn chunk -> "file '#{chunk.output_path}'" end)
+              |> Enum.join("\n")
+    
+    File.write!(concat_file_path, content)
+    
+    # Use ffmpeg to merge
+    args = ["-y", "-f", "concat", "-safe", "0", "-i", concat_file_path, "-c", "copy", job.output_path]
+    
+    case System.cmd("ffmpeg", args) do
+      {_, 0} ->
+        IO.puts("✓ Success: #{job.output_path}")
+        # Clean up chunks
+        Enum.each(chunks, fn c -> File.rm(c.output_path) end)
+        File.rm(concat_file_path)
+      {err, _} ->
+        IO.puts("❌ Merging failed: #{err}")
     end
   end
 

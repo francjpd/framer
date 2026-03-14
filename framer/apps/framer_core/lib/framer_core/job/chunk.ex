@@ -8,9 +8,11 @@ defmodule FramerCore.Job.Chunk do
     :job_id,
     :start_frame,
     :end_frame,
+    :input_path,
+    :output_path,
+    :fps,
     :status,
     :worker_id,
-    :result_path,
     :inserted_at
   ]
 
@@ -19,21 +21,23 @@ defmodule FramerCore.Job.Chunk do
           job_id: String.t(),
           start_frame: non_neg_integer(),
           end_frame: non_neg_integer(),
+          input_path: String.t(),
+          output_path: String.t(),
           status: :pending | :assigned | :processing | :completed | :failed,
           worker_id: String.t() | nil,
-          result_path: String.t() | nil,
           inserted_at: DateTime.t()
         }
 
-  def new(job_id, start_frame, end_frame) do
+  def new(job_id, start_frame, end_frame, input_path, output_path) do
     %__MODULE__{
       id: UUID.uuid4(),
       job_id: job_id,
       start_frame: start_frame,
       end_frame: end_frame,
+      input_path: input_path,
+      output_path: output_path,
       status: :pending,
       worker_id: nil,
-      result_path: nil,
       inserted_at: DateTime.utc_now()
     }
   end
