@@ -1,7 +1,6 @@
-defmodule FramerCore.WorkerRegistry do
+defmodule FramerCore.PlayerRegistry do
   @moduledoc """
-  Registry for workers - allows looking up workers by ID.
-  Uses Elixir's Registry for fast lookups.
+  Registry for players - allows looking up players by ID.
   """
 
   def child_spec(_opts) do
