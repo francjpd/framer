@@ -80,6 +80,9 @@ defmodule FramerCore.Orchestrator do
       true -> 30.0
     end
 
+    target_fps = opts[:target_fps]
+    target_fps = if is_binary(target_fps), do: String.to_integer(target_fps), else: target_fps
+
     job = %Job{
       id: UUID.uuid4(),
       input_path: input_path,
@@ -89,7 +92,7 @@ defmodule FramerCore.Orchestrator do
       status: :processing
     }
 
-    chunks = create_chunks(job, chunk_size, fps)
+    chunks = create_chunks(job, chunk_size, fps, target_fps)
 
     {initial_work, remaining} = Enum.split(chunks, length(state.players))
     
@@ -237,7 +240,7 @@ defmodule FramerCore.Orchestrator do
     }}
   end
 
-  defp create_chunks(job, chunk_size, fps) do
+  defp create_chunks(job, chunk_size, fps, target_fps) do
     total_frames = job.total_frames
     total_chunks = ceil(total_frames / chunk_size)
 
@@ -255,6 +258,7 @@ defmodule FramerCore.Orchestrator do
         input_path: job.input_path,
         output_path: chunk_out,
         fps: fps,
+        target_fps: target_fps,
         status: :pending
       }
     end

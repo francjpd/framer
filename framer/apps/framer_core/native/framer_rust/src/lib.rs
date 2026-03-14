@@ -99,6 +99,7 @@ pub fn process_chunk(
     start_frame: u64,
     end_frame: u64,
     fps: f64,
+    target_fps: Option<u32>,
     hwaccel: Option<String>,
 ) -> NifResult<(Atom, String)> {
     let path = Path::new(&input_path);
@@ -118,13 +119,35 @@ pub fn process_chunk(
         args.extend(ops::common::get_hwaccel_args(&accel));
     }
 
+    // --- Key fix for parallel interpolation ---
+    // If we are interpolating, we need a bit of "overlap" context for motion vectors.
+    // We'll read 2 frames extra at the end if possible.
+    let overlap = if target_fps.is_some() { 2 } else { 0 };
+    let actual_end = end_frame + overlap;
+    
+    let start_time = start_frame as f64 / fps;
+    let duration = (actual_end - start_frame + 1) as f64 / fps;
+
     args.extend(vec![
+        "-ss".into(),
+        format!("{:.4}", start_time),
+        "-t".into(),
+        format!("{:.4}", duration),
         "-i".into(),
         input_path.clone(),
-        "-ss".into(),
-        format!("{}", start_frame as f64 / fps),
-        "-frames:v".into(),
-        format!("{}", end_frame - start_frame + 1),
+    ]);
+
+    // Add interpolation filter if target_fps is provided
+    if let Some(target) = target_fps {
+        let filter_str = format!(
+            "minterpolate=fps={}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1",
+            target
+        );
+        args.push("-vf".into());
+        args.push(filter_str);
+    }
+
+    args.extend(vec![
         "-c:v".into(),
         "libx264".into(),
         "-preset".into(),

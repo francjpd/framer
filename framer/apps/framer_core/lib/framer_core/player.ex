@@ -74,7 +74,7 @@ defmodule FramerCore.Player do
       
       # For demo purposes/testing if NIF is not loaded, we wrap it
       try do
-        FramerCore.Rust.process_chunk(chunk.input_path, chunk.output_path, chunk.start_frame, chunk.end_frame, chunk.fps || 30.0, hwaccel)
+        FramerCore.Rust.process_chunk(chunk.input_path, chunk.output_path, chunk.start_frame, chunk.end_frame, chunk.fps || 30.0, chunk.target_fps, hwaccel)
       rescue
         e -> {:error, "NIF Crash: #{inspect(e)}"}
       catch
