@@ -50,8 +50,8 @@ defmodule FramerCore.Orchestrator do
   # Server Callbacks
 
   @impl true
-  def init(_opts) do
-    players = ["cpu-1", "cpu-2", "gpu-1"]
+  def init(opts) do
+    players = opts[:players] || ["cpu-1", "cpu-2", "gpu-1"]
     
     {:ok,
      %__MODULE__{
@@ -70,7 +70,12 @@ defmodule FramerCore.Orchestrator do
     total_frames = opts[:total_frames]
     total_frames = if is_binary(total_frames), do: String.to_integer(total_frames), else: total_frames
     
-    chunk_size = opts[:chunk_size] || 50
+    # --- Dynamic Chunking Logic ---
+    # Aim for (Players * 4) chunks so that faster players always have work to "steal"
+    player_count = length(state.players)
+    default_chunk_size = max(10, div(total_frames, player_count * 4))
+    
+    chunk_size = opts[:chunk_size] || default_chunk_size
     chunk_size = if is_binary(chunk_size), do: String.to_integer(chunk_size), else: chunk_size
     
     fps = opts[:fps] || 30.0
