@@ -8,7 +8,7 @@ defmodule FramerCore.Rust do
 
   # Existing NIFs
   def get_video_info(_path), do: :erlang.nif_error(:nif_not_loaded)
-  def process_chunk(_input, _output, _start, _end), do: :erlang.nif_error(:nif_not_loaded)
+  def process_chunk(_input, _output, _start, _end, _fps, _hwaccel \\ nil), do: :erlang.nif_error(:nif_not_loaded)
   def transcode(_input, _output, _codec, _bitrate), do: :erlang.nif_error(:nif_not_loaded)
   def apply_filter(_input, _output, _filter), do: :erlang.nif_error(:nif_not_loaded)
 

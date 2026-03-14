@@ -98,28 +98,45 @@ pub fn process_chunk(
     output_path: String,
     start_frame: u64,
     end_frame: u64,
+    fps: f64,
+    hwaccel: Option<String>,
 ) -> NifResult<(Atom, String)> {
     let path = Path::new(&input_path);
     if !path.exists() {
         return Err(Error::Atom("file_not_found"));
     }
 
-    match ops::common::run_ffmpeg(&[
-        "-y",
-        "-i",
-        &input_path,
-        "-ss",
-        &format!("{}", start_frame as f64 / 30.0),
-        "-frames:v",
-        &format!("{}", end_frame - start_frame + 1),
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "23",
-        &output_path,
-    ]) {
+    let mut args = vec![
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "error".into(),
+        "-y".into(),
+    ];
+
+    // Add hardware acceleration if specified
+    if let Some(accel) = hwaccel {
+        args.extend(ops::common::get_hwaccel_args(&accel));
+    }
+
+    args.extend(vec![
+        "-i".into(),
+        input_path.clone(),
+        "-ss".into(),
+        format!("{}", start_frame as f64 / fps),
+        "-frames:v".into(),
+        format!("{}", end_frame - start_frame + 1),
+        "-c:v".into(),
+        "libx264".into(),
+        "-preset".into(),
+        "fast".into(),
+        "-crf".into(),
+        "23".into(),
+        output_path.clone(),
+    ]);
+
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    match ops::common::run_ffmpeg(&args_ref) {
         Ok(_) => Ok((atoms::ok(), output_path)),
         Err(e) => Err(e),
     }

@@ -130,6 +130,21 @@ pub fn validate_path(path: &str) -> Result<std::path::PathBuf, Error> {
 }
 
 /// Get the FPS of a video file.
+/// Get FFmpeg arguments for hardware acceleration.
+pub fn get_hwaccel_args(accel_type: &str) -> Vec<String> {
+    match accel_type {
+        "auto" => vec!["-hwaccel".into(), "auto".into()],
+        "cuda" => vec![
+            "-hwaccel".into(),
+            "cuda".into(),
+            "-hwaccel_output_format".into(),
+            "cuda".into(),
+        ],
+        "vaapi" => vec!["-hwaccel".into(), "vaapi".into()],
+        _ => vec![],
+    }
+}
+
 pub fn get_fps(path: &str) -> Result<f64, Error> {
     let fps_str = run_ffprobe(&[
         "-v",
