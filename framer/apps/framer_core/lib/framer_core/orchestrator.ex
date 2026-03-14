@@ -15,7 +15,8 @@ defmodule FramerCore.Orchestrator do
     :active_chunks,
     :completed_chunks,
     :players,
-    :total_chunks
+    :total_chunks,
+    total_errors: 0
   ]
 
   @type t :: %__MODULE__{
@@ -24,7 +25,8 @@ defmodule FramerCore.Orchestrator do
           active_chunks: %{String.t() => Chunk.t()},
           completed_chunks: [Chunk.t()],
           players: [String.t()],
-          total_chunks: non_neg_integer()
+          total_chunks: non_neg_integer(),
+          total_errors: non_neg_integer()
         }
 
   # Client API
@@ -58,7 +60,8 @@ defmodule FramerCore.Orchestrator do
        active_chunks: %{},
        completed_chunks: [],
        players: players,
-       total_chunks: 0
+       total_chunks: 0,
+       total_errors: 0
      }}
   end
 
@@ -105,7 +108,8 @@ defmodule FramerCore.Orchestrator do
          chunk_queue: remaining,
          active_chunks: active_chunks,
          completed_chunks: [],
-         total_chunks: length(chunks)
+         total_chunks: length(chunks),
+         total_errors: 0
      }}
   end
 
@@ -117,20 +121,35 @@ defmodule FramerCore.Orchestrator do
 
   @impl true
   def handle_info({:prefetch_request, player_id}, state) do
-    case state.chunk_queue do
-      [] ->
-        {:noreply, state}
+    # Only assign work if the job is still processing
+    if state.job && state.job.status == :processing do
+        # Find a player's type (cpu/gpu)
+        player_status = Player.get_status(player_id)
+        player_type = player_status.type
 
-      [chunk | rest] ->
-        Player.process_chunk(player_id, chunk)
-        new_active = Map.put(state.active_chunks, player_id, chunk)
-        {:noreply, %{state | chunk_queue: rest, active_chunks: new_active}}
+        # Find eligible chunk: 
+        # 1. Not failed by this specific player
+        # 2. If it failed on GPU before, prefer CPU now
+        {chunk, rest} = find_eligible_chunk(state.chunk_queue, player_id, player_type)
+
+        case chunk do
+          nil ->
+            {:noreply, state}
+
+          chunk ->
+            Player.process_chunk(player_id, chunk)
+            new_active = Map.put(state.active_chunks, player_id, chunk)
+            {:noreply, %{state | chunk_queue: rest, active_chunks: new_active}}
+        end
+    else
+        {:noreply, state}
     end
   end
 
   @impl true
   def handle_info({:chunk_finished, player_id, chunk_id, result}, state) do
     {chunk, new_active} = Map.pop(state.active_chunks, player_id)
+    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
     
     if chunk && chunk.id == chunk_id do
       case result do
@@ -140,18 +159,37 @@ defmodule FramerCore.Orchestrator do
         {:ok, _path} ->
           handle_chunk_success(chunk, state, new_active)
 
-        error ->
-          IO.puts("⚠️ [Orchestrator] Chunk #{chunk_id} failed with #{inspect(error)}. Re-queueing to the back...")
-          # Re-queue the failed chunk to the back of the queue
-          new_queue = state.chunk_queue ++ [chunk]
+        _error ->
+          # Increment retry count and add to blacklist
+          updated_chunk = %{chunk | 
+            retry_count: chunk.retry_count + 1,
+            failed_by: [player_id | chunk.failed_by]
+          }
           
-          # Proactively try to assign work since a player just became available
-          # BUT wait, the prefetch_request is coming next, so it should be fine.
-          # The real issue is if the queue was empty and prefetch arrived BEFORE the re-queue.
-          # To be safe, we can manually trigger a prefetch for the player that just finished.
+          new_total_errors = state.total_errors + 1
+          IO.puts("⚠️ [#{timestamp}] [Orchestrator] FAILURE: Chunk #{chunk_id |> String.slice(0..7)} failed on #{player_id} (Retry #{updated_chunk.retry_count}).")
           
-          send(self(), {:prefetch_request, player_id})
-          {:noreply, %{state | active_chunks: new_active, chunk_queue: new_queue}}
+          cond do
+            updated_chunk.retry_count >= 3 ->
+                IO.puts("🚨 [#{timestamp}] [Orchestrator] SKIPPING chunk #{chunk_id |> String.slice(0..7)}: Too many retries.")
+                # We skip the chunk instead of aborting the whole job now
+                handle_chunk_success(updated_chunk, %{state | total_errors: new_total_errors}, new_active)
+
+            new_total_errors >= 20 ->
+                IO.puts("🚨 [#{timestamp}] [Orchestrator] CRITICAL: Global error limit reached (20). ABORTING JOB.")
+                {:noreply, %{state | 
+                    active_chunks: new_active, 
+                    total_errors: new_total_errors,
+                    chunk_queue: [],
+                    job: %{state.job | status: :failed}
+                }}
+
+            true ->
+                # Re-queue the failed chunk to the FRONT of the queue to try another player immediately
+                new_queue = [updated_chunk | state.chunk_queue]
+                send(self(), {:prefetch_request, player_id})
+                {:noreply, %{state | active_chunks: new_active, chunk_queue: new_queue, total_errors: new_total_errors}}
+          end
       end
     else
       # If chunk mismatch, just pop from active and don't re-queue (someone else might have it)
@@ -161,12 +199,34 @@ defmodule FramerCore.Orchestrator do
 
   # Private functions
 
+  defp find_eligible_chunk(queue, player_id, player_type) do
+    # Find the first chunk that wasn't failed by this player
+    # And if this is a GPU player, avoid chunks that already failed on GPU once
+    index = Enum.find_index(queue, fn chunk ->
+        not (player_id in chunk.failed_by) and not (player_type == :gpu and chunk.retry_count > 0)
+    end)
+
+    if index do
+        {chunk, rest} = List.pop_at(queue, index)
+        {chunk, rest}
+    else
+        # If no "perfect" chunk, just take the first one if we haven't failed it ourselves
+        fallback_index = Enum.find_index(queue, fn chunk -> not (player_id in chunk.failed_by) end)
+        if fallback_index do
+            List.pop_at(queue, fallback_index)
+        else
+            {nil, queue}
+        end
+    end
+  end
+
   defp handle_chunk_success(chunk, state, new_active) do
     new_completed = [chunk | state.completed_chunks]
     completed_count = length(new_completed)
+    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
     
     percent = (completed_count / state.total_chunks * 100) |> Float.round(1)
-    IO.puts("📊 [Orchestrator] Overall progress: #{percent}% (#{completed_count}/#{state.total_chunks} chunks)")
+    IO.puts("📊 [#{timestamp}] [Orchestrator] PROGRESS: #{percent}% (#{completed_count}/#{state.total_chunks} chunks). Queue size: #{length(state.chunk_queue)}")
 
     new_job_status = if completed_count >= state.total_chunks, do: :completed, else: :processing
     

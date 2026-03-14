@@ -13,7 +13,9 @@ defmodule FramerCore.Job.Chunk do
     :fps,
     :status,
     :worker_id,
-    :inserted_at
+    :inserted_at,
+    retry_count: 0,
+    failed_by: []
   ]
 
   @type t :: %__MODULE__{
@@ -25,7 +27,9 @@ defmodule FramerCore.Job.Chunk do
           output_path: String.t(),
           status: :pending | :assigned | :processing | :completed | :failed,
           worker_id: String.t() | nil,
-          inserted_at: DateTime.t()
+          inserted_at: DateTime.t(),
+          retry_count: non_neg_integer(),
+          failed_by: [String.t()]
         }
 
   def new(job_id, start_frame, end_frame, input_path, output_path) do

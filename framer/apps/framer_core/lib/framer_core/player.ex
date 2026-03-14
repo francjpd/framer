@@ -13,6 +13,7 @@ defmodule FramerCore.Player do
     :status,
     :type,
     :current_chunk,
+    :current_task_ref,
     :progress,
     :total_processed
   ]
@@ -22,6 +23,7 @@ defmodule FramerCore.Player do
           status: :idle | :busy,
           type: :cpu | :gpu,
           current_chunk: Chunk.t() | nil,
+          current_task_ref: reference() | nil,
           progress: float(),
           total_processed: non_neg_integer()
         }
@@ -55,6 +57,7 @@ defmodule FramerCore.Player do
        type: opts[:type] || :cpu,
        status: :idle,
        current_chunk: nil,
+       current_task_ref: nil,
        progress: 0.0,
        total_processed: 0
      }}
@@ -63,27 +66,23 @@ defmodule FramerCore.Player do
   @impl true
   def handle_cast({:process_chunk, chunk}, state) do
     # Log starting work
-    IO.puts("🎬 [Player #{state.type |> Atom.to_string() |> String.upcase()}-#{state.id |> String.slice(0..7)}] Starting chunk: frames #{chunk.start_frame}-#{chunk.end_frame}")
+    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
+    IO.puts("🎬 [#{timestamp}] [Player #{state.type |> Atom.to_string() |> String.upcase()}-#{state.id |> String.slice(0..7)}] BUSY: Processing chunk #{chunk.id |> String.slice(0..7)} (frames #{chunk.start_frame}-#{chunk.end_frame})")
 
-    # Capture self() for the task
-    player_pid = self()
-
-    Task.start(fn ->
-      hwaccel = if state.type == :gpu, do: "auto", else: nil
+    task = Task.async(fn ->
+      hwaccel = if state.type == :gpu, do: "vaapi", else: nil
       
-      result = FramerCore.Rust.process_chunk(chunk.input_path, chunk.output_path, chunk.start_frame, chunk.end_frame, chunk.fps || 30.0, hwaccel)
-      
-      case result do
-        {:error, _} when state.type == :gpu ->
-          IO.puts("⚠️ [Player GPU-#{state.id |> String.slice(0..7)}] GPU failed, falling back to CPU...")
-          retry_result = FramerCore.Rust.process_chunk(chunk.input_path, chunk.output_path, chunk.start_frame, chunk.end_frame, chunk.fps || 30.0, nil)
-          send(player_pid, {:task_finished, chunk.id, retry_result})
-        _ ->
-          send(player_pid, {:task_finished, chunk.id, result})
+      # For demo purposes/testing if NIF is not loaded, we wrap it
+      try do
+        FramerCore.Rust.process_chunk(chunk.input_path, chunk.output_path, chunk.start_frame, chunk.end_frame, chunk.fps || 30.0, hwaccel)
+      rescue
+        e -> {:error, "NIF Crash: #{inspect(e)}"}
+      catch
+        kind, reason -> {:error, "NIF Crash: #{inspect(kind)} #{inspect(reason)}"}
       end
     end)
 
-    {:noreply, %{state | status: :busy, current_chunk: chunk}}
+    {:noreply, %{state | status: :busy, current_chunk: chunk, current_task_ref: task.ref}}
   end
 
   @impl true
@@ -91,11 +90,28 @@ defmodule FramerCore.Player do
     {:reply, state, state}
   end
 
+  # Handle task completion
   @impl true
-  def handle_info({:task_finished, chunk_id, result}, state) do
-    if state.current_chunk && state.current_chunk.id == chunk_id do
-        status_label = if result == :ok || match?({:ok, _}, result), do: "Finished", else: "FAILED"
-        IO.puts("✅ [Player #{state.type |> Atom.to_string() |> String.upcase()}-#{state.id |> String.slice(0..7)}] #{status_label} chunk.")
+  def handle_info({ref, result}, %{current_task_ref: ref} = state) do
+    # Flush the DOWN message
+    Process.demonitor(ref, [:flush])
+    
+    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
+    chunk_id = state.current_chunk.id
+
+    case result do
+      {:error, reason} when state.type == :gpu ->
+        IO.puts("⚠️ [#{timestamp}] [Player GPU-#{state.id |> String.slice(0..7)}] GPU FAILURE: #{inspect(reason)}. Falling back to CPU...")
+        
+        # Retry on CPU immediately in a task
+        task = Task.async(fn ->
+            FramerCore.Rust.process_chunk(state.current_chunk.input_path, state.current_chunk.output_path, state.current_chunk.start_frame, state.current_chunk.end_frame, state.current_chunk.fps || 30.0, nil)
+        end)
+        {:noreply, %{state | current_task_ref: task.ref}}
+
+      _ ->
+        status_label = if result == :ok || match?({:ok, _}, result), do: "SUCCESS", else: "FAILED"
+        IO.puts("✅ [#{timestamp}] [Player #{state.type |> Atom.to_string() |> String.upcase()}-#{state.id |> String.slice(0..7)}] IDLE: #{status_label} chunk #{chunk_id |> String.slice(0..7)}.")
         
         # Notify Orchestrator of completion
         send(FramerCore.Orchestrator.pid(), {:chunk_finished, state.id, chunk_id, result})
@@ -103,9 +119,29 @@ defmodule FramerCore.Player do
         # Ask for more work
         send(FramerCore.Orchestrator.pid(), {:prefetch_request, state.id})
         
-        {:noreply, %{state | status: :idle, current_chunk: nil, total_processed: state.total_processed + 1}}
-    else
-        {:noreply, state}
+        {:noreply, %{state | status: :idle, current_chunk: nil, current_task_ref: nil, total_processed: state.total_processed + 1}}
     end
+  end
+
+  # Handle task failure
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{current_task_ref: ref} = state) do
+    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
+    chunk_id = state.current_chunk.id
+    
+    IO.puts("🚨 [#{timestamp}] [Player #{state.type |> Atom.to_string() |> String.upcase()}-#{state.id |> String.slice(0..7)}] CRASHED while processing chunk #{chunk_id |> String.slice(0..7)}: #{inspect(reason)}")
+    
+    # Notify Orchestrator of failure
+    send(FramerCore.Orchestrator.pid(), {:chunk_finished, state.id, chunk_id, {:error, :crashed}})
+    
+    # Ready for more work despite failure
+    send(FramerCore.Orchestrator.pid(), {:prefetch_request, state.id})
+    
+    {:noreply, %{state | status: :idle, current_chunk: nil, current_task_ref: nil}}
+  end
+
+  @impl true
+  def handle_info(_msg, state) do
+    {:noreply, state}
   end
 end
