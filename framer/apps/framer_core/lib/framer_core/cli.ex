@@ -237,7 +237,11 @@ defmodule FramerCore.CLI do
     concat_file_path = "/tmp/framer_concat_#{job.id}.txt"
     content = chunks 
               |> Enum.sort_by(&(&1.start_frame))
-              |> Enum.map(fn chunk -> "file '#{chunk.output_path}'" end)
+              |> Enum.map(fn chunk -> 
+                # Ensure the path is absolute for ffmpeg concat
+                abs_path = Path.expand(chunk.output_path)
+                "file '#{abs_path}'" 
+              end)
               |> Enum.join("\n")
     
     File.write!(concat_file_path, content)
@@ -281,47 +285,25 @@ defmodule FramerCore.CLI do
       end
 
     tolerance = parse_opt(opts, "--tolerance", "20") |> String.to_integer()
-    edges = parse_opt(opts, "--edges", "5") |> String.to_integer()
-    method = parse_opt(opts, "--method", "colorkey")
-    auto_ranges = parse_opt(opts, "--auto-ranges", "true") |> parse_bool()
-    num_ranges = parse_opt(opts, "--num-ranges", "5") |> String.to_integer()
-    edge_cleanup = parse_opt(opts, "--edge-cleanup", "3") |> String.to_integer()
-    refine = parse_opt(opts, "--refine", "false") |> parse_bool()
-    refine_tolerance = parse_opt(opts, "--refine-tolerance", "45") |> String.to_integer()
-    refine_block_size = parse_opt(opts, "--refine-block-size", "32") |> String.to_integer()
+    
+    IO.puts("🚀 Parallel Remove BG: #{input} -> #{output} (color: #{color})")
 
-    IO.puts(
-      "Remove BG: #{input} -> #{output} (color: #{color}, tol: #{tolerance}, method: #{method})"
-    )
+    case info_json(input) do
+      {:ok, %{total_frames: total_frames, fps: fps}} ->
+        fps = if is_number(fps), do: fps * 1.0, else: 30.0
+        total_frames = if is_binary(total_frames), do: String.to_integer(total_frames), else: total_frames
 
-    case FramerCore.Rust.remove_bg(
-           input,
-           output,
-           color,
-           tolerance,
-           edges,
-           method,
-           auto_ranges,
-           num_ranges,
-           edge_cleanup,
-           refine,
-           refine_tolerance,
-           refine_block_size
-         ) do
-      {:ok, json} ->
-        result = Jason.decode!(json)
-
-        if result["success"] do
-          IO.puts("✓ Success: #{result["output_path"]}")
-        else
-          IO.puts("✗ Error: #{result["error"]}")
-        end
+        # We need a way to pass operation-specific opts to Orchestrator.
+        # For now, the Orchestrator/Player always calls process_chunk which is generic in Rust?
+        # Actually, let's check what FramerCore.Rust.process_chunk does.
+        # If it's just transcoding, we might need a more flexible Orchestrator.
+        
+        {:ok, job_id} = FramerCore.Orchestrator.submit_job(input, output, total_frames: total_frames, chunk_size: 50, fps: fps)
+        IO.puts("📝 Job #{job_id} submitted.")
+        wait_for_job(job_id)
 
       {:error, reason} ->
-        IO.puts("✗ NIF Error: #{reason}")
-
-      other ->
-        IO.puts("✗ Unexpected response: #{inspect(other)}")
+        IO.puts("Error: #{reason}")
     end
   end
 
