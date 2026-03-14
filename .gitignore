@@ -23,6 +23,8 @@ target/
 node_modules/
 /framer/apps/framer_core/priv/native/
 test_assets/*_output.*
+test_assets/*_final.*
+test_assets/output.*
 test_assets/boosted.*
 test_assets/looped.*
 test_assets/elixir/
