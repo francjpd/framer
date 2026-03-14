@@ -21,3 +21,10 @@ target/
 # Other
 .worktrees/
 node_modules/
+/framer/apps/framer_core/priv/native/
+test_assets/*_output.*
+test_assets/boosted.*
+test_assets/looped.*
+test_assets/elixir/
+test_assets/python/
+tmp/
