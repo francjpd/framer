@@ -16,6 +16,7 @@ defmodule FramerCore.Orchestrator do
     :completed_chunks,
     :players,
     :total_chunks,
+    :temp_dir,
     total_errors: 0
   ]
 
@@ -26,6 +27,7 @@ defmodule FramerCore.Orchestrator do
           completed_chunks: [Chunk.t()],
           players: [String.t()],
           total_chunks: non_neg_integer(),
+          temp_dir: String.t() | nil,
           total_errors: non_neg_integer()
         }
 
@@ -53,6 +55,9 @@ defmodule FramerCore.Orchestrator do
   def init(opts) do
     players = opts[:players] || ["cpu-1", "cpu-2", "gpu-1"]
     
+    # Trap exits to ensure cleanup
+    Process.flag(:trap_exit, true)
+
     {:ok,
      %__MODULE__{
        job: nil,
@@ -61,17 +66,24 @@ defmodule FramerCore.Orchestrator do
        completed_chunks: [],
        players: players,
        total_chunks: 0,
+       temp_dir: nil,
        total_errors: 0
      }}
   end
 
   @impl true
   def handle_call({:submit_job, input_path, output_path, opts}, _from, state) do
+    # Cleanup previous temp dir if it exists
+    if state.temp_dir, do: File.rm_rf(state.temp_dir)
+
     total_frames = opts[:total_frames]
     total_frames = if is_binary(total_frames), do: String.to_integer(total_frames), else: total_frames
     
+    # Create unique temp dir for this job
+    temp_dir = Path.join(System.tmp_dir!(), "framer_job_#{UUID.uuid4()}")
+    File.mkdir_p!(temp_dir)
+
     # --- Dynamic Chunking Logic ---
-    # Aim for (Players * 4) chunks so that faster players always have work to "steal"
     player_count = length(state.players)
     default_chunk_size = max(10, div(total_frames, player_count * 4))
     
@@ -97,7 +109,7 @@ defmodule FramerCore.Orchestrator do
       status: :processing
     }
 
-    chunks = create_chunks(job, chunk_size, fps, target_fps)
+    chunks = create_chunks(job, chunk_size, fps, target_fps, temp_dir)
 
     {initial_work, remaining} = Enum.split(chunks, length(state.players))
     
@@ -117,6 +129,7 @@ defmodule FramerCore.Orchestrator do
          active_chunks: active_chunks,
          completed_chunks: [],
          total_chunks: length(chunks),
+         temp_dir: temp_dir,
          total_errors: 0
      }}
   end
@@ -125,6 +138,16 @@ defmodule FramerCore.Orchestrator do
   def handle_call(:get_status, _from, state) do
     sorted_completed = Enum.sort_by(state.completed_chunks, &(&1.start_frame))
     {:reply, %{state | completed_chunks: sorted_completed}, state}
+  end
+
+  # Ensure cleanup on process exit
+  @impl true
+  def terminate(_reason, state) do
+    if state.temp_dir do
+      IO.puts("🧹 [Orchestrator] Cleaning up temporary chunks in #{state.temp_dir}...")
+      File.rm_rf(state.temp_dir)
+    end
+    :ok
   end
 
   @impl true
@@ -195,12 +218,15 @@ defmodule FramerCore.Orchestrator do
             true ->
                 # Re-queue the failed chunk to the FRONT of the queue to try another player immediately
                 new_queue = [updated_chunk | state.chunk_queue]
+                # Trigger prefetch via message instead of calling player directly here
                 send(self(), {:prefetch_request, player_id})
                 {:noreply, %{state | active_chunks: new_active, chunk_queue: new_queue, total_errors: new_total_errors}}
           end
       end
     else
       # If chunk mismatch, just pop from active and don't re-queue (someone else might have it)
+      # Still ask for more work if we're now idle
+      send(self(), {:prefetch_request, player_id})
       {:noreply, %{state | active_chunks: new_active}}
     end
   end
@@ -245,15 +271,16 @@ defmodule FramerCore.Orchestrator do
     }}
   end
 
-  defp create_chunks(job, chunk_size, fps, target_fps) do
+  defp create_chunks(job, chunk_size, fps, target_fps, temp_dir) do
     total_frames = job.total_frames
     total_chunks = ceil(total_frames / chunk_size)
+    ext = Path.extname(job.output_path)
 
     for i <- 0..(total_chunks - 1) do
       start_frame = i * chunk_size
       end_frame = min(start_frame + chunk_size - 1, total_frames - 1)
       
-      chunk_out = Path.join(Path.dirname(job.output_path), "chunk_#{i}_#{Path.basename(job.output_path)}")
+      chunk_out = Path.join(temp_dir, "chunk_#{i}#{ext}")
       
       %Chunk{
         id: UUID.uuid4(),

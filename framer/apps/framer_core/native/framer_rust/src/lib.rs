@@ -147,15 +147,14 @@ pub fn process_chunk(
         args.push(filter_str);
     }
 
-    args.extend(vec![
-        "-c:v".into(),
-        "libx264".into(),
-        "-preset".into(),
-        "fast".into(),
-        "-crf".into(),
-        "23".into(),
-        output_path.clone(),
-    ]);
+    // --- Dynamic Codec Selection ---
+    let ext = ops::common::get_extension(&output_path);
+    // For now assume alpha is needed if it's not mp4/mov-without-alpha
+    // Actually, detect_alpha from input is safer or just assume based on extension
+    let has_alpha = ops::common::detect_alpha(&input_path).unwrap_or(false);
+    
+    args.extend(ops::common::get_codec_args(&ext, has_alpha));
+    args.push(output_path.clone());
 
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
