@@ -29,7 +29,13 @@ defmodule FramerCore.CLI do
       ["fps-boost", input, output | opts] ->
         fps_boost(input, output, opts)
 
+      ["fps_boost", input, output | opts] ->
+        fps_boost(input, output, opts)
+
       ["remove-bg", input, output | opts] ->
+        remove_bg(input, output, opts)
+
+      ["remove_bg", input, output | opts] ->
         remove_bg(input, output, opts)
 
       ["loop", input, output | opts] ->
@@ -185,6 +191,13 @@ defmodule FramerCore.CLI do
 
   defp fps_boost(input, output, opts) do
     target_fps = parse_opt(opts, "--to", "60") |> String.to_integer()
+    workers = parse_opt(opts, "--workers", nil)
+    
+    if workers do
+      # Dynamically restart players if worker count is specified
+      FramerCore.Supervisor.set_worker_count(String.to_integer(workers))
+      wait_for_orchestrator()
+    end
     
     IO.puts("🚀 Parallel FPS Boost: #{input} -> #{output} (target: #{target_fps}fps)")
 
@@ -201,8 +214,18 @@ defmodule FramerCore.CLI do
        
         total_frames = if is_binary(total_frames), do: String.to_integer(total_frames), else: total_frames
         
-        # Submit job to Orchestrator
-        {:ok, job_id} = FramerCore.Orchestrator.submit_job(input, output, total_frames: total_frames, chunk_size: 50, fps: fps)
+        # Fallback for 0 frames (sometimes ffprobe quick check fails)
+        total_frames = if total_frames == 0 do
+          case System.cmd("ffprobe", ["-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", input]) do
+            {out, 0} -> String.trim(out) |> String.to_integer()
+            _ -> 0
+          end
+        else
+          total_frames
+        end
+        
+        # Submit job to Orchestrator (letting it decide chunk_size)
+        {:ok, job_id} = FramerCore.Orchestrator.submit_job(input, output, total_frames: total_frames, fps: fps, target_fps: target_fps)
         
         IO.puts("📝 Job #{job_id} submitted with #{total_frames} frames @ #{fps}fps.")
         
@@ -211,6 +234,15 @@ defmodule FramerCore.CLI do
 
       {:error, reason} ->
         IO.puts("Error getting video info: #{reason}")
+    end
+  end
+
+  defp wait_for_orchestrator do
+    if Process.whereis(FramerCore.Orchestrator) do
+      :ok
+    else
+      Process.sleep(100)
+      wait_for_orchestrator()
     end
   end
 
@@ -252,8 +284,7 @@ defmodule FramerCore.CLI do
     case System.cmd("ffmpeg", args) do
       {_, 0} ->
         IO.puts("✓ Success: #{job.output_path}")
-        # Clean up chunks
-        Enum.each(chunks, fn c -> File.rm(c.output_path) end)
+        # Note: Chunks are cleaned up by Orchestrator on exit/new job
         File.rm(concat_file_path)
       {err, _} ->
         IO.puts("❌ Merging failed: #{err}")
@@ -292,6 +323,16 @@ defmodule FramerCore.CLI do
       {:ok, %{total_frames: total_frames, fps: fps}} ->
         fps = if is_number(fps), do: fps * 1.0, else: 30.0
         total_frames = if is_binary(total_frames), do: String.to_integer(total_frames), else: total_frames
+        
+        # Fallback for 0 frames (sometimes ffprobe quick check fails)
+        total_frames = if total_frames == 0 do
+          case System.cmd("ffprobe", ["-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", input]) do
+            {out, 0} -> String.trim(out) |> String.to_integer()
+            _ -> 0
+          end
+        else
+          total_frames
+        end
 
         # We need a way to pass operation-specific opts to Orchestrator.
         # For now, the Orchestrator/Player always calls process_chunk which is generic in Rust?

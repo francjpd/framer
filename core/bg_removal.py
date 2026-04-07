@@ -314,17 +314,17 @@ def _process_frame(
 
         lower = np.array(
             [
-                max(0, bg_b - tolerance),
-                max(0, bg_g - tolerance),
-                max(0, bg_r - tolerance),
+                max(0, int(bg_b - tolerance)),
+                max(0, int(bg_g - tolerance)),
+                max(0, int(bg_r - tolerance)),
             ],
             dtype=np.uint8,
         )
         upper = np.array(
             [
-                min(255, bg_b + tolerance),
-                min(255, bg_g + tolerance),
-                min(255, bg_r + tolerance),
+                min(255, int(bg_b + tolerance)),
+                min(255, int(bg_g + tolerance)),
+                min(255, int(bg_r + tolerance)),
             ],
             dtype=np.uint8,
         )
@@ -363,17 +363,17 @@ def _process_frame_gpu(
 
         lower = np.array(
             [
-                max(0, bg_b - tolerance),
-                max(0, bg_g - tolerance),
-                max(0, bg_r - tolerance),
+                max(0, int(bg_b - tolerance)),
+                max(0, int(bg_g - tolerance)),
+                max(0, int(bg_r - tolerance)),
             ],
             dtype=np.uint8,
         )
         upper = np.array(
             [
-                min(255, bg_b + tolerance),
-                min(255, bg_g + tolerance),
-                min(255, bg_r + tolerance),
+                min(255, int(bg_b + tolerance)),
+                min(255, int(bg_g + tolerance)),
+                min(255, int(bg_r + tolerance)),
             ],
             dtype=np.uint8,
         )

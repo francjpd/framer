@@ -30,3 +30,8 @@ test_assets/looped.*
 test_assets/elixir/
 test_assets/python/
 tmp/
+
+*.webm
+*.mp4
+*.gif
+

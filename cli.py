@@ -88,7 +88,7 @@ def remove_bg_cmd(
     config: Annotated[Optional[str], typer.Option("--config", help="Path to JSON config file")] = None,
 ):
     kwargs = {
-        "color": parse_color(color) if color else None,
+        "color": list(parse_color(color)) if color else None,
         "tolerance": tolerance,
         "edges": edges,
         "auto_ranges": auto_ranges,
