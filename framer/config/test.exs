@@ -3,6 +3,11 @@ import Config
 # Keep the test worker pool small and deterministic.
 config :framer_core, worker_count: 2
 
+# Filesystem-first editor persistence: give the test suite its own projects
+# root so `mix test` never reads or writes a developer's real projects.
+config :framer_web,
+  projects_dir: Path.join(System.tmp_dir!(), "framer_web_projects_test")
+
 # Configure your database (commented out: requires PostgreSQL)
 #
 # The MIX_TEST_PARTITION environment variable can be used

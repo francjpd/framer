@@ -31,6 +31,18 @@ defmodule FramerWebWeb.Router do
     get "/status", JobController, :status
     post "/jobs", JobController, :create
     get "/jobs/:id", JobController, :show
+
+    # Editor rig surface: the versioned rig JSON is the contract with the
+    # engine, and these routes persist it filesystem-first and drive the
+    # existing `deform` operation (never shipping pixels to the BEAM).
+    get "/rigs", RigController, :index
+    post "/rigs", RigController, :create
+    get "/rigs/:id", RigController, :show
+    put "/rigs/:id", RigController, :update
+    post "/rigs/:id/render", RigController, :render
+    post "/rigs/:id/export", RigController, :export
+    get "/rigs/:id/source", RigController, :source
+    get "/rigs/:id/result", RigController, :result
   end
 
   # Other scopes may use custom stacks.
