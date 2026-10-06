@@ -342,8 +342,7 @@ def my_operation(input_path, output_path, param1=10):
 ## 📋 Requirements
 
 - Python 3.9+ and the packages in [`requirements.txt`](requirements.txt)
-  (NumPy, OpenCV, Typer, Rich; PyTorch is optional and used for GPU
-  acceleration).
+  (NumPy, OpenCV, Typer, Rich, and PyTorch, which powers GPU acceleration).
 - Elixir `~> 1.15` with a matching Erlang/OTP (see
   [`framer/.tool-versions`](framer/.tool-versions)) for the orchestration layer.
 - FFmpeg (installed and in PATH).
