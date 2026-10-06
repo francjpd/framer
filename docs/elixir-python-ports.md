@@ -3,10 +3,9 @@
 This document describes how the Elixir/OTP orchestrator drives the working
 Python/OpenCV operation layer, and where remote/distributed workers plug in.
 
-The branch `poc/elixir-python` keeps the Elixir actor model (chunk queue,
-parallel players, progress, supervision) from the earlier POC, but replaces the
-Rust NIF / FFmpeg-filter operation layer with a **Port** to the Python core
-(`core/`, `ops/`, `cli.py`) that already worked.
+The Elixir actor model (chunk queue, parallel players, progress, supervision)
+comes from the earlier POC, but the Rust NIF / FFmpeg-filter operation layer was
+replaced with a **Port** to the Python core (`core/`, `ops/`, `cli.py`).
 
 ## Why Ports
 

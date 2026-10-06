@@ -25,14 +25,14 @@ FramerCore.Player ──► FramerCore.PortWorker ──► framer_worker.py
                                                    (OpenCV / FFmpeg)
 ```
 
-- **Chunked, parallel jobs** — the orchestrator splits a job into frame-range
+- **Chunked, parallel jobs** - the orchestrator splits a job into frame-range
   chunks and hands them to a pool of persistent players. Each player runs one
   chunk at a time and keeps one long-lived Python process for the life of the
   pool, so a crash in OpenCV/FFmpeg kills a worker process, never the BEAM.
-- **No pixel data crosses the BEAM** — a request is only file paths, a frame
+- **No pixel data crosses the BEAM** - a request is only file paths, a frame
   range and a JSON options object. `framer_worker.py` reads its input chunk,
   runs the Python core and writes its output chunk file.
-- **Distributed-ready seam** — `FramerCore.Dispatch` is the single place that
+- **Distributed-ready seam** - `FramerCore.Dispatch` is the single place that
   decides *where* a chunk runs. The local path is implemented and tested;
   `:remote` hands the same request to a `FramerCore.PortWorker` on another node
   through `:erpc.call/5`. Optional remote players are configured with
@@ -193,8 +193,8 @@ exposes a minimal JSON status/submit surface (`GET /api/status`,
 The planned **Phoenix LiveView editor** is a frame-by-frame UI for the
 bones/puppet-warp animation: viewport over the source still and rig mesh,
 a timeline of keyframes over the rig's frame range, and export that submits a
-`deform` job through the same job API. The engine half already ships — the rig
-schema and the chunked `deform` export run entirely through the Port contract —
+`deform` job through the same job API. The engine half already ships - the rig
+schema and the chunked `deform` export run entirely through the Port contract -
 while the editor itself is a follow-up task behind the `/editor` route shell.
 
 ## 📁 Repository layout
