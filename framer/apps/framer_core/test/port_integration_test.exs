@@ -8,6 +8,7 @@ defmodule FramerCore.PortIntegrationTest do
   use ExUnit.Case, async: false
 
   @moduletag :integration
+  @moduletag :requires_cv2
   @moduletag timeout: 300_000
 
   alias FramerCore.Orchestrator

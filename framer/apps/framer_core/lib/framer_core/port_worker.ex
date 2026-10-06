@@ -147,7 +147,13 @@ defmodule FramerCore.PortWorker do
     |> Map.new(fn {key, value} -> {to_string(key), value} end)
   end
 
-  defp python_executable do
+  @doc """
+  Resolve the Python interpreter used to spawn workers.
+
+  ``FRAMER_PYTHON`` / ``config :framer_core, :python_executable`` wins, then
+  ``<repo>/.venv/bin/python``, then ``python3`` on ``PATH``.
+  """
+  def python_executable do
     configured = Application.get_env(:framer_core, :python_executable)
     resolve_executable(configured || default_python())
   end
