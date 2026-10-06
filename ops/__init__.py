@@ -10,5 +10,6 @@ from core import get_registry, register_operation
 from ops import fps_boost
 from ops import remove_bg
 from ops import loop
+from ops import deform
 
-__all__ = ["fps_boost", "remove_bg"]
+__all__ = ["fps_boost", "remove_bg", "deform"]

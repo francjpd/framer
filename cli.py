@@ -15,6 +15,7 @@ Operations:
     recolor - Replace a specific color with a new color
     glow - Add a soft glow behind an object with a transparent background
     outline - Add a solid outline to a video with a transparent background
+    deform - Deform a still image with a rig/bones puppet warp
 """
 
 import sys
@@ -35,6 +36,7 @@ from ops.export import export_web as op_export
 from ops.recolor import recolor_video as op_recolor
 from ops.glow import add_glow as op_glow
 from ops.outline import add_outline as op_outline
+from ops.deform import deform_video as op_deform
 
 app = typer.Typer(
     help="Video processing CLI with composable operations",
@@ -281,6 +283,38 @@ def outline_cmd(
 ):
     try:
         result = op_outline(input_path=input_path, output_path=output_path, color=color, thickness=thickness, workers=workers, progress=progress)
+        handle_result(result)
+    except Exception as e:
+        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        sys.exit(1)
+
+
+@app.command(name="deform", help="Deform a still image with a rig/bones puppet warp")
+def deform_cmd(
+    input_path: Annotated[str, typer.Argument(help="Input still image (or video, first frame)")],
+    output_path: Annotated[str, typer.Argument(help="Output video (.webm/.mov/.gif) or image (.png) for one frame")],
+    rig: Annotated[str, typer.Option("-r", "--rig", help="Path to a framer.rig JSON document")],
+    start_frame: Annotated[int, typer.Option("--start-frame", help="First frame of the range")] = 0,
+    end_frame: Annotated[Optional[int], typer.Option("--end-frame", help="Last frame of the range (default: rig.duration.frames)")] = None,
+    fps: Annotated[Optional[float], typer.Option("--fps", help="Output fps (default: rig.duration.fps)")] = None,
+    iterations: Annotated[int, typer.Option("-i", "--iterations", help="Fixed-point inversion iterations")] = 5,
+    weights: Annotated[Optional[str], typer.Option("--weights", help="Optional dense-weight .npz cache path")] = None,
+    radius_scale: Annotated[Optional[float], typer.Option("--radius-scale", help="Scale all bone influence radii")] = None,
+    progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress")] = False,
+):
+    try:
+        result = op_deform(
+            input_path=input_path,
+            output_path=output_path,
+            rig=rig,
+            start_frame=start_frame,
+            end_frame=end_frame,
+            fps=fps,
+            iterations=iterations,
+            weights=weights,
+            radius_scale=radius_scale,
+            progress=progress,
+        )
         handle_result(result)
     except Exception as e:
         print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")

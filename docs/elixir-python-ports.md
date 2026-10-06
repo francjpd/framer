@@ -75,11 +75,22 @@ next queued chunk.
 | `remove-bg` | `core/bg_removal.py` (`_remove_bg_frame_processor`), `core/color_ranges.py`, `core/mask_refinement.py`, `core/motion_detection.py` | per-frame keying, chunkable; writes BGRA chunks |
 | `fps-boost` | `ffmpeg` (same filter choices as `ops/fps_boost.py`) | interpolates a frame range, chunkable |
 | `loop`      | `ops/loop.py` (`create_loop`) | whole-file operation, always one chunk |
+| `deform`    | `core/deform.py` (LBS math), `ops/deform.py` (render/loop) | rig/bones puppet warp of a still image, chunkable; writes BGRA chunks |
 | `merge`     | `ffmpeg` concat | concatenates finished chunks into the final output |
 | `info`      | `ffprobe` | resolves width/height/fps/frame count |
 
 Colour auto-detection, motion masks and refinement are all performed inside the
 Python worker, so the BEAM only carries the resolved options and the paths.
+
+### Still-image input (`deform`)
+
+A still image has no frame count, so `deform` settles the convention in the op
+itself instead of changing the orchestrator: it reads the image once
+(`cv2.imread`, BGRA) and **loops it** over the requested
+`[start_frame, end_frame]`. The caller supplies `total_frames` and `fps` from
+the rig document's `duration` (the CLI does this; `submit_job` only requires
+`total_frames > 0`). The rig travels as a path in `options.rig` and the rig
+schema is documented in `docs/rig-schema-v1.md`; no pixels cross the Port.
 
 ### Known limitations
 
@@ -92,6 +103,10 @@ Python worker, so the BEAM only carries the resolved options and the paths.
   single-pass Python baseline.
 - `loop` is a whole-file operation (`ops/loop.py` reads frames with OpenCV) and
   therefore does not preserve an input alpha channel.
+- `deform` writes BGRA chunks, so its output must be `.webm` or `.mov` when the
+  source has transparency; `.mp4` drops the alpha plane and the op rejects it
+  with an explicit error. Decoding a VP9 `.webm` for verification still needs
+  `-c:v libvpx-vp9`.
 
 ## Distribution seam
 
@@ -145,6 +160,7 @@ mix test                      # includes the real end-to-end Port integration te
 mix run -e 'FramerCore.CLI.main(["remove-bg", "in.mp4", "out.webm", "--color", "0,255,0"])'
 mix run -e 'FramerCore.CLI.main(["fps-boost", "in.mp4", "out.mp4", "--to", "60", "--workers", "4"])'
 mix run -e 'FramerCore.CLI.main(["loop", "in.mp4", "out.mp4", "--method", "pingpong"])'
+mix run -e 'FramerCore.CLI.main(["deform", "still.png", "out.webm", "--rig", "rig.json"])'
 ```
 
 `framer/apps/framer_core/test/port_integration_test.exs` generates a small clip

@@ -17,6 +17,7 @@ The `poc/elixir-python` branch uses the Python code below as its operation layer
 - **Config support**: Use JSON configs for complex operations
 - **Modular**: Each operation is independent and extensible
 - **Video looping**: Create seamless infinite loops with optical flow matching
+- **Rig-based deformation**: Puppet-warp a still image with bones and keyframes (`deform`)
 - **Multi-Core Processing**: Operations are automatically parallelized across all available CPU threads for maximum speed.
 
 ## 🚀 Quick Start
@@ -60,6 +61,30 @@ python cli.py remove-bg input.mp4 output.webm --config config.json
 ```
 
 ## 📦 Operations
+
+### `deform`
+Rig/bones puppet-warp of a still image over a timeline, rendered frame by frame
+and exported to an alpha-capable video. The rig is a versioned JSON document;
+see [`docs/rig-schema-v1.md`](docs/rig-schema-v1.md) for the schema and the
+Port request contract.
+
+```bash
+# Render one frame (start == end) to PNG
+python cli.py deform still.png frame.png --rig rig.json --start-frame 12 --end-frame 12
+
+# Render the whole rig timeline to a video
+python cli.py deform still.png out.webm --rig rig.json
+```
+
+**Options:**
+- `--rig` or `-r` - Path to a `framer.rig` JSON document (required)
+- `--start-frame` / `--end-frame` - Frame range (defaults to `rig.duration.frames`)
+- `--fps` - Output fps (default: `rig.duration.fps`)
+- `--iterations` or `-i` - Fixed-point inversion iterations (default: 5)
+- `--weights` - Optional dense-weight `.npz` cache path
+- `--radius-scale` - Scale every bone influence radius
+
+---
 
 ### `fps-boost`
 Increase video frame rate using FFmpeg's minterpolate filter.
