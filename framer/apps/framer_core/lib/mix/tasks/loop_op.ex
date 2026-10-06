@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.LoopOp do
   use Mix.Task
 
-  @shortdoc "Create a seamless video loop using Rust NIFs"
+  @shortdoc "Create a seamless video loop through the Python Port worker"
   @moduledoc """
   Creates a looping version of a video.
 
@@ -20,10 +20,11 @@ defmodule Mix.Tasks.LoopOp do
 
   def run(args) do
     Mix.Task.run("app.start")
-    
+
     case args do
       [input, output | rest] ->
         FramerCore.CLI.main(["loop", input, output | rest])
+
       _ ->
         IO.puts("Usage: mix loop_op input_path output_path [options]")
     end

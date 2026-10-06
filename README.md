@@ -2,6 +2,14 @@
 
 Transform videos with composable operations. Built on FFmpeg, designed for pipelines.
 
+## Repository layout
+
+- `core/`, `ops/`, `cli.py` — the working Python/OpenCV operation layer (this README).
+- `framer/` — Elixir/OTP orchestrator that splits an edit into frame-range chunks and farms them to parallel workers, driving this Python layer through a Port (no pixel data crosses the BEAM).
+- `docs/elixir-python-ports.md` — the Elixir ↔ Python Port contract and the remote-worker seam.
+
+The `poc/elixir-python` branch uses the Python code below as its operation layer; `remove-bg`, `fps-boost` and `loop` all run through it.
+
 ## ✨ Features
 
 - **Composable operations**: Chain multiple video transformations

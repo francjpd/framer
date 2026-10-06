@@ -1,30 +1,36 @@
 defmodule FramerCore.Player do
   @moduledoc """
-  Player process that handles chunk processing.
+  A player executes one chunk at a time through the Port contract.
+
+  Each player owns a persistent `FramerCore.PortWorker` (its Python process)
+  and runs the blocking request in a `Task` so its own mailbox stays
+  responsive. The worker is reused for every chunk, so a job with a thousand
+  chunks still uses one Python process per player, not one per frame.
   """
 
   use GenServer
   require Logger
 
+  alias FramerCore.Dispatch
   alias FramerCore.Job.Chunk
 
   defstruct [
     :id,
+    :backend,
+    :worker,
     :status,
-    :type,
     :current_chunk,
     :current_task_ref,
-    :progress,
     :total_processed
   ]
 
   @type t :: %__MODULE__{
           id: String.t(),
+          backend: :local | :remote,
+          worker: term(),
           status: :idle | :busy,
-          type: :cpu | :gpu,
           current_chunk: Chunk.t() | nil,
           current_task_ref: reference() | nil,
-          progress: float(),
           total_processed: non_neg_integer()
         }
 
@@ -47,40 +53,47 @@ defmodule FramerCore.Player do
     GenServer.call(via_tuple(player_id), :get_status)
   end
 
-  # Server Callbacks
+  def stop(player_id) do
+    GenServer.stop(via_tuple(player_id))
+  end
+
+  # Server callbacks
 
   @impl true
   def init(opts) do
+    id = opts[:id] || UUID.uuid4()
+    backend = opts[:backend] || :local
+
+    worker =
+      case backend do
+        :local ->
+          {:ok, pid} = FramerCore.PortWorker.start_link([])
+          pid
+
+        :remote ->
+          opts[:worker] || raise "remote player requires a :worker target"
+      end
+
     {:ok,
      %__MODULE__{
-       id: opts[:id] || UUID.uuid4(),
-       type: opts[:type] || :cpu,
+       id: id,
+       backend: backend,
+       worker: worker,
        status: :idle,
        current_chunk: nil,
        current_task_ref: nil,
-       progress: 0.0,
        total_processed: 0
      }}
   end
 
   @impl true
   def handle_cast({:process_chunk, chunk}, state) do
-    # Log starting work
-    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
-    IO.puts("🎬 [#{timestamp}] [Player #{state.type |> Atom.to_string() |> String.upcase()}-#{state.id |> String.slice(0..7)}] BUSY: Processing chunk #{chunk.id |> String.slice(0..7)} (frames #{chunk.start_frame}-#{chunk.end_frame})")
+    target = target(state)
 
-    task = Task.async(fn ->
-      hwaccel = if state.type == :gpu, do: "vaapi", else: nil
-      
-      # For demo purposes/testing if NIF is not loaded, we wrap it
-      try do
-        FramerCore.Rust.process_chunk(chunk.input_path, chunk.output_path, chunk.start_frame, chunk.end_frame, chunk.fps || 30.0, chunk.target_fps, hwaccel)
-      rescue
-        e -> {:error, "NIF Crash: #{inspect(e)}"}
-      catch
-        kind, reason -> {:error, "NIF Crash: #{inspect(kind)} #{inspect(reason)}"}
-      end
-    end)
+    task =
+      Task.async(fn ->
+        Dispatch.execute(target, Chunk.to_request(chunk))
+      end)
 
     {:noreply, %{state | status: :busy, current_chunk: chunk, current_task_ref: task.ref}}
   end
@@ -90,58 +103,44 @@ defmodule FramerCore.Player do
     {:reply, state, state}
   end
 
-  # Handle task completion
   @impl true
   def handle_info({ref, result}, %{current_task_ref: ref} = state) do
-    # Flush the DOWN message
     Process.demonitor(ref, [:flush])
-    
-    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
-    chunk_id = state.current_chunk.id
+    chunk = state.current_chunk
+    notify({:chunk_finished, state.id, chunk.id, result})
+    notify({:prefetch_request, state.id})
 
-    case result do
-      {:error, reason} when state.type == :gpu ->
-        IO.puts("⚠️ [#{timestamp}] [Player GPU-#{state.id |> String.slice(0..7)}] GPU FAILURE: #{inspect(reason)}. Falling back to CPU...")
-        
-        # Retry on CPU immediately in a task
-        task = Task.async(fn ->
-            FramerCore.Rust.process_chunk(state.current_chunk.input_path, state.current_chunk.output_path, state.current_chunk.start_frame, state.current_chunk.end_frame, state.current_chunk.fps || 30.0, nil)
-        end)
-        {:noreply, %{state | current_task_ref: task.ref}}
-
-      _ ->
-        status_label = if result == :ok || match?({:ok, _}, result), do: "SUCCESS", else: "FAILED"
-        IO.puts("✅ [#{timestamp}] [Player #{state.type |> Atom.to_string() |> String.upcase()}-#{state.id |> String.slice(0..7)}] IDLE: #{status_label} chunk #{chunk_id |> String.slice(0..7)}.")
-        
-        # Notify Orchestrator of completion
-        send(FramerCore.Orchestrator.pid(), {:chunk_finished, state.id, chunk_id, result})
-        
-        # Ask for more work
-        send(FramerCore.Orchestrator.pid(), {:prefetch_request, state.id})
-        
-        {:noreply, %{state | status: :idle, current_chunk: nil, current_task_ref: nil, total_processed: state.total_processed + 1}}
-    end
+    {:noreply,
+     %{
+       state
+       | status: :idle,
+         current_chunk: nil,
+         current_task_ref: nil,
+         total_processed: state.total_processed + 1
+     }}
   end
 
-  # Handle task failure
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{current_task_ref: ref} = state) do
-    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
-    chunk_id = state.current_chunk.id
-    
-    IO.puts("🚨 [#{timestamp}] [Player #{state.type |> Atom.to_string() |> String.upcase()}-#{state.id |> String.slice(0..7)}] CRASHED while processing chunk #{chunk_id |> String.slice(0..7)}: #{inspect(reason)}")
-    
-    # Notify Orchestrator of failure
-    send(FramerCore.Orchestrator.pid(), {:chunk_finished, state.id, chunk_id, {:error, :crashed}})
-    
-    # Ready for more work despite failure
-    send(FramerCore.Orchestrator.pid(), {:prefetch_request, state.id})
-    
+    chunk = state.current_chunk
+    notify({:chunk_finished, state.id, chunk.id, {:error, {:task_down, reason}}})
+    notify({:prefetch_request, state.id})
+
     {:noreply, %{state | status: :idle, current_chunk: nil, current_task_ref: nil}}
   end
 
   @impl true
-  def handle_info(_msg, state) do
-    {:noreply, state}
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  # Private
+
+  defp target(%__MODULE__{backend: :local, worker: worker}), do: Dispatch.local(worker)
+  defp target(%__MODULE__{backend: :remote, worker: worker}), do: worker
+
+  defp notify(message) do
+    case FramerCore.Orchestrator.pid() do
+      nil -> :ok
+      pid -> send(pid, message)
+    end
   end
 end

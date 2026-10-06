@@ -1,12 +1,18 @@
 defmodule FramerCore.Job do
   @moduledoc """
   Represents a video processing job.
+
+  A job carries the *operation* and its *options* so that every chunk the
+  orchestrator produces can be executed by the Python worker. The BEAM only
+  ever stores paths, frame numbers and JSON-able options here - never pixels.
   """
 
   defstruct [
     :id,
     :input_path,
     :output_path,
+    :operation,
+    :options,
     :total_frames,
     :chunk_size,
     :status,
@@ -20,6 +26,8 @@ defmodule FramerCore.Job do
           id: String.t(),
           input_path: String.t(),
           output_path: String.t(),
+          operation: String.t(),
+          options: map(),
           total_frames: non_neg_integer(),
           chunk_size: non_neg_integer(),
           status: :pending | :processing | :completed | :failed,
@@ -34,6 +42,8 @@ defmodule FramerCore.Job do
       id: UUID.uuid4(),
       input_path: input_path,
       output_path: output_path,
+      operation: to_string(opts[:operation] || "transcode"),
+      options: opts[:options] || %{},
       total_frames: opts[:total_frames] || 0,
       chunk_size: opts[:chunk_size] || 100,
       status: :pending,

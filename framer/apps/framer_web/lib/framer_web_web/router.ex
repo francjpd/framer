@@ -20,6 +20,16 @@ defmodule FramerWebWeb.Router do
     get "/", PageController, :home
   end
 
+  # Minimal JSON surface over the FramerCore orchestrator. The full control UI
+  # is a separate, later task; this only proves the umbrella is wired together.
+  scope "/api", FramerWebWeb do
+    pipe_through :api
+
+    get "/status", JobController, :status
+    post "/jobs", JobController, :create
+    get "/jobs/:id", JobController, :show
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", FramerWebWeb do
   #   pipe_through :api

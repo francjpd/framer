@@ -9,10 +9,9 @@ defmodule FramerCore.MixProject do
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
-      elixir: "~> 1.19",
+      elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
-      deps: deps(),
-      rustler_crates: rustler_crates()
+      deps: deps()
     ]
   end
 
@@ -27,14 +26,8 @@ defmodule FramerCore.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:rustler, "~> 0.35"},
+      {:jason, "~> 1.4"},
       {:uuid, "~> 1.1"}
-    ]
-  end
-
-  defp rustler_crates do
-    [
-      {:framer_rust, path: "native/framer_rust", runtime: nil}
     ]
   end
 end

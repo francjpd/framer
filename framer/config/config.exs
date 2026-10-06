@@ -16,6 +16,16 @@
 # General application configuration
 import Config
 
+# FramerCore: Python operation layer (Port contract) and default worker pool.
+#
+# ``python_worker`` is the repository-root Port worker script; the BEAM never
+# passes pixel data to it, only paths, frame ranges and JSON options.
+config :framer_core,
+  project_root: Path.expand("../..", __DIR__),
+  python_worker: Path.expand("../../framer_worker.py", __DIR__),
+  python_executable: System.get_env("FRAMER_PYTHON"),
+  worker_count: String.to_integer(System.get_env("FRAMER_WORKERS") || "4")
+
 # config :framer_web,
 #   ecto_repos: [FramerWeb.Repo],
 #   generators: [timestamp_type: :utc_datetime]

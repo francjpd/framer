@@ -19,10 +19,10 @@ defmodule FramerWeb.DataCase do
   using do
     quote do
       # alias FramerWeb.Repo
-# 
-#       import Ecto
-#       import Ecto.Changeset
-#       import Ecto.Query
+      # 
+      #       import Ecto
+      #       import Ecto.Changeset
+      #       import Ecto.Query
       import FramerWeb.DataCase
     end
   end

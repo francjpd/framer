@@ -1,5 +1,8 @@
 import Config
 
+# Keep the test worker pool small and deterministic.
+config :framer_core, worker_count: 2
+
 # Configure your database (commented out: requires PostgreSQL)
 #
 # The MIX_TEST_PARTITION environment variable can be used

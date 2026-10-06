@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.RemoveBg do
   use Mix.Task
 
-  @shortdoc "Remove video background using Rust NIFs"
+  @shortdoc "Remove video background through the Python Port worker"
   @moduledoc """
   Removes the background from a video file.
 
