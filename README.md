@@ -1,66 +1,62 @@
-# Frame - Composable Video Processing CLI
+# framer
 
-Transform videos with composable operations. Built on FFmpeg, designed for pipelines.
+framer - a composable video engine: an Elixir/OTP orchestrator farms frame-range jobs to parallel Python/OpenCV workers over a Port, delivering background removal with alpha, FPS boost, and seamless loops.
 
-## Repository layout
+`framer` is two cooperating layers: an **Elixir/OTP orchestration layer** that plans and schedules the work, and a **Python/OpenCV operation core** that does the pixels. The BEAM never touches video frames.
 
-- `core/`, `ops/`, `cli.py` — the working Python/OpenCV operation layer (this README).
-- `framer/` — Elixir/OTP orchestrator that splits an edit into frame-range chunks and farms them to parallel workers, driving this Python layer through a Port (no pixel data crosses the BEAM).
-- `docs/elixir-python-ports.md` — the Elixir ↔ Python Port contract and the remote-worker seam.
+## Architecture
 
-The `poc/elixir-python` branch uses the Python code below as its operation layer; `remove-bg`, `fps-boost` and `loop` all run through it.
-
-## ✨ Features
-
-- **Composable operations**: Chain multiple video transformations
-- **Simple CLI**: `python cli.py remove-bg input.mp4 output.webm --color "0,255,0"`
-- **Config support**: Use JSON configs for complex operations
-- **Modular**: Each operation is independent and extensible
-- **Video looping**: Create seamless infinite loops with optical flow matching
-- **Rig-based deformation**: Puppet-warp a still image with bones and keyframes (`deform`)
-- **Multi-Core Processing**: Operations are automatically parallelized across all available CPU threads for maximum speed.
-
-## 🚀 Quick Start
-
-You can set up this project using either `venv` (Python's built-in tool) or `conda` (popular for data science and complex C-dependencies). 
-
-**Option 1: Python venv (Standard)**
-```bash
-# Set up a virtual environment
-python -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
+```
+CLI / Phoenix / web
+      │  submit_job(operation, input, output, total_frames, fps, options)
+      ▼
+FramerCore.Orchestrator          # splits the edit into frame-range chunks
+      │
+      ▼
+FramerCore.PlayerPool            # N persistent players, one Python process each
+      │
+      ▼
+FramerCore.Player ──► FramerCore.PortWorker ──► framer_worker.py
+ (GenServer; runs one        owns one Python OS       length-prefixed JSON
+  chunk at a time in a Task) process                   over stdin/stdout
+                                                            │
+                                                            ▼
+                                                     core/ + ops/
+                                                   (OpenCV / FFmpeg)
 ```
 
-**Option 2: Conda**
-```bash
-# Set up a conda environment
-conda create -n framer python=3.10
-conda activate framer
+- **Chunked, parallel jobs** — the orchestrator splits a job into frame-range
+  chunks and hands them to a pool of persistent players. Each player runs one
+  chunk at a time and keeps one long-lived Python process for the life of the
+  pool, so a crash in OpenCV/FFmpeg kills a worker process, never the BEAM.
+- **No pixel data crosses the BEAM** — a request is only file paths, a frame
+  range and a JSON options object. `framer_worker.py` reads its input chunk,
+  runs the Python core and writes its output chunk file.
+- **Distributed-ready seam** — `FramerCore.Dispatch` is the single place that
+  decides *where* a chunk runs. The local path is implemented and tested;
+  `:remote` hands the same request to a `FramerCore.PortWorker` on another node
+  through `:erpc.call/5`. Optional remote players are configured with
+  `:remote_players`, and the system runs happily standalone with no cluster.
 
-# Install dependencies
-pip install -r requirements.txt
-```
-# Set up a virtual environment (recommended to avoid PEP 668 issues)
-python -m venv venv
-source venv/bin/activate
+See [`docs/elixir-python-ports.md`](docs/elixir-python-ports.md) for the full
+Port contract, request lifecycle, configuration keys and distribution seam.
 
-# Install dependencies
-pip install -r requirements.txt
+## Operations
 
-# Boost FPS to 60
-python cli.py fps-boost input.mp4 output.mp4 --to 60
+Every operation is reached through the same Port contract: paths, a frame
+range and JSON options. Operations that write alpha (`remove-bg`, `deform`)
+must target an alpha-capable container (`.webm` or `.mov`); `.mp4` drops the
+alpha plane.
 
-# Remove background
-python cli.py remove-bg input.mp4 output.webm --tolerance 30
-
-# Use config file for complex operations
-python cli.py remove-bg input.mp4 output.webm --config config.json
-```
-
-## 📦 Operations
+| Operation | Runs | Notes |
+| --- | --- | --- |
+| `remove-bg` | chunked, parallel | Per-frame background removal with an alpha channel. Color / motion detection, auto color ranges, mask refinement. |
+| `fps-boost` | chunked, parallel | Frame-rate interpolation with FFmpeg's `minterpolate`. |
+| `deform` | chunked, parallel | Rig/bones puppet-warp of a still image over a timeline; BGRA output. |
+| `loop` | whole file | Seamless infinite loops; reads the whole file, so it is always one chunk. |
+| `merge` | finishing step | FFmpeg concat of the finished chunks into the requested output. |
+| `info` | one-off | `ffprobe` resolution, FPS and frame count. |
+| `export` | Python CLI | Web-optimized `.webm` / `.mp4` / `.gif` output, alongside the other standalone Python CLI operations (`resize`, `trim`, `recolor`, `glow`, `outline`). |
 
 ### `deform`
 Rig/bones puppet-warp of a still image over a timeline, rendered frame by frame
@@ -187,9 +183,92 @@ python cli.py loop input.webm output.webm --method auto --analyze-only
 
 ---
 
+## Front end
+
+`framer_web` is a Phoenix application that sits on the orchestrator. Today it
+exposes a minimal JSON status/submit surface (`GET /api/status`,
+`GET /api/jobs/:id`, `POST /api/jobs`) and a placeholder `/editor` LiveView.
+
+The planned **Phoenix LiveView editor** is a frame-by-frame UI for the
+bones/puppet-warp animation: viewport over the source still and rig mesh,
+a timeline of keyframes over the rig's frame range, and export that submits a
+`deform` job through the same job API. The engine half already ships — the rig
+schema and the chunked `deform` export run entirely through the Port contract —
+while the editor itself is a follow-up task behind the `/editor` route shell.
+
+## 📁 Repository layout
+
+```
+framer/
+├── core/               # Python/OpenCV operation core
+│   ├── bg_removal.py   # Background removal primitives
+│   ├── mask_refinement.py, color_ranges.py, motion_detection.py
+│   ├── deform.py       # Rig/bones LBS math
+│   └── video.py, parallel.py, gpu*.py
+├── ops/                # Python operation implementations
+│   ├── remove_bg.py, fps_boost.py, loop.py, deform.py, export.py
+│   └── resize.py, trim.py, recolor.py, glow.py, outline.py
+├── cli.py              # Standalone Python CLI over ops/
+├── framer_worker.py    # The Port worker the BEAM spawns
+├── framer/             # Elixir/OTP umbrella
+│   ├── apps/framer_core/   # Orchestrator, players, Port worker, CLI
+│   └── apps/framer_web/    # Phoenix API + /editor LiveView shell
+├── docs/               # Port contract, rig schema, design plans
+└── tests/              # Python tests for the operation core
+```
+
+## 🚀 Quick Start
+
+The Elixir orchestrator drives the Python core, so set up both halves.
+
+**1. Python operation layer** (from the repository root):
+
+```bash
+# venv (standard)
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# or conda
+conda create -n framer python=3.10
+conda activate framer
+pip install -r requirements.txt
+```
+
+**2. Elixir orchestration:**
+
+```bash
+cd framer
+mix deps.get
+mix test
+```
+
+**3. Process a video through the orchestrator** (from `framer/`):
+
+```bash
+mix run -e 'FramerCore.CLI.main(["info", "input.mp4"])'
+mix run -e 'FramerCore.CLI.main(["remove-bg", "input.mp4", "output.webm", "--color", "0,255,0"])'
+mix run -e 'FramerCore.CLI.main(["fps-boost", "input.mp4", "output.mp4", "--to", "60", "--workers", "4"])'
+mix run -e 'FramerCore.CLI.main(["loop", "input.mp4", "output.mp4", "--method", "pingpong"])'
+mix run -e 'FramerCore.CLI.main(["deform", "still.png", "output.webm", "--rig", "rig.json"])'
+```
+
+The same operations are also available directly through the standalone Python
+CLI:
+
+```bash
+# Boost FPS to 60
+python cli.py fps-boost input.mp4 output.mp4 --to 60
+
+# Remove background
+python cli.py remove-bg input.mp4 output.webm --tolerance 30
+
+# Use config file for complex operations
+python cli.py remove-bg input.mp4 output.webm --config config.json
+```
+
 ## 🔧 Configuration Files
 
-For complex operations with many options, use a JSON config:
+For complex operations with many options, the Python CLI accepts a JSON config:
 
 **config.json:**
 ```json
@@ -238,30 +317,11 @@ python cli.py loop input.webm output.webm --method auto
 
 # Analyze video to find best method (no processing)
 python cli.py loop input.webm output.webm --method auto --analyze-only
-
-# Quick loop test with lower threshold
-python cli.py loop input.webm output.webm --scan-frames 30 --match-threshold 40
 ```
 
-## 📁 Project Structure
+## 🔌 Extending the operation core
 
-```
-frame/
-├── cli.py              # Entry point
-├── core/               # Pipeline executor
-│   ├── __init__.py
-│   └── bg_removal.py   # Core library for background removal
-├── ops/                # Operations
-│   ├── __init__.py    # Registry
-│   ├── remove_bg.py   # Background removal
-│   ├── fps_boost.py   # FPS boost
-│   └── loop.py        # Video looping
-└── tests/
-```
-
-## 🔌 Adding New Operations
-
-Operations are registered via decorator:
+Python operations are registered via decorator:
 
 ```python
 from core import register_operation
@@ -280,19 +340,28 @@ def my_operation(input_path, output_path, param1=10):
 
 ## 📋 Requirements
 
-- Python 3.9+
-- FFmpeg (installed and in PATH)
+- Python 3.9+ and the packages in [`requirements.txt`](requirements.txt)
+  (NumPy, OpenCV, Typer, Rich; PyTorch is optional and used for GPU
+  acceleration).
+- Elixir `~> 1.15` with a matching Erlang/OTP (see
+  [`framer/.tool-versions`](framer/.tool-versions)) for the orchestration layer.
+- FFmpeg (installed and in PATH).
 
 ## 🛠️ Development
 
 ```bash
-# Run tests
+# Python operation core
 python -m pytest tests/
 
-# Test specific operation
-python cli.py fps-boost test_input.mp4 test_output.mp4 --to 60
+# Elixir orchestration (includes the end-to-end Port integration test)
+cd framer
+mix test
 ```
+
+`framer/apps/framer_core/test/port_integration_test.exs` generates a small clip
+with FFmpeg, drives it through the orchestrator and the Python Port, merges the
+chunks and asserts the background is actually transparent.
 
 ## 📄 License
 
-[MIT](LICENSE)
+MIT
