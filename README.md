@@ -1,8 +1,8 @@
 # framer
 
-framer - a composable video engine: an Elixir/OTP orchestrator farms frame-range jobs to parallel Python/OpenCV workers over a Port, delivering background removal with alpha, FPS boost, and seamless loops.
+framer is a video processing tool: it removes a video's background, raises its frame rate, and builds seamless loops. Operations are small and chainable, and jobs run in parallel for speed.
 
-`framer` is two cooperating layers: an **Elixir/OTP orchestration layer** that plans and schedules the work, and a **Python/OpenCV operation core** that does the pixels. The BEAM never touches video frames.
+Under the hood, a Python/OpenCV core does the pixels and an Elixir layer schedules the work across cores.
 
 ## Architecture
 
