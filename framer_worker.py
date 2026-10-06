@@ -20,7 +20,7 @@ Request::
 
     {
       "id":          "uuid",            # opaque correlation id, echoed back
-      "op":          "remove-bg",       # remove-bg | fps-boost | loop | merge | info
+      "op":          "remove-bg",       # remove-bg | fps-boost | loop | deform | merge | info
       "input":       "/abs/input",      # source file (or nil for merge)
       "output":      "/abs/output",     # destination chunk file
       "start_frame": 0,                 # inclusive
@@ -332,6 +332,41 @@ def op_loop(req: Dict[str, Any]) -> Dict[str, Any]:
     return {"output": req["output"]}
 
 
+def op_deform(req: Dict[str, Any]) -> Dict[str, Any]:
+    """Puppet-warp a still image over a chunk range with a rig/bones document.
+
+    The source is a still image (read once, looped over ``[start_frame,
+    end_frame]``) or a video (its first frame is used); either way the chunk
+    writes an alpha-capable frame range and the BEAM only ever sends paths,
+    the range and the rig/options - never pixel data.
+    """
+    from ops.deform import deform_video
+
+    opts = req.get("options") or {}
+
+    rig = opts.get("rig") or opts.get("rig_path")
+    if not rig:
+        raise RuntimeError("deform requires a 'rig' option pointing at a framer.rig document")
+
+    result = deform_video(
+        input_path=req["input"],
+        output_path=req["output"],
+        rig=rig,
+        start_frame=req.get("start_frame"),
+        end_frame=req.get("end_frame"),
+        fps=req.get("fps"),
+        iterations=int(opts.get("iterations", 5)),
+        weights=opts.get("weights"),
+        still=opts.get("still"),
+        radius_scale=opts.get("radius_scale"),
+    )
+
+    if not result.get("success"):
+        raise RuntimeError(result.get("error") or "deform operation failed")
+
+    return {"output": result["output_path"], "frames": result.get("frames", 0)}
+
+
 def op_merge(req: Dict[str, Any]) -> Dict[str, Any]:
     """Concatenate finished chunk files into the final output."""
     opts = req.get("options") or {}
@@ -371,6 +406,7 @@ _OPERATIONS = {
     "remove-bg": op_remove_bg,
     "fps-boost": op_fps_boost,
     "loop": op_loop,
+    "deform": op_deform,
     "merge": op_merge,
 }
 

@@ -13,6 +13,7 @@ defmodule FramerCore.CLI do
       mix run -e "FramerCore.CLI.main([\"remove-bg\", \"input.mp4\", \"output.webm\", \"--color\", \"0,255,0\"])"
       mix run -e "FramerCore.CLI.main([\"fps-boost\", \"input.mp4\", \"output.mp4\", \"--to\", \"60\"])"
       mix run -e "FramerCore.CLI.main([\"loop\", \"input.mp4\", \"output.mp4\", \"--method\", \"pingpong\"])"
+      mix run -e "FramerCore.CLI.main([\"deform\", \"still.png\", \"output.webm\", \"--rig\", \"rig.json\"])"
   """
 
   alias FramerCore.Orchestrator
@@ -37,6 +38,9 @@ defmodule FramerCore.CLI do
 
       ["loop", input, output | opts] ->
         loop_op(input, output, opts)
+
+      ["deform", input, output | opts] ->
+        deform(input, output, opts)
 
       _ ->
         help()
@@ -112,6 +116,77 @@ defmodule FramerCore.CLI do
 
     IO.puts("🚀 Loop: #{input} -> #{output} (method: #{options["method"]})")
     submit_for_video("loop", input, output, options)
+  end
+
+  defp deform(input, output, opts) do
+    rig_path = parse_opt_or_nil(opts, "--rig")
+
+    cond do
+      is_nil(rig_path) ->
+        IO.puts("❌ deform requires --rig <path-to-rig.json>")
+        {:error, :missing_rig}
+
+      true ->
+        with {:ok, rig} <- read_rig(rig_path) do
+          duration = rig["duration"] || %{}
+          total_frames = int_opt(opts, "--frames", duration["frames"] || 0)
+          fps = float_opt(opts, "--fps", duration["fps"] || 24.0)
+
+          # A still-image source is looped by the op over [0, total_frames); an
+          # image output renders exactly one frame so the merge stays a copy.
+          total_frames =
+            if image_output?(output), do: 1, else: total_frames
+
+          if total_frames <= 0 do
+            IO.puts(
+              "❕ Could not determine a frame count; pass --frames or set rig.duration.frames"
+            )
+
+            {:error, :unknown_frame_count}
+          else
+            options = %{
+              "rig" => rig_path,
+              "iterations" => int_opt(opts, "--iterations", 5),
+              "weights" => parse_opt_or_nil(opts, "--weights"),
+              "radius_scale" => maybe_float(parse_opt_or_nil(opts, "--radius-scale")),
+              "still" => true
+            }
+
+            IO.puts(
+              "🚀 Deform: #{input} -> #{output} " <>
+                "(rig: #{rig_path}, #{total_frames} frames @ #{fps}fps)"
+            )
+
+            submit_and_wait("deform", input, output, options,
+              total_frames: total_frames,
+              fps: fps
+            )
+          end
+        end
+    end
+  end
+
+  defp read_rig(path) do
+    case File.read(path) do
+      {:ok, body} ->
+        case Jason.decode(body) do
+          {:ok, rig} ->
+            {:ok, rig}
+
+          {:error, error} ->
+            IO.puts("❌ rig is not valid JSON: #{inspect(error)}")
+            {:error, :bad_rig}
+        end
+
+      {:error, reason} ->
+        IO.puts("❌ could not read rig #{path}: #{inspect(reason)}")
+        {:error, :bad_rig}
+    end
+  end
+
+  defp image_output?(output) do
+    ext = output |> Path.extname() |> String.downcase()
+    ext in [".png", ".jpg", ".jpeg", ".bmp"]
   end
 
   # --- job plumbing ---
@@ -246,6 +321,8 @@ defmodule FramerCore.CLI do
       FramerCore.CLI.main(["fps-boost", "input", "output", "--to", "60", "--workers", "4"])
       FramerCore.CLI.main(["loop", "input", "output", "--method", "pingpong"])
         Methods: auto, pingpong, morph, periodic, hold, fade, blend, reverse, speedramp
+      FramerCore.CLI.main(["deform", "still.png", "output.webm", "--rig", "rig.json"])
+        Options: --rig, --frames, --fps, --iterations, --weights, --radius-scale
     """)
   end
 end

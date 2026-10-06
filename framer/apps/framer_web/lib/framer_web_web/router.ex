@@ -18,6 +18,9 @@ defmodule FramerWebWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+
+    # Rig/bones animation editor shell (milestones M3-M5 live behind this).
+    live "/editor", EditorLive, :index
   end
 
   # Minimal JSON surface over the FramerCore orchestrator. The full control UI
