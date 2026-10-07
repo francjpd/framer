@@ -7,7 +7,7 @@ defmodule FramerCore.PortWorker do
 
   The BEAM **never** passes pixel data. A request is a map containing:
 
-    * `"op"`          - operation name (`remove-bg`, `fps-boost`, `loop`, `merge`, `info`)
+    * `"op"`          - operation name (see `docs/elixir-python-ports.md` for the list)
     * `"input"`       - absolute path to the source file (or `nil` for `merge`)
     * `"output"`      - absolute path the worker must write
     * `"start_frame"` - inclusive first frame of the chunk
