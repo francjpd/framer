@@ -8,7 +8,7 @@ defmodule FramerWebWeb.ConnectTest do
   use FramerWebWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-  import Plug.Conn, only: [put_req_header: 3]
+  import Plug.Conn, only: [put_req_header: 3, get_session: 2]
 
   alias FramerWeb.Connections
   alias FramerWeb.RigStore
@@ -140,6 +140,49 @@ defmodule FramerWebWeb.ConnectTest do
              |> protect(expired)
              |> get(~p"/api/rigs")
              |> json_response(403)
+  end
+
+  test "a loopback host with a stale session token is re-issued automatically",
+       %{conn: conn} do
+    {:ok, rig} = RigStore.create_from_source(Fixtures.png(8, 8), "s.png")
+
+    stale = Connections.issue_session(-1)
+
+    conn =
+      conn
+      |> init_test_session(%{connection_token: stale})
+      |> get(~p"/api/rigs")
+
+    assert %{"rigs" => rigs} = json_response(conn, 200)
+    assert Enum.any?(rigs, &(&1["id"] == rig["id"]))
+
+    refreshed = get_session(conn, :connection_token)
+    assert is_binary(refreshed)
+    assert refreshed != stale
+    assert :ok = Connections.verify(refreshed)
+  end
+
+  test "a loopback host with an unknown session token is re-issued automatically",
+       %{conn: conn} do
+    conn =
+      conn
+      |> init_test_session(%{connection_token: "token-from-a-previous-run"})
+      |> get(~p"/api/rigs")
+
+    assert json_response(conn, 200)
+    assert :ok = Connections.verify(get_session(conn, :connection_token))
+  end
+
+  test "a non-loopback caller with a stale token is still rejected", %{conn: conn} do
+    stale = Connections.issue_session(-1)
+
+    conn =
+      conn
+      |> init_test_session(%{connection_token: stale})
+      |> remote()
+      |> get(~p"/api/rigs")
+
+    assert json_response(conn, 401)
   end
 
   test "the host operator's editor connection is authorized", %{conn: conn} do

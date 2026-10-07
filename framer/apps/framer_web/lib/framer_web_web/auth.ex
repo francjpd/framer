@@ -19,19 +19,12 @@ defmodule FramerWebWeb.Auth do
 
   @impl true
   def call(conn, :host_session) do
-    cond do
-      token = get_session(conn, :connection_token) ->
-        assign(conn, :connection_token, token)
+    token = get_session(conn, :connection_token)
 
-      loopback?(conn.remote_ip) ->
-        token = FramerWeb.Connections.host_session()
-
-        conn
-        |> put_session(:connection_token, token)
-        |> assign(:connection_token, token)
-
-      true ->
-        conn
+    if valid?(token) do
+      assign(conn, :connection_token, token)
+    else
+      refresh_host_session(conn)
     end
   end
 
@@ -46,6 +39,24 @@ defmodule FramerWebWeb.Auth do
 
   def call(conn, :require_host) do
     if loopback?(conn.remote_ip), do: conn, else: forbidden(conn)
+  end
+
+  defp valid?(token) when is_binary(token) do
+    match?(:ok, FramerWeb.Connections.verify(token))
+  end
+
+  defp valid?(_), do: false
+
+  defp refresh_host_session(conn) do
+    if loopback?(conn.remote_ip) do
+      token = FramerWeb.Connections.host_session()
+
+      conn
+      |> put_session(:connection_token, token)
+      |> assign(:connection_token, token)
+    else
+      delete_session(conn, :connection_token)
+    end
   end
 
   defp loopback?({127, 0, 0, 1}), do: true

@@ -166,16 +166,29 @@ defmodule FramerWeb.Connections do
 
   def handle_call({:verify, _token}, _from, state), do: {:reply, {:error, :missing}, state}
 
-  def handle_call(:host_session, _from, %{host_token: nil} = state) do
-    {token, sessions} = mint(state.sessions, @host_ttl)
-    {:reply, token, %{state | host_token: token, sessions: sessions}}
+  def handle_call(:host_session, _from, state) do
+    if valid_session?(state.sessions, state.host_token) do
+      {:reply, state.host_token, state}
+    else
+      {token, sessions} = mint(state.sessions, @host_ttl)
+      {:reply, token, %{state | host_token: token, sessions: sessions}}
+    end
   end
-
-  def handle_call(:host_session, _from, state), do: {:reply, state.host_token, state}
 
   def handle_call({:issue_session, ttl}, _from, state) do
     {token, sessions} = mint(state.sessions, ttl)
     {:reply, token, %{state | sessions: sessions}}
+  end
+
+  defp valid_session?(_sessions, nil), do: false
+
+  defp valid_session?(sessions, token) do
+    now = System.system_time(:second)
+
+    case sessions[token] do
+      %{expires_at: expires_at} -> expires_at > now
+      nil -> false
+    end
   end
 
   defp mint(sessions, ttl) do
