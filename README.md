@@ -1,22 +1,20 @@
 # framer
 
-framer is a video processing tool: it removes a video background, raises its frame rate, and builds seamless loops. Operations are small and chainable, and jobs run in parallel for speed.
+framer is a set of small, composable video-editing operations. Each one is deterministic and file-in/file-out, so a person or an AI agent can discover and chain them to get exactly the edit they want, instead of depending on one end-to-end model.
 
-## What it's for
+## Current list of operations is:
 
-framer is a set of small, composable video-editing operations - background removal, frame-rate boost, seamless loops, and keyframe animation. Each one is deterministic and file-in/file-out, so a person or an AI agent can discover and chain them to get exactly the edit they want, instead of depending on one end-to-end model.
+1. background removal (remove-bg)
+2. frame-rate boost (fps-boost)
+3. seamless loops (loop)
+4. keyframe animation (deform)
+5. merge
+6. info
+7. standalone CLI operations: export, resize, trim, recolor, glow, outline
 
-Built to scale: an Elixir/OTP orchestration layer splits a job into chunks and farms them across many machines, while a Python/OpenCV core does the pixels - so framer is distributed-ready rather than tied to one computer.
+## Built to scale
 
-The current list of operations is:
-
-- background removal (`remove-bg`)
-- frame-rate boost (`fps-boost`)
-- seamless loops (`loop`)
-- keyframe animation (`deform`)
-- merge
-- info
-- standalone CLI operations: `export`, `resize`, `trim`, `recolor`, `glow`, `outline`
+An Elixir/OTP orchestration layer splits a job into chunks and farms them across many machines, while a Python/OpenCV core does the pixels - so framer is distributed-ready rather than tied to one computer.
 
 ## Architecture
 
@@ -200,14 +198,16 @@ python cli.py loop input.webm output.webm --method auto --analyze-only
 
 ## Front end
 
-`framer_web` is a Phoenix application that sits on the orchestrator. Today it
-exposes a minimal JSON status/submit surface (`GET /api/status`,
-`GET /api/jobs/:id`, `POST /api/jobs`) and a placeholder `/editor` LiveView.
+`framer_web` is the Phoenix application in this repository - the `framer`
+monorepo already carries it alongside `framer_core`, so the editor lives here
+rather than in a separate project. Today it exposes a minimal JSON
+status/submit surface (`GET /api/status`, `GET /api/jobs/:id`,
+`POST /api/jobs`).
 
-The planned **Phoenix LiveView editor** is a frame-by-frame UI for the
-bones/puppet-warp animation: viewport over the source still and rig mesh,
-a timeline of keyframes over the rig's frame range, and export that submits a
-`deform` job through the same job API. The engine half already ships - the rig
+The planned **Phoenix LiveView editor** is a per-frame bones/keyframe animation
+UI: a viewport over the source still and the rig mesh, a timeline of keyframes
+across the rig's frame range, and an export action that submits a `deform` job
+through the same job API. The engine half already ships - the `framer.rig`
 schema and the chunked `deform` export run entirely through the Port contract -
 while the editor itself is a follow-up task behind the `/editor` route shell.
 
