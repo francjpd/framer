@@ -146,8 +146,8 @@ defmodule FramerWebWeb.RigController do
 
   defp build(%{"source_base64" => encoded} = params) when is_binary(encoded) do
     with {:ok, binary} <- Base.decode64(encoded) do
-      RigStore.create_from_source(binary, params["filename"] || "source.png",
-        name: params["name"]
+      RigStore.create_from_source(binary, binary_param(params, "filename") || "source.png",
+        name: binary_param(params, "name")
       )
     else
       :error -> {:error, :invalid_base64}
@@ -161,7 +161,9 @@ defmodule FramerWebWeb.RigController do
     with {w, ""} <- Integer.parse(width),
          {h, ""} <- Integer.parse(height),
          true <- w > 0 and h > 0 do
-      rig = Rig.new(w, h, id: UUID.uuid4(), name: params["name"] || "Untitled rig")
+      rig =
+        Rig.new(w, h, id: UUID.uuid4(), name: binary_param(params, "name") || "Untitled rig")
+
       RigStore.save(rig)
     else
       _ -> {:error, :invalid_canvas}
@@ -171,7 +173,12 @@ defmodule FramerWebWeb.RigController do
   defp build(%{"width" => width, "height" => height} = params)
        when is_integer(width) and is_integer(height) do
     if width > 0 and height > 0 do
-      rig = Rig.new(width, height, id: UUID.uuid4(), name: params["name"] || "Untitled rig")
+      rig =
+        Rig.new(width, height,
+          id: UUID.uuid4(),
+          name: binary_param(params, "name") || "Untitled rig"
+        )
+
       RigStore.save(rig)
     else
       {:error, :invalid_canvas}
@@ -181,6 +188,13 @@ defmodule FramerWebWeb.RigController do
   defp build(%{"width" => _, "height" => _}), do: {:error, :invalid_canvas}
 
   defp build(_params), do: {:error, :missing_source}
+
+  defp binary_param(params, key) do
+    case params[key] do
+      value when is_binary(value) -> value
+      _ -> nil
+    end
+  end
 
   defp error_message(%{__struct__: _} = error), do: inspect(error)
   defp error_message(:missing_source), do: "a source image or a canvas size is required"

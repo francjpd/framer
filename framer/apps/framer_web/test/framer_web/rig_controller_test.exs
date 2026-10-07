@@ -74,6 +74,21 @@ defmodule FramerWebWeb.RigControllerTest do
 
       assert message =~ "positive integers"
     end
+
+    test "tolerates non-string filename and name without breaking the listing", %{conn: conn} do
+      payload = %{
+        "source_base64" => Base.encode64(Fixtures.png(12, 12)),
+        "filename" => %{"nested" => true},
+        "name" => %{"nested" => true}
+      }
+
+      body = conn |> post(~p"/api/rigs", payload) |> json_response(201)
+      assert is_binary(body["rig"]["name"])
+
+      listing = conn |> get(~p"/api/rigs") |> json_response(200)
+      listed = Enum.find(listing["rigs"], &(&1["id"] == body["rig"]["id"]))
+      assert is_binary(listed["name"])
+    end
   end
 
   describe "GET/PUT /api/rigs/:id" do
@@ -95,6 +110,20 @@ defmodule FramerWebWeb.RigControllerTest do
       assert %{"error" => "unknown rig"} =
                conn |> get(~p"/api/rigs/nope") |> json_response(404)
     end
+
+    test "rejects a non-string name rather than persisting it", %{conn: conn} do
+      {:ok, rig} = RigStore.save(Fixtures.simple_rig(40))
+      id = rig["id"]
+
+      assert %{"error" => message} =
+               conn
+               |> put(~p"/api/rigs/#{id}", %{rig | "name" => %{"nested" => true}})
+               |> json_response(422)
+
+      assert message =~ "name"
+      assert {:ok, from_disk} = RigStore.load(id)
+      assert from_disk["name"] == rig["name"]
+    end
   end
 
   describe "GET /api/rigs/:id/source" do
@@ -112,6 +141,17 @@ defmodule FramerWebWeb.RigControllerTest do
 
       assert message =~ "no source"
     end
+
+    test "does not serve files outside the projects root", %{conn: conn, root: root} do
+      secret_dir = Path.join(Path.dirname(root), Path.basename(root) <> "_secret")
+      File.mkdir_p!(secret_dir)
+      File.write!(Path.join(secret_dir, "source.png"), "top secret")
+      on_exit(fn -> File.rm_rf(secret_dir) end)
+
+      traversal = "..%2F" <> Path.basename(secret_dir)
+      body = conn |> get("/api/rigs/#{traversal}/source") |> response(404)
+      refute String.contains?(body, "top secret")
+    end
   end
 
   describe "GET /api/rigs/:id/result" do
@@ -122,6 +162,17 @@ defmodule FramerWebWeb.RigControllerTest do
                conn |> get(~p"/api/rigs/#{rig["id"]}/result") |> json_response(404)
 
       assert message =~ "no rendered result"
+    end
+
+    test "does not serve results outside the projects root", %{conn: conn, root: root} do
+      secret_dir = Path.join(Path.dirname(root), Path.basename(root) <> "_result_secret")
+      File.mkdir_p!(secret_dir)
+      File.write!(Path.join(secret_dir, "output.webm"), "top secret")
+      on_exit(fn -> File.rm_rf(secret_dir) end)
+
+      traversal = "..%2F" <> Path.basename(secret_dir)
+      body = conn |> get("/api/rigs/#{traversal}/result") |> response(404)
+      refute String.contains?(body, "top secret")
     end
   end
 end

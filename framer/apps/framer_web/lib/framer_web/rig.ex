@@ -99,7 +99,8 @@ defmodule FramerWeb.Rig do
 
     case rig do
       %{"schema" => @schema, "version" => @version} ->
-        with {:ok, _} <- validate_canvas(rig),
+        with {:ok, _} <- validate_name(rig),
+             {:ok, _} <- validate_canvas(rig),
              {:ok, bones} <- validate_bones(rig, allow_empty),
              {:ok, _} <- validate_keyframes(rig, bones),
              {:ok, _} <- validate_bind(rig),
@@ -116,6 +117,14 @@ defmodule FramerWeb.Rig do
 
       _ ->
         {:error, "rig must be a JSON object with schema #{inspect(@schema)}"}
+    end
+  end
+
+  defp validate_name(rig) do
+    case rig["name"] do
+      nil -> {:ok, nil}
+      name when is_binary(name) -> {:ok, name}
+      _ -> {:error, "rig.name must be a string"}
     end
   end
 

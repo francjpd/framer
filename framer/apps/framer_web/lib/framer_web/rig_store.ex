@@ -39,10 +39,14 @@ defmodule FramerWeb.RigStore do
 
   @doc "Absolute path of a project's exported result, if it exists."
   def result_path(id) do
-    Enum.find_value(@result_names, fn name ->
-      path = Path.join(project_dir(id), name)
-      if File.exists?(path), do: path
-    end)
+    with :ok <- validate_id(id) do
+      Enum.find_value(@result_names, fn name ->
+        path = Path.join(project_dir(id), name)
+        if File.exists?(path), do: path
+      end)
+    else
+      _ -> nil
+    end
   end
 
   @doc "Absolute path a merged export should be written to for `format`."
@@ -58,10 +62,14 @@ defmodule FramerWeb.RigStore do
 
   @doc "Find the project's source still, if any."
   def source_path(id) do
-    project_dir(id)
-    |> Path.join("source.*")
-    |> Path.wildcard()
-    |> List.first()
+    with :ok <- validate_id(id) do
+      project_dir(id)
+      |> Path.join("source.*")
+      |> Path.wildcard()
+      |> List.first()
+    else
+      _ -> nil
+    end
   end
 
   @doc "List saved rigs, newest first."
