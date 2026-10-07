@@ -110,6 +110,21 @@ defmodule FramerWebWeb.EditorLiveTest do
     refute has_element?(view, "a[download]")
   end
 
+  test "invalid radius and falloff values are ignored without crashing", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(48))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    before = RigStore.load(id)
+
+    render_hook(view, "set_radius", %{"id" => "b0", "radius" => ""})
+    render_hook(view, "set_radius", %{"id" => "b0", "radius" => "not-a-number"})
+    render_hook(view, "set_falloff", %{"id" => "b0", "falloff" => "bogus"})
+
+    assert render(view)
+    assert RigStore.load(id) == before
+  end
+
   test "uploading a still creates a project and opens it", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/editor")
 

@@ -100,6 +100,15 @@ Export progress is polled from the existing `GET /api/jobs/:id`; the server-side
 watcher merges the finished chunks and broadcasts completion on the
 `rig:<id>` PubSub topic.
 
+## Connections
+
+Every `/api/rigs*` endpoint above serves user content and is gated by the
+host-approved connection contract: the running app mints a pairing id at
+startup, a client presents it to `POST /api/connect` (which only creates a
+*pending* request), and the host operator approves it on `/connections` before
+any content is served. The host operator's own browser is authorized
+automatically. See [`connection-trust-model.md`](connection-trust-model.md).
+
 ## Running
 
 ```bash

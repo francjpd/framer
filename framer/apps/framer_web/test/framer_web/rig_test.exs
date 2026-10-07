@@ -69,6 +69,19 @@ defmodule FramerWeb.RigTest do
       assert {:error, message} = Rig.validate(%{rig | "duration" => []}, allow_empty_bones: true)
       assert message =~ "duration"
     end
+
+    test "a partial duration fills each missing key from the defaults" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+      partial = %{rig | "duration" => %{"frames" => 10}}
+
+      assert {:ok, _} = Rig.validate(partial, allow_empty_bones: true)
+      assert Rig.frame_count(partial) == 10
+      assert Rig.fps(partial) == 24
+
+      only_fps = %{rig | "duration" => %{"fps" => 12}}
+      assert Rig.frame_count(only_fps) == 48
+      assert Rig.fps(only_fps) == 12
+    end
   end
 
   describe "source confinement" do

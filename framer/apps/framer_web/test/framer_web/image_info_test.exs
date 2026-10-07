@@ -27,6 +27,18 @@ defmodule FramerWeb.ImageInfoTest do
     assert {:ok, %{width: ^width, height: ^height, format: :bmp}} = ImageInfo.read(bmp)
   end
 
+  test "reads a top-down BMP with a negative DIB height" do
+    width = 20
+    height = 10
+
+    bmp =
+      "BM" <>
+        <<54::little-32, 0, 0, 0, 0, 54::little-32, 40::little-32, width::little-32,
+          -height::little-signed-32>> <> <<0, 0, 0, 0, 0, 0, 0, 0>>
+
+    assert {:ok, %{width: ^width, height: ^height, format: :bmp}} = ImageInfo.read(bmp)
+  end
+
   test "reads an extended WebP VP8X canvas" do
     width = 640
     height = 480

@@ -45,7 +45,7 @@ defmodule FramerWeb.ImageInfo do
   # BMP: "BM", then a DIB header with little-endian width/height at 18/22.
   defp bmp(
          <<"BM", _size::little-32, _reserved::binary-size(4), _offset::little-32, _dib::little-32,
-           width::little-32, height::little-32, _rest::binary>>
+           width::little-32, height::little-signed-32, _rest::binary>>
        )
        when width > 0 do
     {:ok, %{width: width, height: abs(height), format: :bmp}}

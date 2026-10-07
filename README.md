@@ -16,6 +16,14 @@ framer is a set of small, composable video-editing operations. Each one is deter
 7. standalone CLI operations: export, resize, trim, recolor, glow, outline
 
 ## Built to scale
+- **Composable operations**: Chain multiple video transformations
+- **Simple CLI**: `python cli.py remove-bg input.mp4 output.webm --color "0,255,0"`
+- **Config support**: Use JSON configs for complex operations
+- **Modular**: Each operation is independent and extensible
+- **Video looping**: Create seamless infinite loops with optical flow matching
+- **Rig-based deformation**: Puppet-warp a still image with bones and keyframes (`deform`)
+- **Web rig editor**: A LiveView editor (`/editor`) to create bones, auto-bind, pose, keyframe and export - see [`docs/rig-editor.md`](docs/rig-editor.md). The editor's content endpoints are gated by a host-approved connection contract; see [`docs/connection-trust-model.md`](docs/connection-trust-model.md)
+- **Multi-Core Processing**: Operations are automatically parallelized across all available CPU threads for maximum speed.
 
 An Elixir/OTP orchestration layer splits a job into chunks and farms them across many machines, while a Python/OpenCV core does the pixels - so framer is distributed-ready rather than tied to one computer.
 

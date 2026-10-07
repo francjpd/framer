@@ -29,6 +29,7 @@ defmodule FramerWeb.Rig do
 
   def schema, do: @schema
   def version, do: @version
+  def falloffs, do: @falloffs
 
   # ---------------------------------------------------------------------------
   # construction
@@ -77,8 +78,11 @@ defmodule FramerWeb.Rig do
 
   def bone(rig, id), do: Enum.find(bones(rig), &(&1["id"] == id))
 
-  def duration(%{"duration" => %{"fps" => fps, "frames" => frames}}) do
-    %{"fps" => fps, "frames" => frames}
+  def duration(%{"duration" => duration}) when is_map(duration) do
+    %{
+      "fps" => Map.get(duration, "fps", @default_fps),
+      "frames" => Map.get(duration, "frames", @default_frames)
+    }
   end
 
   def duration(_), do: %{"fps" => @default_fps, "frames" => @default_frames}

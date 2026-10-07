@@ -60,8 +60,6 @@ defmodule FramerWebWeb.EditorLive do
   # --- rig lifecycle -------------------------------------------------------
 
   @impl true
-  def handle_event("request_rig", _params, socket), do: {:noreply, push_rig(socket)}
-
   def handle_event("select_project", %{"id" => ""}, socket), do: {:noreply, socket}
 
   def handle_event("select_project", %{"id" => id}, socket) do
@@ -134,11 +132,21 @@ defmodule FramerWebWeb.EditorLive do
   end
 
   def handle_event("set_radius", %{"id" => id, "radius" => radius}, socket) do
-    {:noreply, mutate(socket, fn rig -> Rig.set_radius(rig, id, to_float(radius)) end)}
+    case to_float(radius) do
+      value when is_number(value) and value > 0 ->
+        {:noreply, mutate(socket, fn rig -> Rig.set_radius(rig, id, value) end)}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("set_falloff", %{"id" => id, "falloff" => falloff}, socket) do
-    {:noreply, mutate(socket, fn rig -> Rig.set_falloff(rig, id, falloff) end)}
+    if falloff in Rig.falloffs() do
+      {:noreply, mutate(socket, fn rig -> Rig.set_falloff(rig, id, falloff) end)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("set_bind", params, socket) do

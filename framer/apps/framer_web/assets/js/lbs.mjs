@@ -9,8 +9,6 @@
 // The BEAM never sees any of this: it stays entirely on the client (or in the
 // test process), and the engine is the authority for final output.
 
-export const SCHEMA = "framer.rig";
-export const VERSION = 1;
 export const DEFAULT_RADIUS = 10.0;
 export const DEFAULT_POWER = 2.0;
 
@@ -35,14 +33,6 @@ export function falloffPower(falloff, defaultPower) {
   if (falloff === "linear") return 1.0;
   if (falloff === "hard") return 0.0;
   return defaultPower;
-}
-
-export function rigWidth(rig) {
-  return rig.canvas.width;
-}
-
-export function rigHeight(rig) {
-  return rig.canvas.height;
 }
 
 // ---------------------------------------------------------------------------
