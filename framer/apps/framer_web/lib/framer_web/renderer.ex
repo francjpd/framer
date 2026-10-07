@@ -135,8 +135,8 @@ defmodule FramerWeb.Renderer do
 
     cond do
       state.job && state.job.id == job_id && state.job.status == :completed ->
-        result = merge(state.job, state.completed_chunks)
-        broadcast(rig_id, event(job_id, :completed, result, output, state))
+        event = completion_event(job_id, merge(state.job, state.completed_chunks), output, state)
+        broadcast(rig_id, event)
 
       state.job && state.job.id == job_id && state.job.status == :failed ->
         broadcast(rig_id, event(job_id, :failed, {:error, :job_failed}, output, state))
@@ -150,17 +150,29 @@ defmodule FramerWeb.Renderer do
     end
   end
 
+  @doc false
+  def completion_event(job_id, {:ok, _merged}, output, state),
+    do: event(job_id, :completed, {:ok, output}, output, state)
+
+  def completion_event(job_id, {:error, reason}, output, state),
+    do: event(job_id, :failed, {:error, reason}, output, state)
+
   defp event(job_id, status, result, output, state) do
     %{
       job_id: job_id,
       status: status,
       output: output,
       result: result,
+      error: event_error(result),
       completed_chunks: length(state.completed_chunks),
       failed_chunks: length(state.failed_chunks),
       total_chunks: state.total_chunks
     }
   end
+
+  defp event_error({:error, reason}) when is_binary(reason), do: reason
+  defp event_error({:error, reason}), do: inspect(reason)
+  defp event_error(_), do: nil
 
   defp broadcast(rig_id, payload) do
     Phoenix.PubSub.broadcast(FramerWeb.PubSub, topic(rig_id), {:export, payload})

@@ -108,13 +108,6 @@ defmodule FramerWeb.RigStore do
     end
   end
 
-  @doc "Create a project from an existing image file on disk."
-  def create_from_file(path, opts \\ []) do
-    with {:ok, binary} <- File.read(path) do
-      create_from_source(binary, Path.basename(path), Keyword.put(opts, :id, opts[:id]))
-    end
-  end
-
   @doc "Persist a rig document, validating it first. Returns `{:ok, rig}`."
   def save(%{"id" => id} = rig) do
     with :ok <- validate_id(id),

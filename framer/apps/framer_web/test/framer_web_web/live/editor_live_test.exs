@@ -91,6 +91,25 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert keyframe["pose"]["b0"]["tx"] == 12.0
   end
 
+  test "a failed merge shows an error and offers no Download link", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    payload = %{
+      job_id: "job-1",
+      status: :failed,
+      output: "/projects/#{id}/output.webm",
+      result: {:error, "FFmpeg merge failed"},
+      error: "FFmpeg merge failed"
+    }
+
+    Phoenix.PubSub.broadcast(FramerWeb.PubSub, FramerWeb.Renderer.topic(id), {:export, payload})
+
+    assert render(view) =~ "FFmpeg merge failed"
+    refute has_element?(view, "a[download]")
+  end
+
   test "uploading a still creates a project and opens it", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/editor")
 

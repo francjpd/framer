@@ -301,20 +301,18 @@ defmodule FramerWebWeb.EditorLive do
 
   def handle_info(:export_tick, %{assigns: %{export: nil}} = socket), do: {:noreply, socket}
 
+  def handle_info(:export_tick, %{assigns: %{export: %{status: status}}} = socket)
+      when status in [:completed, :failed],
+      do: {:noreply, socket}
+
   def handle_info(:export_tick, socket) do
-    state = FramerCore.Orchestrator.get_status()
     export = socket.assigns.export
+    progress = export_progress(FramerCore.Orchestrator.get_status(), export)
 
-    case export_status(state, export) do
-      {status, payload} when status in [:done, :failed] ->
-        {:noreply, apply_export_result(socket, payload)}
-
-      {:processing, progress} ->
-        {:noreply,
-         socket
-         |> assign(:export, %{export | progress: progress})
-         |> schedule_export_tick()}
-    end
+    {:noreply,
+     socket
+     |> assign(:export, %{export | progress: progress})
+     |> schedule_export_tick()}
   end
 
   def handle_info({:export, payload}, socket) do
@@ -778,25 +776,21 @@ defmodule FramerWebWeb.EditorLive do
     socket
   end
 
-  defp export_status(state, export) do
+  defp export_progress(state, export) do
     cond do
-      state.job && state.job.id == export.job_id && state.job.status == :completed ->
-        {:done, %{status: :completed, output: export.output, progress: 100.0}}
-
-      state.job && state.job.id == export.job_id && state.job.status == :failed ->
-        {:failed, %{status: :failed, output: export.output, progress: 0.0, error: "job failed"}}
-
       state.job && state.job.id == export.job_id && state.total_chunks > 0 ->
         done = length(state.completed_chunks) + length(state.failed_chunks)
-        {:processing, Float.round(done / state.total_chunks * 100, 1)}
+        Float.round(done / state.total_chunks * 100, 1)
 
       true ->
-        {:processing, export.progress}
+        export.progress
     end
   end
 
   defp apply_export_result(socket, payload) do
-    export = socket.assigns.export || %{output: payload[:output], result_url: nil}
+    export =
+      socket.assigns.export ||
+        %{output: payload[:output], result_url: nil, progress: 0.0, status: :processing}
 
     socket
     |> assign(:export, Map.merge(export, payload))
