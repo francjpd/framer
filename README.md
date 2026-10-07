@@ -1,6 +1,8 @@
 # framer
 
-framer is a video processing tool: it removes a video's background, raises its frame rate, and builds seamless loops. Operations are small and chainable, and jobs run in parallel for speed.
+framer is a video processing tool: it removes a video background, raises its frame rate, and builds seamless loops. Operations are small and chainable, and jobs run in parallel for speed.
+
+## What it's for
 
 framer is a set of small, composable video-editing operations - background removal, frame-rate boost, seamless loops, and keyframe animation. Each one is deterministic and file-in/file-out, so a person or an AI agent can discover and chain them to get exactly the edit they want, instead of depending on one end-to-end model.
 
