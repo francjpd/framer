@@ -144,7 +144,7 @@ defmodule FramerWebWeb.RigController do
 
   # --- helpers ---
 
-  defp build(%{"source_base64" => encoded} = params) do
+  defp build(%{"source_base64" => encoded} = params) when is_binary(encoded) do
     with {:ok, binary} <- Base.decode64(encoded) do
       RigStore.create_from_source(binary, params["filename"] || "source.png",
         name: params["name"]
@@ -154,9 +154,12 @@ defmodule FramerWebWeb.RigController do
     end
   end
 
-  defp build(%{"width" => width, "height" => height} = params) do
-    with {w, ""} <- Integer.parse(to_string(width)),
-         {h, ""} <- Integer.parse(to_string(height)),
+  defp build(%{"source_base64" => _}), do: {:error, :invalid_base64}
+
+  defp build(%{"width" => width, "height" => height} = params)
+       when is_binary(width) and is_binary(height) do
+    with {w, ""} <- Integer.parse(width),
+         {h, ""} <- Integer.parse(height),
          true <- w > 0 and h > 0 do
       rig = Rig.new(w, h, id: UUID.uuid4(), name: params["name"] || "Untitled rig")
       RigStore.save(rig)
@@ -164,6 +167,18 @@ defmodule FramerWebWeb.RigController do
       _ -> {:error, :invalid_canvas}
     end
   end
+
+  defp build(%{"width" => width, "height" => height} = params)
+       when is_integer(width) and is_integer(height) do
+    if width > 0 and height > 0 do
+      rig = Rig.new(width, height, id: UUID.uuid4(), name: params["name"] || "Untitled rig")
+      RigStore.save(rig)
+    else
+      {:error, :invalid_canvas}
+    end
+  end
+
+  defp build(%{"width" => _, "height" => _}), do: {:error, :invalid_canvas}
 
   defp build(_params), do: {:error, :missing_source}
 
@@ -173,6 +188,7 @@ defmodule FramerWebWeb.RigController do
   defp error_message(:invalid_canvas), do: "width and height must be positive integers"
   defp error_message(:invalid_base64), do: "source_base64 is not valid base64"
   defp error_message(:invalid_id), do: "invalid rig id"
+  defp error_message(:escaping_path), do: "the source path escapes the project directory"
   defp error_message({:invalid_rig, reason}), do: reason
   defp error_message({:invalid_json, _}), do: "rig.json is not valid JSON"
   defp error_message(reason), do: inspect(reason)

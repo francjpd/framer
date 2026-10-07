@@ -110,7 +110,7 @@ defmodule FramerWeb.RigStore do
   @doc "Persist a rig document, validating it first. Returns `{:ok, rig}`."
   def save(%{"id" => id} = rig) do
     with :ok <- validate_id(id),
-         {:ok, rig} <- Rig.validate(rig, allow_empty_bones: true) do
+         {:ok, rig} <- Rig.validate(rig, allow_empty_bones: true, project_dir: project_dir(id)) do
       dir = project_dir(id)
       File.mkdir_p!(dir)
 
@@ -128,7 +128,7 @@ defmodule FramerWeb.RigStore do
       path = rig_path(id)
 
       case File.read(path) do
-        {:ok, body} -> decode(body)
+        {:ok, body} -> decode(body, project_dir(id))
         {:error, reason} -> {:error, reason}
       end
     end
@@ -161,10 +161,10 @@ defmodule FramerWeb.RigStore do
     if valid_id?(id), do: :ok, else: {:error, :invalid_id}
   end
 
-  defp decode(body) do
+  defp decode(body, project_dir) do
     case Jason.decode(body) do
       {:ok, rig} ->
-        case Rig.validate(rig, allow_empty_bones: true) do
+        case Rig.validate(rig, allow_empty_bones: true, project_dir: project_dir) do
           {:ok, _} -> {:ok, rig}
           {:error, reason} -> {:error, {:invalid_rig, reason}}
         end

@@ -59,6 +59,64 @@ defmodule FramerWeb.RigTest do
       assert {:error, message} = Rig.validate(bad)
       assert message =~ "tail"
     end
+
+    test "returns a validation error, not a crash, for non-object bind and duration" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      assert {:error, message} = Rig.validate(%{rig | "bind" => []}, allow_empty_bones: true)
+      assert message =~ "bind"
+
+      assert {:error, message} = Rig.validate(%{rig | "duration" => []}, allow_empty_bones: true)
+      assert message =~ "duration"
+    end
+  end
+
+  describe "source confinement" do
+    test "accepts a relative source path inside the project directory" do
+      rig =
+        Rig.new(64, 64, source_path: "assets/character.png")
+        |> Rig.add_bone([10, 10], [10, 30])
+        |> elem(0)
+
+      assert {:ok, _} = Rig.validate(rig, allow_empty_bones: true, project_dir: "/tmp/project")
+    end
+
+    test "rejects absolute, escaping and traversing source paths" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      for path <- [
+            "/etc/passwd",
+            "../../secret.png",
+            "../secret.png"
+          ] do
+        escaping = put_in(rig, ["source", "path"], path)
+
+        assert {:error, message} =
+                 Rig.validate(escaping, allow_empty_bones: true, project_dir: "/tmp/project")
+
+        assert message =~ "project directory"
+      end
+    end
+
+    test "rejects a source symlink that points outside the project directory" do
+      root = Path.join(System.tmp_dir!(), "framer_confine_#{System.unique_integer([:positive])}")
+      project = Path.join(root, "project")
+      File.mkdir_p!(project)
+      secret = Path.join(root, "secret.png")
+      File.write!(secret, "secret")
+      link = Path.join(project, "escape.png")
+      File.ln_s!(secret, link)
+
+      on_exit(fn -> File.rm_rf(root) end)
+
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+      rig = put_in(rig, ["source", "path"], "escape.png")
+
+      assert {:error, message} =
+               Rig.validate(rig, allow_empty_bones: true, project_dir: project)
+
+      assert message =~ "project directory"
+    end
   end
 
   describe "bones" do
@@ -177,14 +235,6 @@ defmodule FramerWeb.RigTest do
     test "compute_vertex_weights handles a rig with no bones" do
       rig = Rig.new(10, 10)
       assert Rig.compute_vertex_weights(rig, [[1, 1], [2, 2]]) == [[], []]
-    end
-
-    test "bind_fingerprint changes when the bind changes" do
-      {rig, id} = Rig.add_bone(Rig.new(80, 80), [40, 40], [40, 10], radius: 40)
-      first = Rig.bind_fingerprint(rig)
-      assert first == Rig.bind_fingerprint(rig)
-      refute first == Rig.bind_fingerprint(Rig.set_radius(rig, id, 20))
-      refute first == Rig.bind_fingerprint(Rig.set_bind(rig, power: 3.0))
     end
   end
 

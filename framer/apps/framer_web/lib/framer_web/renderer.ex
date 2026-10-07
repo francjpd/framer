@@ -174,12 +174,33 @@ defmodule FramerWeb.Renderer do
   end
 
   defp source_path(rig) do
-    path = get_in(rig, ["source", "path"])
+    id = rig["id"]
 
-    cond do
-      is_binary(path) and File.exists?(path) -> {:ok, path}
-      is_binary(rig["id"]) -> fallback_source(rig["id"])
-      true -> {:error, :missing_source}
+    case project_root(id) do
+      :error ->
+        {:error, :missing_source}
+
+      {:ok, root} ->
+        case declared_source(rig, root) do
+          {:ok, path} ->
+            if File.exists?(path), do: {:ok, path}, else: fallback_source(id)
+
+          {:error, :escaping_path} ->
+            {:error, :escaping_path}
+
+          :none ->
+            fallback_source(id)
+        end
+    end
+  end
+
+  defp project_root(id) when is_binary(id), do: {:ok, RigStore.project_dir(id)}
+  defp project_root(_), do: :error
+
+  defp declared_source(rig, root) do
+    case rig["source"] do
+      %{"path" => path} when is_binary(path) -> Rig.confine_to_project(path, root)
+      _ -> :none
     end
   end
 

@@ -208,25 +208,6 @@ export function skinPoint(point, weights, world) {
   return [x, y];
 }
 
-/**
- * Pack up to four bone weights into an RGBA8 texture for the WebGL2 path.
- * `mesh` is the dense weight field; bones beyond the fourth are dropped (the
- * hook falls back to the CPU renderer in that case).
- */
-export function buildWeightTexture(weights, count, w, h) {
-  const plane = w * h;
-  const used = Math.min(count, 4);
-  const texture = new Uint8Array(plane * 4);
-
-  for (let i = 0; i < plane; i++) {
-    for (let b = 0; b < used; b++) {
-      texture[i * 4 + b] = Math.round(clamp(weights[b * plane + i], 0, 1) * 255);
-    }
-  }
-
-  return texture;
-}
-
 // ---------------------------------------------------------------------------
 // bone evaluation / keyframes (mirrors evaluate_bones / interpolate_keyframes)
 // ---------------------------------------------------------------------------

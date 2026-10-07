@@ -60,6 +60,20 @@ defmodule FramerWebWeb.RigControllerTest do
 
       assert message =~ "source image"
     end
+
+    test "returns 400, not 500, for non-string base64 and canvas values", %{conn: conn} do
+      assert %{"error" => message} =
+               conn |> post(~p"/api/rigs", %{"source_base64" => 123}) |> json_response(400)
+
+      assert message =~ "base64"
+
+      assert %{"error" => message} =
+               conn
+               |> post(~p"/api/rigs", %{"width" => %{"a" => 1}, "height" => [1]})
+               |> json_response(400)
+
+      assert message =~ "positive integers"
+    end
   end
 
   describe "GET/PUT /api/rigs/:id" do

@@ -5,9 +5,10 @@ defmodule FramerWeb.Rig do
   This module is the Elixir mirror of `core/deform.py`'s rig schema and bone
   math. It is deliberately pure: it builds and mutates the versioned rig JSON
   document, computes the display control mesh and per-vertex weights, and
-  interpolates keyframes. It never touches pixels, the Port or the filesystem -
-  `FramerWeb.RigStore` persists the result and the engine's Python validator
-  remains authoritative at render time.
+  interpolates keyframes. It never touches pixels or the Port - `FramerWeb.RigStore`
+  persists the result and the engine's Python validator remains authoritative at
+  render time. `validate/2` confines `source.path` to the project directory when
+  given `:project_dir`.
 
   The document is a `%{String.t() => term()}` map with JSON string keys so it
   round-trips through Jason unchanged. Weights are always *derived* from the
@@ -94,6 +95,7 @@ defmodule FramerWeb.Rig do
   """
   def validate(rig, opts \\ []) do
     allow_empty = Keyword.get(opts, :allow_empty_bones, false)
+    project_dir = Keyword.get(opts, :project_dir)
 
     case rig do
       %{"schema" => @schema, "version" => @version} ->
@@ -101,7 +103,8 @@ defmodule FramerWeb.Rig do
              {:ok, bones} <- validate_bones(rig, allow_empty),
              {:ok, _} <- validate_keyframes(rig, bones),
              {:ok, _} <- validate_bind(rig),
-             {:ok, _} <- validate_duration(rig) do
+             {:ok, _} <- validate_duration(rig),
+             {:ok, _} <- validate_source(rig, project_dir) do
           {:ok, rig}
         end
 
@@ -272,17 +275,15 @@ defmodule FramerWeb.Rig do
 
   defp validate_bind(rig) do
     bind = rig["bind"] || %{}
-    power = bind["power"] || @default_power
-    radius_scale = bind["radius_scale"] || 1.0
 
     cond do
       not is_map(bind) ->
         {:error, "rig.bind must be an object"}
 
-      not (is_number(power) and power >= 0) ->
+      not (is_number(bind["power"] || @default_power) and (bind["power"] || @default_power) >= 0) ->
         {:error, "rig.bind.power must be >= 0"}
 
-      not (is_number(radius_scale) and radius_scale > 0) ->
+      not (is_number(bind["radius_scale"] || 1.0) and (bind["radius_scale"] || 1.0) > 0) ->
         {:error, "rig.bind.radius_scale must be > 0"}
 
       true ->
@@ -305,6 +306,55 @@ defmodule FramerWeb.Rig do
 
       true ->
         {:ok, duration}
+    end
+  end
+
+  defp validate_source(_rig, nil), do: {:ok, nil}
+
+  defp validate_source(rig, project_dir) do
+    case rig["source"] do
+      nil ->
+        {:ok, nil}
+
+      %{"path" => path} when is_binary(path) ->
+        case confine_to_project(path, project_dir) do
+          {:ok, _} ->
+            {:ok, nil}
+
+          {:error, :escaping_path} ->
+            {:error, "rig.source.path must stay within the project directory"}
+        end
+
+      source when is_map(source) ->
+        {:ok, source}
+
+      _ ->
+        {:error, "rig.source must be an object"}
+    end
+  end
+
+  @doc """
+  Resolve `path` relative to `project_dir`, rejecting anything that escapes it.
+
+  Rejects absolute paths, `..` traversal and symlinks whose target leaves the
+  project directory. Returns `{:ok, absolute_path}` or `{:error, :escaping_path}`.
+  """
+  def confine_to_project(path, project_dir) when is_binary(path) and is_binary(project_dir) do
+    root = Path.expand(project_dir)
+    relative = path |> Path.expand(root) |> Path.relative_to(root)
+
+    cond do
+      relative == "." or Path.type(relative) == :absolute ->
+        {:error, :escaping_path}
+
+      match?([".." | _], Path.split(relative)) ->
+        {:error, :escaping_path}
+
+      true ->
+        case Path.safe_relative(relative, root) do
+          {:ok, safe} -> {:ok, Path.join(root, safe)}
+          :error -> {:error, :escaping_path}
+        end
     end
   end
 
@@ -691,27 +741,6 @@ defmodule FramerWeb.Rig do
       a6 * b1 + a7 * b4 + a8 * b7,
       a6 * b2 + a7 * b5 + a8 * b8
     }
-  end
-
-  @doc """
-  Bind-pose fingerprint: changes whenever the derived weights change.
-
-  The preview uses it to decide when to recompute its weight fields.
-  """
-  def bind_fingerprint(rig) do
-    relevant = %{
-      "canvas" => canvas(rig),
-      "bones" =>
-        Enum.map(bones(rig), fn bone ->
-          Map.take(bone, ["id", "parent", "rest", "radius", "falloff"])
-        end),
-      "bind" => Map.take(rig["bind"] || %{}, ["power", "radius_scale"])
-    }
-
-    relevant
-    |> Jason.encode!()
-    |> then(&:crypto.hash(:sha, &1))
-    |> Base.encode16(case: :lower)
   end
 
   # ---------------------------------------------------------------------------
