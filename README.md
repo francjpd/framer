@@ -8,6 +8,16 @@ framer is a set of small, composable video-editing operations - background remov
 
 Built to scale: an Elixir/OTP orchestration layer splits a job into chunks and farms them across many machines, while a Python/OpenCV core does the pixels - so framer is distributed-ready rather than tied to one computer.
 
+The current list of operations is:
+
+- background removal (`remove-bg`)
+- frame-rate boost (`fps-boost`)
+- seamless loops (`loop`)
+- keyframe animation (`deform`)
+- merge
+- info
+- standalone CLI operations: `export`, `resize`, `trim`, `recolor`, `glow`, `outline`
+
 ## Architecture
 
 ```
