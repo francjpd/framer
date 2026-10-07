@@ -24,7 +24,7 @@ output chunk file.
 // Request (Elixir -> Python)
 {
   "id":          "e2f1...",        // correlation id, echoed back
-  "op":          "remove-bg",      // remove-bg | fps-boost | loop | merge | info
+  "op":          "remove-bg",      // remove-bg | fps-boost | loop | deform | merge | info
   "input":       "/abs/input.mp4", // source file (nil for merge)
   "output":      "/abs/chunk.webm",// destination chunk file
   "start_frame": 0,                // inclusive
