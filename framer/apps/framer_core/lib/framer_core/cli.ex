@@ -3,7 +3,7 @@ defmodule FramerCore.CLI do
   Command line interface for the FramerCore orchestration.
 
   Every operation runs through the same Python Port contract
-  (`remove-bg`, `fps-boost`, `loop`). The CLI only resolves the video's frame
+  (see `docs/elixir-python-ports.md`). The CLI only resolves the video's frame
   count / fps, submits the job to the `FramerCore.Orchestrator` and merges the
   finished chunks - it never touches pixels.
 
