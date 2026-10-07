@@ -28,14 +28,17 @@ defmodule FramerWeb.ImageInfoTest do
   end
 
   test "reads an extended WebP VP8X canvas" do
-    width = 18
-    height = 9
+    width = 640
+    height = 480
 
     webp =
       "RIFF" <>
         <<0::little-32>> <>
         "WEBP" <>
-        "VP8X" <> <<0, 0, 0, 0>> <> <<width - 1::little-24, height - 1::little-24>> <> <<0>>
+        "VP8X" <>
+        <<10::little-32>> <>
+        <<0x10, 0, 0, 0>> <>
+        <<width - 1::little-24, height - 1::little-24>>
 
     assert {:ok, %{width: ^width, height: ^height, format: :webp}} = ImageInfo.read(webp)
   end

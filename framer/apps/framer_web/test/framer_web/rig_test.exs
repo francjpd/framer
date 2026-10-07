@@ -259,45 +259,6 @@ defmodule FramerWeb.RigTest do
       rig = Rig.record_keyframe(rig, 5, %{a => %{rot: 0.4}})
       assert Rig.delete_keyframe(rig, 5)["keyframes"] == []
     end
-
-    test "pose_at interpolates linearly and clamps at the ends" do
-      {rig, a} = Rig.add_bone(Rig.new(100, 100), [50, 90], [50, 10])
-      rig = Rig.record_keyframe(rig, 0, %{a => %{rot: 0.0}})
-      rig = Rig.record_keyframe(rig, 10, %{a => %{rot: 1.0, tx: 20.0}})
-
-      assert Rig.pose_at(rig, -5)[a]["rot"] == 0.0
-      assert Rig.pose_at(rig, 20)[a]["rot"] == 1.0
-      assert Rig.pose_at(rig, 20)[a]["tx"] == 20.0
-      assert_in_delta Rig.pose_at(rig, 5)[a]["rot"], 0.5, 1.0e-9
-      assert_in_delta Rig.pose_at(rig, 5)[a]["tx"], 10.0, 1.0e-9
-    end
-
-    test "evaluate_bones composes parent transforms" do
-      {rig, a} = Rig.add_bone(Rig.new(100, 100), [0, 0], [0, 10])
-      {rig, b} = Rig.add_bone(rig, [0, 10], [0, 20], parent: a)
-
-      rig = Rig.record_keyframe(rig, 0, %{a => %{tx: 5.0, ty: 3.0}, b => %{}})
-      [a_world, b_world] = Rig.evaluate_bones(rig, 0)
-
-      # a is a pure translation; b inherits it.
-      assert_in_delta elem(a_world, 2), 5.0, 1.0e-9
-      assert_in_delta elem(a_world, 5), 3.0, 1.0e-9
-      assert_in_delta elem(b_world, 2), 5.0, 1.0e-9
-      assert_in_delta elem(b_world, 5), 3.0, 1.0e-9
-    end
-
-    test "a parent rotation moves a child" do
-      {rig, a} = Rig.add_bone(Rig.new(100, 100), [0, 0], [0, 10])
-      {rig, b} = Rig.add_bone(rig, [0, 10], [0, 20], parent: a)
-
-      rig = Rig.record_keyframe(rig, 0, %{a => %{rot: :math.pi() / 2}, b => %{}})
-      [_a_world, b_world] = Rig.evaluate_bones(rig, 0)
-
-      # Rotating a by 90 degrees about (0,0) maps b's rest head (0,10) to (-10,0).
-      {m00, m01, m02, m10, m11, m12, _, _, _} = b_world
-      assert_in_delta m00 * 0 + m01 * 10 + m02, -10.0, 1.0e-9
-      assert_in_delta m10 * 0 + m11 * 10 + m12, 0.0, 1.0e-9
-    end
   end
 
   describe "geometry helpers" do

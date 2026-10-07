@@ -57,7 +57,8 @@ defmodule FramerWeb.ImageInfo do
   # (lossy) stores it after the sync code.
   defp webp(<<"RIFF", _size::little-32, "WEBP", rest::binary>>) do
     case rest do
-      <<"VP8X", _flags::binary-size(4), w::little-24, h::little-24, _rest::binary>> ->
+      <<"VP8X", _chunk_size::little-32, _flags::binary-size(4), w::little-24, h::little-24,
+        _rest::binary>> ->
         {:ok, %{width: w + 1, height: h + 1, format: :webp}}
 
       <<"VP8 ", _chunk::little-32, _frame::binary-size(3), _sync::binary-size(3), w::little-16,

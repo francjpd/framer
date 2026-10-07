@@ -426,9 +426,9 @@ export function computeBackwardMap(A, T, w, h, iterations) {
 export function remapBilinear(source, w, h, mapX, mapY) {
   const out = new Uint8ClampedArray(w * h * 4);
 
-  function sample(index, channel) {
-    if (index < 0 || index >= w * h) return 0;
-    return source[index * 4 + channel];
+  function sample(x, y, channel) {
+    if (x < 0 || x >= w || y < 0 || y >= h) return 0;
+    return source[(y * w + x) * 4 + channel];
   }
 
   for (let y = 0; y < h; y++) {
@@ -441,17 +441,12 @@ export function remapBilinear(source, w, h, mapX, mapY) {
       const ax = fx - x0;
       const ay = fy - y0;
 
-      const topLeft = y0 * w + x0;
-      const topRight = y0 * w + (x0 + 1);
-      const bottomLeft = (y0 + 1) * w + x0;
-      const bottomRight = (y0 + 1) * w + (x0 + 1);
-
       for (let c = 0; c < 4; c++) {
         const value =
-          sample(topLeft, c) * (1 - ax) * (1 - ay) +
-          sample(topRight, c) * ax * (1 - ay) +
-          sample(bottomLeft, c) * (1 - ax) * ay +
-          sample(bottomRight, c) * ax * ay;
+          sample(x0, y0, c) * (1 - ax) * (1 - ay) +
+          sample(x0 + 1, y0, c) * ax * (1 - ay) +
+          sample(x0, y0 + 1, c) * (1 - ax) * ay +
+          sample(x0 + 1, y0 + 1, c) * ax * ay;
 
         out[i * 4 + c] = value;
       }

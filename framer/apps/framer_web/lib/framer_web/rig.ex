@@ -646,112 +646,6 @@ defmodule FramerWeb.Rig do
     Map.put(rig, "keyframes", Enum.reject(keyframes(rig), &(&1["frame"] == frame)))
   end
 
-  @doc """
-  Interpolate per-bone local poses at `frame` (linear, clamped at the ends).
-
-  Mirrors `core.deform.interpolate_keyframes/2`. Returns `%{bone_id => pose}`.
-  """
-  def pose_at(rig, frame) do
-    zero = %{"rot" => 0.0, "tx" => 0.0, "ty" => 0.0}
-    kfs = keyframes(rig)
-    bones = bones(rig)
-
-    cond do
-      kfs == [] ->
-        Map.new(bones, &{&1["id"], zero})
-
-      frame <= hd(kfs)["frame"] ->
-        poses_for(kfs |> hd() |> Map.get("pose", %{}), bones, zero)
-
-      frame >= List.last(kfs)["frame"] ->
-        poses_for(List.last(kfs) |> Map.get("pose", %{}), bones, zero)
-
-      true ->
-        {left, right} = surrounding(kfs, frame)
-        span = right["frame"] - left["frame"]
-        t = if span <= 0, do: 0.0, else: (frame - left["frame"]) / span
-
-        Map.new(bones, fn bone ->
-          id = bone["id"]
-          lp = Map.merge(zero, (left["pose"] || %{}) |> Map.get(id, %{}))
-          rp = Map.merge(zero, (right["pose"] || %{}) |> Map.get(id, %{}))
-
-          {id,
-           %{
-             "rot" => lerp(lp["rot"], rp["rot"], t),
-             "tx" => lerp(lp["tx"], rp["tx"], t),
-             "ty" => lerp(lp["ty"], rp["ty"], t)
-           }}
-        end)
-    end
-  end
-
-  @doc "World transform (3x3 as a 9-tuple, row-major) for every bone at `frame`."
-  def evaluate_bones(rig, frame) do
-    poses = pose_at(rig, frame)
-    bones = bones(rig)
-    by_id = Map.new(bones, &{&1["id"], &1})
-
-    world =
-      Map.new(bones, fn bone ->
-        {bone["id"], world_for(bone, by_id, poses, %{})}
-      end)
-
-    Enum.map(bones, &Map.fetch!(world, &1["id"]))
-  end
-
-  defp world_for(bone, by_id, poses, memo) do
-    id = bone["id"]
-
-    case memo do
-      %{^id => matrix} ->
-        matrix
-
-      _ ->
-        local = local_matrix(bone["rest"]["head"], poses[id] || %{"rot" => 0.0})
-
-        case bone["parent"] && Map.get(by_id, bone["parent"]) do
-          nil -> local
-          parent -> multiply(world_for(parent, by_id, poses, memo), local)
-        end
-    end
-  end
-
-  @doc "Local 3x3 (row-major 9-tuple) for a bone: rotation about its rest head plus translation."
-  def local_matrix(head, pose) do
-    rot = to_number(pose["rot"] || 0.0)
-    tx = to_number(pose["tx"] || 0.0)
-    ty = to_number(pose["ty"] || 0.0)
-
-    cos = :math.cos(rot)
-    sin = :math.sin(rot)
-    [hx, hy] = ensure_point(head)
-
-    m00 = cos
-    m01 = -sin
-    m02 = hx - cos * hx + sin * hy + tx
-    m10 = sin
-    m11 = cos
-    m12 = hy - sin * hx - cos * hy + ty
-
-    {m00, m01, m02, m10, m11, m12, 0.0, 0.0, 1.0}
-  end
-
-  @doc "3x3 row-major matrix product `a * b`."
-  def multiply({a0, a1, a2, a3, a4, a5, a6, a7, a8}, {b0, b1, b2, b3, b4, b5, b6, b7, b8}) do
-    {
-      a0 * b0 + a1 * b3 + a2 * b6,
-      a0 * b1 + a1 * b4 + a2 * b7,
-      a0 * b2 + a1 * b5 + a2 * b8,
-      a3 * b0 + a4 * b3 + a5 * b6,
-      a3 * b1 + a4 * b4 + a5 * b7,
-      a3 * b2 + a4 * b5 + a5 * b8,
-      a6 * b0 + a7 * b3 + a8 * b6,
-      a6 * b1 + a7 * b4 + a8 * b7,
-      a6 * b2 + a7 * b5 + a8 * b8
-    }
-  end
-
   # ---------------------------------------------------------------------------
   # geometry helpers
   # ---------------------------------------------------------------------------
@@ -813,22 +707,6 @@ defmodule FramerWeb.Rig do
     |> Enum.take_while(&(&1 != nil))
     |> Enum.member?(ancestor)
   end
-
-  defp poses_for(pose_map, bones, zero) do
-    Map.new(bones, fn bone ->
-      {bone["id"], Map.merge(zero, Map.get(pose_map, bone["id"], %{}))}
-    end)
-  end
-
-  defp surrounding(
-         [%{"frame" => left_frame} = left, %{"frame" => right_frame} = right | _],
-         frame
-       )
-       when left_frame <= frame and frame <= right_frame do
-    {left, right}
-  end
-
-  defp surrounding([_ | rest], frame), do: surrounding(rest, frame)
 
   # Keyframes always carry a full per-bone pose so the engine never has to guess;
   # normalising here also drops transient/bogus keys.
@@ -893,8 +771,6 @@ defmodule FramerWeb.Rig do
   defp positive_integer?(value), do: is_integer(value) and value > 0
 
   defp clamp(value, low, high), do: value |> max(low) |> min(high)
-
-  defp lerp(a, b, t), do: to_number(a) + (to_number(b) - to_number(a)) * t
 
   defp to_number(value) when is_integer(value), do: value * 1.0
   defp to_number(value) when is_float(value), do: value
