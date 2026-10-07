@@ -1,6 +1,9 @@
 # Framer
 
-framer is a set of small, composable video-editing operations. Each one is deterministic and file-in/file-out, so a person or an AI agent can discover and chain them to get exactly the edit they want, instead of depending on one end-to-end model.
+<img width="1440" height="720" alt="framer-logo" src="https://github.com/user-attachments/assets/b340edee-31dd-474c-bed3-821e5aaed862" />
+
+
+framer is a set of small, composable video-editing operations. Each one is determiniastic and file-in/file-out, so a person or an AI agent can discover and chain them to get exactly the edit they want, instead of depending on one end-to-end model.
 
 ## Current list of operations is:
 
