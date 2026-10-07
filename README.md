@@ -1,4 +1,4 @@
-# framer
+# Framer
 
 framer is a set of small, composable video-editing operations. Each one is deterministic and file-in/file-out, so a person or an AI agent can discover and chain them to get exactly the edit they want, instead of depending on one end-to-end model.
 
