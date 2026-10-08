@@ -32,7 +32,9 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert has_element?(view, "button", "Auto-bind mesh")
   end
 
-  test "bone property and bind controls live inside a form so their events reach the server", %{conn: conn} do
+  test "bone property and bind controls live inside a form so their events reach the server", %{
+    conn: conn
+  } do
     {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
     {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
 

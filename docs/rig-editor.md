@@ -84,9 +84,13 @@ One fixed-point linear-blend-skinning implementation, two consumers:
 The two are kept honest by a golden-frame parity test,
 `tests/test_preview_parity.py`, which renders the deterministic scene from
 `tests/deform_scene.py` with the Python renderer and with `lbs.mjs` under Node
-and compares the dense weights and the rendered pixels. It skips when Node is
-absent; the Python golden test (`tests/test_golden_deform.py`) still covers the
-authoritative render.
+and compares the dense weights, the rendered pixels and the interpolated poses.
+It skips when Node is absent; the Python golden test (`tests/test_golden_deform.py`)
+still covers the authoritative render. The server-side timeline value/velocity
+graph interpolates poses with `FramerWeb.Rig.interpolate_pose/3`, which mirrors
+`core.deform.interpolate_keyframes` and `lbs.mjs` `interpolatePoses`; an Elixir
+test (`framer/apps/framer_web/test/framer_web/rig_test.exs`) keeps it tied to
+`lbs.mjs` so it cannot drift from the browser preview.
 
 ## Persistence
 

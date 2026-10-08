@@ -14,6 +14,7 @@ defmodule FramerCore.CLI do
       mix run -e "FramerCore.CLI.main([\"fps-boost\", \"input.mp4\", \"output.mp4\", \"--to\", \"60\"])"
       mix run -e "FramerCore.CLI.main([\"loop\", \"input.mp4\", \"output.mp4\", \"--method\", \"pingpong\"])"
       mix run -e "FramerCore.CLI.main([\"deform\", \"still.png\", \"output.webm\", \"--rig\", \"rig.json\"])"
+      mix run -e "FramerCore.CLI.main([\"connect\", \"--id\", \"<pairing id>\", \"--server\", \"http://host:4000\"])"
   """
 
   alias FramerCore.Orchestrator

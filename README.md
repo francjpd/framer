@@ -211,16 +211,17 @@ python cli.py loop input.webm output.webm --method auto --analyze-only
 
 `framer_web` is the Phoenix application in this repository - the `framer`
 monorepo already carries it alongside `framer_core`, so the editor lives here
-rather than in a separate project. Today it exposes a minimal JSON
-status/submit surface (`GET /api/status`, `GET /api/jobs/:id`,
-`POST /api/jobs`).
+rather than in a separate project. It exposes a minimal JSON status/submit
+surface (`GET /api/status`, `GET /api/jobs/:id`, `POST /api/jobs`) alongside
+the rig/bones editor.
 
-The planned **Phoenix LiveView editor** is a per-frame bones/keyframe animation
-UI: a viewport over the source still and the rig mesh, a timeline of keyframes
-across the rig's frame range, and an export action that submits a `deform` job
-through the same job API. The engine half already ships - the `framer.rig`
-schema and the chunked `deform` export run entirely through the Port contract -
-while the editor itself is a follow-up task behind the `/editor` route shell.
+The **Phoenix LiveView editor** at `/editor` is a per-frame bones/keyframe
+animation UI: a viewport over the source still and the rig mesh, a timeline of
+keyframes across the rig's frame range, and an export action that submits a
+`deform` job through the same job API. Its content endpoints are gated by a
+host-approved connection contract. See [`docs/rig-editor.md`](docs/rig-editor.md)
+for the editor guide and [`docs/connection-trust-model.md`](docs/connection-trust-model.md)
+for the connection contract.
 
 ## 📁 Repository layout
 
