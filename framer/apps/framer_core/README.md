@@ -50,6 +50,6 @@ mix run -e 'FramerCore.CLI.main(["loop", "in.mp4", "out.mp4", "--method", "pingp
 mix run -e 'FramerCore.CLI.main(["info", "in.mp4"])'
 ```
 
-`framer_web` exposes a minimal JSON status/submit surface over the orchestrator
-at `GET /api/status`, `GET /api/jobs/:id` and `POST /api/jobs`. The full control
-UI is a later task.
+`framer_web` exposes a JSON status/submit surface over the orchestrator at
+`GET /api/status`, `GET /api/jobs/:id` and `POST /api/jobs`, plus the rig/bones
+LiveView editor at `/editor` (see [`docs/rig-editor.md`](../../../docs/rig-editor.md)).

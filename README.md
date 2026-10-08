@@ -16,6 +16,14 @@ framer is a set of small, composable video-editing operations. Each one is deter
 7. standalone CLI operations: export, resize, trim, recolor, glow, outline
 
 ## Built to scale
+- **Composable operations**: Chain multiple video transformations
+- **Simple CLI**: `python cli.py remove-bg input.mp4 output.webm --color "0,255,0"`
+- **Config support**: Use JSON configs for complex operations
+- **Modular**: Each operation is independent and extensible
+- **Video looping**: Create seamless infinite loops with optical flow matching
+- **Rig-based deformation**: Puppet-warp a still image with bones and keyframes (`deform`)
+- **Web rig editor**: A LiveView editor (`/editor`) to create bones, auto-bind, pose, keyframe and export - see [`docs/rig-editor.md`](docs/rig-editor.md). The editor's content endpoints are gated by a host-approved connection contract; see [`docs/connection-trust-model.md`](docs/connection-trust-model.md)
+- **Multi-Core Processing**: Operations are automatically parallelized across all available CPU threads for maximum speed.
 
 An Elixir/OTP orchestration layer splits a job into chunks and farms them across many machines, while a Python/OpenCV core does the pixels - so framer is distributed-ready rather than tied to one computer.
 
@@ -203,16 +211,17 @@ python cli.py loop input.webm output.webm --method auto --analyze-only
 
 `framer_web` is the Phoenix application in this repository - the `framer`
 monorepo already carries it alongside `framer_core`, so the editor lives here
-rather than in a separate project. Today it exposes a minimal JSON
-status/submit surface (`GET /api/status`, `GET /api/jobs/:id`,
-`POST /api/jobs`).
+rather than in a separate project. It exposes a minimal JSON status/submit
+surface (`GET /api/status`, `GET /api/jobs/:id`, `POST /api/jobs`) alongside
+the rig/bones editor.
 
-The planned **Phoenix LiveView editor** is a per-frame bones/keyframe animation
-UI: a viewport over the source still and the rig mesh, a timeline of keyframes
-across the rig's frame range, and an export action that submits a `deform` job
-through the same job API. The engine half already ships - the `framer.rig`
-schema and the chunked `deform` export run entirely through the Port contract -
-while the editor itself is a follow-up task behind the `/editor` route shell.
+The **Phoenix LiveView editor** at `/editor` is a per-frame bones/keyframe
+animation UI: a viewport over the source still and the rig mesh, a timeline of
+keyframes across the rig's frame range, and an export action that submits a
+`deform` job through the same job API. Its content endpoints are gated by a
+host-approved connection contract. See [`docs/rig-editor.md`](docs/rig-editor.md)
+for the editor guide and [`docs/connection-trust-model.md`](docs/connection-trust-model.md)
+for the connection contract.
 
 ## 📁 Repository layout
 

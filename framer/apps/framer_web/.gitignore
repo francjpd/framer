@@ -28,6 +28,9 @@ framer_web-*.tar
 # Ignore assets that are produced by build tools.
 /priv/static/assets/
 
+# Editor rig projects (runtime state: uploaded stills, rigs and exports).
+/priv/projects/
+
 # Ignore digested assets cache.
 /priv/static/cache_manifest.json
 

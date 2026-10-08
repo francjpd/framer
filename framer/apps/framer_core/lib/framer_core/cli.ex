@@ -14,6 +14,7 @@ defmodule FramerCore.CLI do
       mix run -e "FramerCore.CLI.main([\"fps-boost\", \"input.mp4\", \"output.mp4\", \"--to\", \"60\"])"
       mix run -e "FramerCore.CLI.main([\"loop\", \"input.mp4\", \"output.mp4\", \"--method\", \"pingpong\"])"
       mix run -e "FramerCore.CLI.main([\"deform\", \"still.png\", \"output.webm\", \"--rig\", \"rig.json\"])"
+      mix run -e "FramerCore.CLI.main([\"connect\", \"--id\", \"<pairing id>\", \"--server\", \"http://host:4000\"])"
   """
 
   alias FramerCore.Orchestrator
@@ -41,6 +42,9 @@ defmodule FramerCore.CLI do
 
       ["deform", input, output | opts] ->
         deform(input, output, opts)
+
+      ["connect" | opts] ->
+        connect(opts)
 
       _ ->
         help()
@@ -163,6 +167,77 @@ defmodule FramerCore.CLI do
             )
           end
         end
+    end
+  end
+
+  defp connect(opts) do
+    pairing_id = parse_opt_or_nil(opts, "--id") || parse_opt_or_nil(opts, "--pairing-id")
+    server = parse_opt(opts, "--server", "http://localhost:4000")
+
+    cond do
+      is_nil(pairing_id) ->
+        IO.puts("❌ connect requires --id <pairing id> (printed by the host at startup)")
+        {:error, :missing_pairing_id}
+
+      true ->
+        IO.puts("🔌 Requesting a connection to #{server}…")
+
+        with {:ok, request_id} <- connect_request(server, pairing_id),
+             {:ok, token} <- connect_poll(server, request_id) do
+          IO.puts("✅ Connection approved. Session token:\n\n#{token}\n")
+          IO.puts("Send it as `Authorization: Bearer <token>` on the content endpoints.")
+          {:ok, token}
+        end
+    end
+  end
+
+  defp connect_request(server, pairing_id) do
+    case Req.post("#{server}/api/connect", json: %{"id" => pairing_id}) do
+      {:ok, %{status: 202, body: %{"request_id" => request_id}}} ->
+        IO.puts("⏳ Pending host approval (request #{request_id}).")
+        {:ok, request_id}
+
+      {:ok, %{status: 403}} ->
+        IO.puts("❌ The host rejected that pairing id.")
+        {:error, :invalid_pairing_id}
+
+      {:ok, %{status: status}} ->
+        IO.puts("❌ Unexpected response (#{status}).")
+        {:error, :unexpected_status}
+
+      {:error, reason} ->
+        IO.puts("❌ Could not reach the host: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp connect_poll(server, request_id), do: connect_poll(server, request_id, 600)
+
+  defp connect_poll(_server, _request_id, attempts) when attempts <= 0 do
+    IO.puts("❌ Timed out waiting for host approval.")
+    {:error, :timeout}
+  end
+
+  defp connect_poll(server, request_id, attempts) do
+    case Req.get("#{server}/api/connect/#{request_id}") do
+      {:ok, %{status: 202}} ->
+        Process.sleep(1_000)
+        connect_poll(server, request_id, attempts - 1)
+
+      {:ok, %{status: 200, body: %{"token" => token}}} ->
+        {:ok, token}
+
+      {:ok, %{status: 403}} ->
+        IO.puts("❌ The host denied the connection request.")
+        {:error, :denied}
+
+      {:ok, %{status: status}} ->
+        IO.puts("❌ Unexpected response (#{status}).")
+        {:error, :unexpected_status}
+
+      {:error, reason} ->
+        IO.puts("❌ Could not reach the host: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -323,6 +398,8 @@ defmodule FramerCore.CLI do
         Methods: auto, pingpong, morph, periodic, hold, fade, blend, reverse, speedramp
       FramerCore.CLI.main(["deform", "still.png", "output.webm", "--rig", "rig.json"])
         Options: --rig, --frames, --fps, --iterations, --weights, --radius-scale
+      FramerCore.CLI.main(["connect", "--id", "<pairing id>", "--server", "http://host:4000"])
+        Pairs with a running host; the host must approve before any content is served.
     """)
   end
 end

@@ -103,3 +103,32 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 /* This file is for your main application CSS */
+
+/* Rig/bones editor viewport: the WebGL/2D preview plus its bone overlay. */
+.framer-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.framer-viewport-canvas,
+.framer-viewport-overlay {
+  position: absolute;
+}
+
+.framer-viewport-overlay {
+  pointer-events: none;
+}
+
+.framer-viewport-status {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  background: rgb(127 29 29 / 0.8);
+  color: #fecaca;
+  font-size: 0.75rem;
+  pointer-events: none;
+}

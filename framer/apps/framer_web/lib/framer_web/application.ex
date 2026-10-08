@@ -12,6 +12,7 @@ defmodule FramerWeb.Application do
       # FramerWeb.Repo,  # Commented out: requires PostgreSQL
       {DNSCluster, query: Application.get_env(:framer_web, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: FramerWeb.PubSub},
+      FramerWeb.Connections,
       # Start a worker by calling: FramerWeb.Worker.start_link(arg)
       # {FramerWeb.Worker, arg},
       # Start to serve requests, typically the last entry

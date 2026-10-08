@@ -130,3 +130,11 @@ The operation travels through the normal Port contract
 # Through the Elixir orchestrator (chunked, then merged)
 mix run -e 'FramerCore.CLI.main(["deform", "still.png", "out.webm", "--rig", "rig.json"])'
 ```
+
+## Editing a rig
+
+The versioned document is also the editor's working format: the LiveView
+rig/bones editor at `/editor` writes `framer.rig` v1 directly and drives the
+same `deform` operation. It adds the optional `source`, `mesh` and `playback`
+fields (the engine ignores them) so the viewport can reload and preview the
+rig. See [`docs/rig-editor.md`](rig-editor.md).

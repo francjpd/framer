@@ -14,13 +14,42 @@ defmodule FramerWebWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # Content is only served to an approved connection. `:host_session` gives the
+  # host operator's own browser a long-lived token; `:require_connection` then
+  # verifies a bearer token (remote CLI clients) or that host session cookie.
+  pipeline :protected_api do
+    plug :accepts, ["json"]
+    plug :fetch_session
+    plug FramerWebWeb.Auth, :host_session
+    plug FramerWebWeb.Auth, :require_connection
+  end
+
+  # The editor and approval surfaces are host-side: they enumerate content, so
+  # they are only reachable from the host operator's machine.
+  pipeline :host_ui do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {FramerWebWeb.Layouts, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+    plug FramerWebWeb.Auth, :require_host
+  end
+
   scope "/", FramerWebWeb do
     pipe_through :browser
 
     get "/", PageController, :home
+  end
+
+  scope "/", FramerWebWeb do
+    pipe_through :host_ui
 
     # Rig/bones animation editor shell (milestones M3-M5 live behind this).
     live "/editor", EditorLive, :index
+
+    # Host-side approval surface for the connection contract.
+    live "/connections", ConnectionsLive, :index
   end
 
   # Minimal JSON surface over the FramerCore orchestrator. The full control UI
@@ -31,6 +60,27 @@ defmodule FramerWebWeb.Router do
     get "/status", JobController, :status
     post "/jobs", JobController, :create
     get "/jobs/:id", JobController, :show
+
+    # Pairing handshake: a client presents the host's pairing id, which creates
+    # a pending request; it polls until the host approves or denies.
+    post "/connect", ConnectController, :create
+    get "/connect/:request_id", ConnectController, :show
+  end
+
+  # Editor rig surface: the versioned rig JSON is the contract with the engine,
+  # and these routes persist it filesystem-first and drive the existing `deform`
+  # operation (never shipping pixels to the BEAM). Content is connection-gated.
+  scope "/api", FramerWebWeb do
+    pipe_through :protected_api
+
+    get "/rigs", RigController, :index
+    post "/rigs", RigController, :create
+    get "/rigs/:id", RigController, :show
+    put "/rigs/:id", RigController, :update
+    post "/rigs/:id/render", RigController, :render
+    post "/rigs/:id/export", RigController, :export
+    get "/rigs/:id/source", RigController, :source
+    get "/rigs/:id/result", RigController, :result
   end
 
   # Other scopes may use custom stacks.
