@@ -275,6 +275,7 @@ defmodule FramerWeb.RigTest do
 
     test "interpolate_pose clamps, interpolates and defaults missing bones" do
       {rig, a} = Rig.add_bone(Rig.new(100, 100), [50, 90], [50, 10])
+
       rig =
         rig
         |> Rig.record_keyframe(0, %{a => %{rot: 0.0, tx: 0.0, ty: 0.0}})
@@ -291,6 +292,71 @@ defmodule FramerWeb.RigTest do
       empty = Rig.new(100, 100) |> Map.put("bones", [%{"id" => "b0"}])
       assert Rig.interpolate_pose(empty, "b0", 0) == %{"rot" => 0.0, "tx" => 0.0, "ty" => 0.0}
     end
+
+    @tag :requires_node
+    test "interpolate_pose matches lbs.mjs interpolatePoses for the same rig" do
+      {rig, a} = Rig.add_bone(Rig.new(48, 48), [14, 34], [14, 14])
+      {rig, b} = Rig.add_bone(rig, [14, 14], [34, 14], parent: a)
+
+      rig =
+        rig
+        |> Rig.record_keyframe(0, %{a => %{rot: 0.0, tx: 0.0, ty: 0.0}, b => %{rot: 0.0}})
+        |> Rig.record_keyframe(8, %{a => %{rot: 0.35, tx: 0.0, ty: 0.0}, b => %{rot: -0.5}})
+
+      frames = [0, 2, 4, 8, 20]
+
+      js_poses = interpolate_via_node(rig, frames)
+
+      for frame <- frames do
+        for bone_id <- [a, b] do
+          elixir = Rig.interpolate_pose(rig, bone_id, frame)
+          js = js_poses[to_string(frame)][bone_id]
+
+          assert_in_delta elixir["rot"], js["rot"], 1.0e-6
+          assert_in_delta elixir["tx"], js["tx"], 1.0e-6
+          assert_in_delta elixir["ty"], js["ty"], 1.0e-6
+        end
+      end
+    end
+  end
+
+  defp interpolate_via_node(rig, frames) do
+    node = System.find_executable("node") || flunk("node is required for the parity test")
+
+    lbs = Path.expand("../../assets/js/lbs.mjs", __DIR__)
+    dir = Path.join(System.tmp_dir!(), "framer_rig_parity_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+
+    spec = %{"rig" => rig, "frames" => frames}
+    spec_path = Path.join(dir, "spec.json")
+    File.write!(spec_path, Jason.encode!(spec))
+
+    runner = Path.join(dir, "runner.mjs")
+
+    File.write!(
+      runner,
+      """
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { interpolatePoses } from #{inspect(lbs)};
+      const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
+      const out = {};
+      for (const f of spec.frames) out[String(f)] = interpolatePoses(spec.rig, f);
+      writeFileSync(process.argv[3], JSON.stringify(out));
+      """
+    )
+
+    out_path = Path.join(dir, "poses.json")
+
+    {_out, status} = System.cmd(node, [runner, spec_path, out_path], stderr_to_stdout: true)
+
+    if status != 0 do
+      File.rm_rf(dir)
+      flunk("node interpolation failed")
+    end
+
+    result = Jason.decode!(File.read!(out_path))
+    File.rm_rf(dir)
+    result
   end
 
   describe "geometry helpers" do

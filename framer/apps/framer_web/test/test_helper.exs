@@ -19,3 +19,9 @@ cv2_available? =
 unless cv2_available? do
   ExUnit.configure(exclude: [:requires_cv2])
 end
+
+node_available? = System.find_executable("node") != nil
+
+unless node_available? do
+  ExUnit.configure(exclude: [:requires_node])
+end
