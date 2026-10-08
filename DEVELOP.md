@@ -4,33 +4,26 @@ This guide helps developers understand the codebase architecture and start contr
 
 ## Quick Start
 
-You can set up this project using either `venv` or `conda`.
+You can set up this project using either `uv` or `conda`.
 
-**Option 1: Python venv (Standard)**
+**Option 1: uv (Recommended)**
 ```bash
-# Clone and setup
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# Clone and set up the Python environment (interpreter at .venv/bin/python)
+uv venv .venv
+uv pip install -r requirements.txt
+
+# Run tests
+.venv/bin/python -m pytest tests/
+
+# Try the CLI
+.venv/bin/python cli.py input.mp4 output.webm -c "0,255,0" -p
 ```
 
 **Option 2: Conda**
 ```bash
-# Clone and setup
 conda create -n framer python=3.10
 conda activate framer
 pip install -r requirements.txt
-```
-# Clone and setup
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Run tests
-pytest tests/
-
-# Try the CLI
-python cli.py input.mp4 output.webm -c "0,255,0" -p
 ```
 
 ## Architecture Overview

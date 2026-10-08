@@ -251,9 +251,9 @@ The Elixir orchestrator drives the Python core, so set up both halves.
 **1. Python operation layer** (from the repository root):
 
 ```bash
-# venv (standard)
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+# uv (recommended)
+uv venv .venv
+uv pip install -r requirements.txt
 
 # or conda
 conda create -n framer python=3.10
@@ -377,7 +377,7 @@ def my_operation(input_path, output_path, param1=10):
 
 ```bash
 # Python operation core
-python -m pytest tests/
+.venv/bin/python -m pytest tests/
 
 # Elixir orchestration (includes the end-to-end Port integration test)
 cd framer
