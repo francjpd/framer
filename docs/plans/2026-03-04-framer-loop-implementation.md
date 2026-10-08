@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `bgremover.py` → rename to `framer.py`
 - Modify: `README.md` - update title and references
-- Modify: `requirements.txt` - update project name (optional)
+- Modify: `pyproject.toml` - update project name (optional)
 - Modify: `tests/test_bgremover.py` - update import
 
 **Step 1: Rename bgremover.py to framer.py**

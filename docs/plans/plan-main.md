@@ -237,7 +237,7 @@ A distributed video processing system capable of handling complex video transfor
 | 1.2 | Configure Rust NIFs integration | Rustler setup in `rust/framer` |
 | 1.3 | Create basic job actor system | `JobSupervisor` and `Job` GenServer |
 | 1.4 | Implement video frame extraction in Rust | NIF returning frame data |
-| 1.5 | Set up Python virtual environment | `python/requirements.txt` |
+| 1.5 | Set up Python virtual environment | `python/pyproject.toml` |
 | 1.6 | Create FFmpeg wrapper for basic transcoding | Working CLI transcode |
 | 1.7 | Wire Elixir → Rust → Python pipeline | End-to-end frame processing |
 

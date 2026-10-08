@@ -27,7 +27,7 @@ Supports both MOV and WebM with alpha channel:
 ## Installation
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 Requires: OpenCV, NumPy, FFmpeg

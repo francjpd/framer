@@ -142,8 +142,7 @@ automatically. See [`connection-trust-model.md`](connection-trust-model.md).
 First install both toolchains (from the repository root):
 
 ```bash
-uv venv .venv
-uv pip install -r requirements.txt
+uv sync
 
 cd framer
 mix deps.get
@@ -165,7 +164,7 @@ Upload a still, switch to the Bones tool and draw 2-4 bones, press
 
 ```bash
 cd framer && mix test                      # unit + LiveView + editor e2e
-.venv/bin/python -m pytest tests/ -q       # engine + preview parity
+uv run python -m pytest tests/ -q          # engine + preview parity
 ```
 
 The editor end-to-end path (`framer_web/test/.../rig_e2e_test.exs`) uploads a

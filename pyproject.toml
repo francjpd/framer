@@ -1,0 +1,64 @@
+# Python project metadata and tool configuration for framer's OpenCV/PyTorch
+# core. The runtime dependencies live here (and only here); `uv sync` installs
+# them from `uv.lock`, and `uv run <cmd>` executes against that environment.
+#
+# The repository is an application, not a distributable library: the code is a
+# flat layout (`core/`, `ops/`, `cli.py`, `framer_worker.py`) that is imported
+# from the repository root, so there is no build backend and no `src/` layout.
+
+[project]
+name = "framer"
+version = "0.1.0"
+description = "Composable, deterministic video-editing operations built on OpenCV and PyTorch."
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "rich>=13.0.0",
+    "torch>=2.0.0",
+    "typer>=0.9.0",
+]
+
+# Test and lint tooling. uv installs the default `dev` group on `uv sync`, so
+# `uv run pytest` and `uv run ruff` work with no extra flags.
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.16.0",
+]
+
+[tool.uv]
+# Application project: build no wheel/sdist and install no `framer` package
+# into the environment. Dependencies are still resolved and locked normally.
+package = false
+
+# CI and developer machines have no GPU. Install the CPU-only PyTorch wheels so
+# `uv sync` never pulls the multi-gigabyte CUDA/XPU payload from the default
+# PyPI index. `explicit = true` keeps the index from serving anything else.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+# --- Ruff ---------------------------------------------------------------
+#
+# Ruff 0.16 ships a large recommended default rule set (413 stable rules,
+# spanning pyflakes, pycodestyle, isort, pyupgrade, bugbear, bandit, blind
+# except, pylint and Ruff's own checks). We deliberately keep that recommended
+# set rather than enabling `ALL` (which would add opinionated and preview
+# families this codebase has no use for) or hand-listing a family union (which
+# would drift from Ruff's own curation). The rule set is pinned by the locked
+# Ruff version in uv.lock, so it cannot change without a deliberate lock update.
+# The only deliberate exclusions are the narrow, commented `# noqa` and
+# `# ruff: file-ignore` suppressions at the call sites in the code.
+#
+# `line-length` matches the existing code style and is the width `ruff format`
+# would apply; the formatter is not enforced in this change to keep the diff
+# focused on tooling, but the setting is ready if the format check is adopted.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
