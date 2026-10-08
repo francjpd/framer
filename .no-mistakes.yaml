@@ -1,0 +1,20 @@
+# no-mistakes per-repo configuration for framer.
+#
+# The configured test baseline runs the same two suites as GitHub Actions
+# (.github/workflows/ci.yml): the Python engine/preview-parity suite at the
+# repository root and the Elixir umbrella suite (the Phoenix editor plus the
+# Port integration tests). `commands.prepare` materializes both toolchains'
+# dependencies in the isolated run worktree, which otherwise starts with
+# tracked files only.
+#
+# `commands` are read from the trusted default-branch copy of this file, so
+# these values take effect for the gate once this file is merged into `master`.
+
+commands:
+  prepare: |
+    uv venv .venv
+    uv pip install -r requirements.txt
+    cd framer && mix deps.get
+  test: |
+    .venv/bin/python -m pytest tests/ -q
+    cd framer && mix test

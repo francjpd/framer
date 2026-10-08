@@ -139,10 +139,20 @@ automatically. See [`connection-trust-model.md`](connection-trust-model.md).
 
 ## Running
 
+First install both toolchains (from the repository root):
+
 ```bash
+uv venv .venv
+uv pip install -r requirements.txt
+
 cd framer
 mix deps.get
-mix ecto   # not needed - there is no database
+```
+
+Then start the editor:
+
+```bash
+cd framer
 mix phx.server
 # then open http://localhost:4000/editor
 ```

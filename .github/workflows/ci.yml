@@ -1,0 +1,77 @@
+name: CI
+
+# Register the same checks the no-mistakes gate expects: every pull request
+# and every push to the default branch. `master` is the repository default
+# (`origin/HEAD`); `main` is kept as an alias so a future rename still runs.
+on:
+  push:
+    branches: ['master', 'main']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Python engine + Elixir editor
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      # FramerCore.PortWorker resolves FRAMER_PYTHON first, then
+      # <repo>/.venv/bin/python. Pin it so the Elixir suite always spawns the
+      # uv-managed interpreter that has OpenCV installed, instead of silently
+      # excluding the :requires_cv2 integration tests.
+      FRAMER_PYTHON: ${{ github.workspace }}/.venv/bin/python
+      # CI has no GPU: install the CPU torch build rather than the CUDA/XPU
+      # payload pulled by the default index.
+      UV_TORCH_BACKEND: cpu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # FFmpeg drives the media-generated operation tests; libgl1/libglib2.0-0
+      # are the system libraries the opencv-python wheel loads at import.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      # Creates .venv/bin/python, the interpreter the Elixir Port suite and the
+      # engine tests both use.
+      - name: Install Python dependencies
+        run: |
+          uv venv .venv
+          uv pip install -r requirements.txt
+
+      # tests/test_preview_parity.py runs lbs.mjs under Node and is otherwise
+      # skipped, so the parity suite only counts if Node is on PATH.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Elixir and Erlang/OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27.3.4'
+          elixir-version: '1.19.0'
+
+      - name: Fetch Elixir dependencies
+        working-directory: framer
+        run: mix deps.get
+
+      - name: Test
+        run: |
+          .venv/bin/python -m pytest tests/ -q
+          cd framer && mix test
