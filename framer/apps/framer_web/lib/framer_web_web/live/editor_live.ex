@@ -531,50 +531,52 @@ defmodule FramerWebWeb.EditorLive do
         <h2 class="mb-2 font-semibold uppercase tracking-wide opacity-70">Bone properties</h2>
         <div :if={@selected}>
           <p class="mb-1 font-mono opacity-70">{@selected["id"]}</p>
-          <label class="label-text">Radius</label>
-          <input
-            type="range"
-            min="1"
-            max={max(Rig.width(@rig), Rig.height(@rig))}
-            value={@selected["radius"]}
-            phx-change="set_radius"
-            phx-value-id={@selected["id"]}
-            name="radius"
-            class="range range-xs"
-          />
-          <p class="opacity-60">{trunc(@selected["radius"] || 0)} px</p>
-          <label class="label-text">Falloff</label>
-          <select
-            phx-change="set_falloff"
-            phx-value-id={@selected["id"]}
-            name="falloff"
-            class="select select-xs select-bordered w-full"
-          >
-            <option
-              :for={f <- ~w(smooth linear hard)}
-              value={f}
-              selected={(@selected["falloff"] || "smooth") == f}
+          <form id="bone-properties-form">
+            <label class="label-text">Radius</label>
+            <input
+              type="range"
+              min="1"
+              max={max(Rig.width(@rig), Rig.height(@rig))}
+              value={@selected["radius"]}
+              phx-change="set_radius"
+              phx-value-id={@selected["id"]}
+              name="radius"
+              class="range range-xs"
+            />
+            <p class="opacity-60">{trunc(@selected["radius"] || 0)} px</p>
+            <label class="label-text">Falloff</label>
+            <select
+              phx-change="set_falloff"
+              phx-value-id={@selected["id"]}
+              name="falloff"
+              class="select select-xs select-bordered w-full"
             >
-              {f}
-            </option>
-          </select>
-          <label class="label-text mt-2">Parent</label>
-          <select
-            phx-change="bone_parented"
-            phx-value-id={@selected["id"]}
-            name="parent"
-            class="select select-xs select-bordered w-full"
-          >
-            <option value="" selected={is_nil(@selected["parent"])}>none</option>
-            <option
-              :for={bone <- Rig.bones(@rig)}
-              :if={bone["id"] != @selected["id"]}
-              value={bone["id"]}
-              selected={@selected["parent"] == bone["id"]}
+              <option
+                :for={f <- ~w(smooth linear hard)}
+                value={f}
+                selected={(@selected["falloff"] || "smooth") == f}
+              >
+                {f}
+              </option>
+            </select>
+            <label class="label-text mt-2">Parent</label>
+            <select
+              phx-change="bone_parented"
+              phx-value-id={@selected["id"]}
+              name="parent"
+              class="select select-xs select-bordered w-full"
             >
-              {bone["name"] || bone["id"]}
-            </option>
-          </select>
+              <option value="" selected={is_nil(@selected["parent"])}>none</option>
+              <option
+                :for={bone <- Rig.bones(@rig)}
+                :if={bone["id"] != @selected["id"]}
+                value={bone["id"]}
+                selected={@selected["parent"] == bone["id"]}
+              >
+                {bone["name"] || bone["id"]}
+              </option>
+            </select>
+          </form>
         </div>
         <div :if={!@selected} class="opacity-60">Select a bone.</div>
       </section>
@@ -583,28 +585,30 @@ defmodule FramerWebWeb.EditorLive do
         <h2 class="mb-2 font-semibold uppercase tracking-wide opacity-70">Bind</h2>
         <p :if={@rig == nil} class="opacity-60">Load a rig to bind.</p>
         <div :if={@rig}>
-          <label class="label-text">Power</label>
-          <input
-            type="range"
-            min="0.5"
-            max="6"
-            step="0.1"
-            value={get_in(@rig, ["bind", "power"]) || 2.0}
-            phx-change="set_bind"
-            name="power"
-            class="range range-xs"
-          />
-          <label class="label-text">Radius scale</label>
-          <input
-            type="range"
-            min="0.25"
-            max="4"
-            step="0.05"
-            value={get_in(@rig, ["bind", "radius_scale"]) || 1.0}
-            phx-change="set_bind"
-            name="radius_scale"
-            class="range range-xs"
-          />
+          <form id="bind-form">
+            <label class="label-text">Power</label>
+            <input
+              type="range"
+              min="0.5"
+              max="6"
+              step="0.1"
+              value={get_in(@rig, ["bind", "power"]) || 2.0}
+              phx-change="set_bind"
+              name="power"
+              class="range range-xs"
+            />
+            <label class="label-text">Radius scale</label>
+            <input
+              type="range"
+              min="0.25"
+              max="4"
+              step="0.05"
+              value={get_in(@rig, ["bind", "radius_scale"]) || 1.0}
+              phx-change="set_bind"
+              name="radius_scale"
+              class="range range-xs"
+            />
+          </form>
         </div>
         <button
           phx-click="auto_bind"

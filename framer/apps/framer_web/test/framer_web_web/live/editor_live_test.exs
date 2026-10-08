@@ -32,6 +32,19 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert has_element?(view, "button", "Auto-bind mesh")
   end
 
+  test "bone property and bind controls live inside a form so their events reach the server", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    render_hook(view, "select_bone", %{"id" => "b0"})
+
+    assert has_element?(view, "#bone-properties-form input[type='range'][name='radius']")
+    assert has_element?(view, "#bone-properties-form select[name='falloff']")
+    assert has_element?(view, "#bone-properties-form select[name='parent']")
+    assert has_element?(view, "#bind-form input[type='range'][name='power']")
+    assert has_element?(view, "#bind-form input[type='range'][name='radius_scale']")
+  end
+
   test "loads a saved rig into the viewport and timeline", %{conn: conn} do
     {:ok, rig} = RigStore.save(Fixtures.simple_rig(48))
 
