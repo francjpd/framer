@@ -141,4 +141,65 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert has_element?(view, "#viewport")
     assert has_element?(view, "#viewport[data-source-url]")
   end
+
+  test "viewport toggles, transport stepping and graph channel update the shell", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(48))
+    {:ok, view, html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    assert html =~ "Record keyframe"
+    assert has_element?(view, "#viewport[data-mesh='true']")
+
+    render_click(view, "toggle_mesh")
+    assert has_element?(view, "#viewport[data-mesh='false']")
+
+    render_click(view, "toggle_labels")
+    assert has_element?(view, "#viewport[data-labels='true']")
+
+    render_hook(view, "step_frame", %{"delta" => 3})
+    assert has_element?(view, "#viewport[data-frame='3']")
+
+    render_hook(view, "step_frame", %{"delta" => -100})
+    assert has_element?(view, "#viewport[data-frame='0']")
+
+    render_hook(view, "set_graph_channel", %{"channel" => "tx"})
+    assert has_element?(view, "#timeline-track")
+    assert render(view) =~ "tx"
+  end
+
+  test "renders a value and velocity graph for the selected bone", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    render_hook(view, "set_playhead", %{"frame" => 8})
+
+    render_hook(view, "pose_changed", %{
+      "pose" => %{"b0" => %{"rot" => 0.4, "tx" => 4, "ty" => 0}}
+    })
+
+    render_hook(view, "record_keyframe", %{})
+
+    html = render(view)
+    assert html =~ "polyline"
+    assert html =~ "stroke-dasharray"
+  end
+
+  test "hierarchy nests child bones under their parent", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    render_hook(view, "bone_created", %{"head" => [10, 10], "tail" => [20, 10], "parent" => "b0"})
+
+    assert render(view) =~ "└"
+  end
+
+  test "invalid radius or falloff input shows an error instead of crashing", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    render_hook(view, "set_radius", %{"id" => "b0", "radius" => "not-a-number"})
+    assert render(view) =~ "Radius must be a positive number"
+
+    render_hook(view, "set_falloff", %{"id" => "b0", "falloff" => "bogus"})
+    assert render(view) =~ "Unknown falloff"
+  end
 end

@@ -82,6 +82,8 @@ export const LbsPreview = {
     this.frame = Number(this.el.dataset.frame || 0);
     this.tool = this.el.dataset.tool || "bones";
     this.selected = this.el.dataset.selected || null;
+    this.meshVisible = this.el.dataset.mesh !== "false";
+    this.labelsVisible = this.el.dataset.labels === "true";
     this.overrides = {};
     this.drag = null;
     this.hover = null;
@@ -113,6 +115,8 @@ export const LbsPreview = {
     this.frame = Number(this.el.dataset.frame || 0);
     this.tool = this.el.dataset.tool || "bones";
     this.selected = this.el.dataset.selected || null;
+    this.meshVisible = this.el.dataset.mesh !== "false";
+    this.labelsVisible = this.el.dataset.labels === "true";
 
     const url = this.el.dataset.sourceUrl;
     if (url !== this.sourceUrl) {
@@ -478,7 +482,7 @@ export const LbsPreview = {
     const poses = this.rig ? this.poses() : {};
     const world = evaluateBones(this.rig, this.frame, poses);
 
-    this.drawMesh(world);
+    if (this.meshVisible) this.drawMesh(world);
     this.drawBones(world);
     this.drawDrag();
   },
@@ -532,6 +536,12 @@ export const LbsPreview = {
       ctx.beginPath();
       ctx.arc(head[0], head[1], selected ? 5 : 4, 0, Math.PI * 2);
       ctx.fill();
+
+      if (this.labelsVisible) {
+        ctx.fillStyle = "rgba(226, 232, 240, 0.9)";
+        ctx.font = "10px sans-serif";
+        ctx.fillText(bone.name || bone.id, head[0] + 6, head[1] - 6);
+      }
 
       // influence radius (selected only)
       if (selected) {
@@ -763,6 +773,62 @@ export const TimelineScrub = {
     if (frame === this.frame) return;
     this.frame = frame;
     this.pushEvent("set_playhead", { frame });
+  },
+};
+
+export const EditorKeys = {
+  mounted() {
+    this.onKeyDown = (event) => this.keydown(event);
+    window.addEventListener("keydown", this.onKeyDown);
+  },
+
+  destroyed() {
+    window.removeEventListener("keydown", this.onKeyDown);
+  },
+
+  keydown(event) {
+    const target = event.target || {};
+    const tag = target.tagName || "";
+
+    if (["INPUT", "TEXTAREA", "SELECT"].includes(tag) || target.isContentEditable) return;
+
+    if (event.metaKey || event.ctrlKey) {
+      if (event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        this.pushEvent("undo", {});
+      }
+      return;
+    }
+
+    switch (event.key) {
+      case " ":
+        event.preventDefault();
+        this.pushEvent("toggle_play", {});
+        break;
+      case "k":
+      case "K":
+        event.preventDefault();
+        this.pushEvent("record_keyframe", {});
+        break;
+      case "ArrowLeft":
+        event.preventDefault();
+        this.pushEvent("step_frame", { delta: -1 });
+        break;
+      case "ArrowRight":
+        event.preventDefault();
+        this.pushEvent("step_frame", { delta: 1 });
+        break;
+      case "Home":
+        event.preventDefault();
+        this.pushEvent("set_playhead", { frame: 0 });
+        break;
+      case "End":
+        event.preventDefault();
+        this.pushEvent("step_frame", { delta: Number.MAX_SAFE_INTEGER });
+        break;
+      default:
+        break;
+    }
   },
 };
 

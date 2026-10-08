@@ -7,15 +7,18 @@ operation for the final render and export.
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│ header: project switcher · upload still · undo · save          │
+│ header: title · shortcut hint · undo · save                    │
 ├──────────────┬────────────────────────────────────────────────┤
-│ tool palette │ centre viewport                                 │
-│ · Bones      │  source still + control mesh + bones            │
-│ · Pose       │  client-side WebGL2 / canvas LBS preview        │
-│ · properties │                                                 │
-│ · bind       │                                                 │
+│ Media        │ centre viewport                                 │
+│  upload      │  toolbar: Mesh · Labels · proxy badge           │
+│  projects    │  source still + control mesh + bones            │
+│ Tools        │  client-side WebGL2 / canvas LBS preview        │
+│ Hierarchy    │                                                 │
+│ Properties   │                                                 │
+│ Bind         │                                                 │
 ├──────────────┴────────────────────────────────────────────────┤
-│ timeline: transport · playhead · keyframe row · render/export  │
+│ timeline: ruler · transport · keyframe rows · value/velocity  │
+│ graph · render/export                                          │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -24,13 +27,19 @@ path, a frame range and JSON options - exactly the existing Port contract.
 
 ## Layout and tools
 
-* **Tool palette (left).** The two first-slice tools, the bone list, the
-  selected bone's **radius** and **falloff**, its **parent**, and the global
-  bind **power** / **radius scale**. `Auto-bind mesh` rebuilds the control mesh
-  and per-vertex weights.
-* **Centre viewport.** A `phx-hook="LbsPreview"` element. It renders the source
-  still, the control mesh wireframe and the bones, and handles all pointer
-  interaction locally:
+* **Left panel (media + tool + inspector).** Modelled on the familiar
+  left-hand panel of Premiere Pro / Resolve / Final Cut / Shotcut:
+  * **Media** - the still-image upload and the list of saved projects.
+  * **Tools** - the two first-slice tools, **Bones** and **Pose**.
+  * **Hierarchy** - the bone list as an indented tree (children under their
+    parent), with selection and delete.
+  * **Properties** - the selected bone's **radius**, **falloff** and **parent**.
+  * **Bind** - the global bind **power** / **radius scale** and `Auto-bind
+    mesh`, which rebuilds the control mesh and per-vertex weights.
+* **Centre viewport.** A `phx-hook="LbsPreview"` element with a small toolbar:
+  **Mesh** (toggle the wireframe) and **Labels** (toggle bone names), plus a
+  `proxy preview` badge. It renders the source still, the control mesh and the
+  bones, and handles all pointer interaction locally:
   * **Bones tool** - drag empty canvas to create a bone (`head → tail`); drag a
     joint to move it; drag the body to translate it; dropping near another
     bone's tip parents to it (chains). Structural edits are pushed to LiveView
@@ -38,9 +47,24 @@ path, a frame range and JSON options - exactly the existing Port contract.
   * **Pose tool** - drag a joint to rotate about the bone's rest head, drag the
     body to translate. The pose stays local until **Record keyframe** writes it
     into `keyframes[playhead]`.
-* **Timeline (bottom).** Playhead scrub (a `TimelineScrub` hook), play/pause
-  with an fps-driven tick, record/delete keyframe, loop toggle, a keyframe
-  marker row, `Render frame` and `Export`.
+* **Timeline (bottom).** A frame ruler, a transport group (jump to
+  start/end, step, play/pause, loop), record/delete keyframe, the playhead
+  readout, and `Render frame` / `Export`. The track has two keyframe rows - one
+  for every keyframe and one for the selected bone. Below it sits the
+  **value/velocity graph** for the selected bone (rot / tx / ty): the solid
+  line is the interpolated value across the range, the dashed line its numeric
+  derivative in units per second, with the playhead and keyframe points marked.
+* **Keyboard shortcuts.** Space play/pause, `K` record keyframe, `←`/`→` step
+  one frame, `Home`/`End` jump to the range ends, `Cmd`/`Ctrl+Z` undo. They are
+  ignored while a form control has focus.
+
+These are refinements of the existing shell, not a new application: the rig
+JSON contract, the fixed-point LBS preview and the `deform` render/export path
+are unchanged. Two ideas from the FilmCraft study were deliberately left out
+because they are redesigns rather than polish - the single agent-facing
+command/catalog/MCP surface (already scoped as a separate future task) and a
+multi-track NLE timeline with trim algebra. Per-property (rot/tx/ty) keying
+would also need a rig-schema change, so the slice still keys the whole pose.
 
 ## Preview vs final render
 
