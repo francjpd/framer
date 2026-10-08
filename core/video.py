@@ -2,13 +2,14 @@
 Video utilities for frame streaming and FFmpeg integration.
 """
 
+import contextlib
 import subprocess
-import numpy as np
 from pathlib import Path
-from typing import Optional
+
+import numpy as np
 
 
-def get_output_format(output_path: str, format_flag: Optional[str] = None) -> str:
+def get_output_format(output_path: str, format_flag: str | None = None) -> str:
     """Determine output format from path extension or flag."""
     if format_flag is not None:
         return format_flag.lower()
@@ -31,7 +32,7 @@ def has_alpha_channel(video_path: str) -> bool:
             "ffprobe", "-v", "error", "-select_streams", "v:0",
             "-show_entries", "stream_tags=alpha_mode", "-of", "csv=p=0", str(video_path)
         ]
-        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True)
+        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True, check=False)
         if "1" in alpha_result.stdout:
             return True
 
@@ -39,10 +40,10 @@ def has_alpha_channel(video_path: str) -> bool:
             "ffprobe", "-v", "error", "-select_streams", "v:0",
             "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", str(video_path)
         ]
-        pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True)
+        pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True, check=False)
         pix_fmt = pix_fmt_result.stdout.strip()
         return any(x in pix_fmt for x in ["yuva", "bgra", "argb", "gba", "rgba"])
-    except Exception:
+    except Exception:  # noqa: BLE001 - ffprobe is a best-effort alpha probe; failure means "no alpha"
         return False
 
 
@@ -113,10 +114,8 @@ class VideoStreamReader:
 
     def close(self):
         if self.process:
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 self.process.stdout.close()
-            except Exception:
-                pass
             self.process.kill()
             self.process = None
 

@@ -1,20 +1,23 @@
 """
 Global engine for parallel frame-by-frame video processing.
 """
-import os
-import cv2
 import math
-import tempfile
-import subprocess
 import multiprocessing as mp
+import os
+import subprocess
+import tempfile
+
+import cv2
 
 try:
     mp.set_start_method('spawn', force=True)
 except RuntimeError:
     pass
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Any, Dict, Optional
+from typing import Any
+
 
 def _worker_wrapper(args):
     """
@@ -28,8 +31,9 @@ def _worker_wrapper(args):
     ) = args
 
     import os
-    from core.video import VideoStreamWriter, VideoStreamReader, has_alpha_channel
+
     from core.gpu import get_progress_string
+    from core.video import VideoStreamReader, VideoStreamWriter, has_alpha_channel
     
     accel_str = get_progress_string()
 
@@ -75,9 +79,15 @@ def _worker_wrapper(args):
         writer.write_frame(processed_frame)
         frames_processed += 1
 
-        if show_progress and worker_id == 0:
-            if frames_to_process < 100 or frames_processed % max(1, frames_to_process // 100) == 0:
-                print(f"\rProcessing (Worker 0){accel_str}: {(frames_processed / frames_to_process) * 100:.1f}%", end="", flush=True)
+        if (
+            show_progress
+            and worker_id == 0
+            and (
+                frames_to_process < 100
+                or frames_processed % max(1, frames_to_process // 100) == 0
+            )
+        ):
+            print(f"\rProcessing (Worker 0){accel_str}: {(frames_processed / frames_to_process) * 100:.1f}%", end="", flush=True)
 
     writer.close()
     reader.close()
@@ -88,10 +98,10 @@ def process_video_parallel(
     input_path: str,
     output_path: str,
     process_func: Callable,
-    func_kwargs: Dict[str, Any] = None,
-    workers: int = None,
+    func_kwargs: dict[str, Any] | None = None,
+    workers: int | None = None,
     show_progress: bool = False
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     A global engine that splits a video, processes chunks in parallel 
     using `process_func`, and stitches them back together.
@@ -126,9 +136,8 @@ def process_video_parallel(
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
         
-        if workers <= 1:
-            # Fallback to single-threaded if requested
-            workers = 1
+        # Fall back to single-threaded when one worker was requested.
+        workers = max(1, workers)
 
         frames_per_thread = math.ceil(total_frames / workers)
         temp_dir = tempfile.mkdtemp()
@@ -158,8 +167,7 @@ def process_video_parallel(
         # Stitch
         concat_file = os.path.join(temp_dir, "concat.txt")
         with open(concat_file, "w") as f:
-            for temp_file in temp_files:
-                f.write(f"file '{temp_file}'\n")
+            f.writelines(f"file '{temp_file}'\n" for temp_file in temp_files)
                 
         cmd = [
             "ffmpeg", "-y", "-v", "warning", "-f", "concat", "-safe", "0", "-i", concat_file,
@@ -168,12 +176,12 @@ def process_video_parallel(
         subprocess.run(cmd, check=True)
         
         if show_progress:
-            print(f"\\rProcessing: 100%                 ")
+            print("\\rProcessing: 100%                 ")
             
         result["success"] = True
         result["output_path"] = output_path
         return result
         
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary reports any processing failure in `result`
         result["error"] = str(e)
         return result

@@ -1,13 +1,13 @@
-import pytest
-import numpy as np
-import cv2
 import sys
 from pathlib import Path
+
+import numpy as np
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ops.outline import _apply_outline
+
 
 def test_apply_outline_basic():
     # 50x50 BGRA frame with a 10x10 opaque square in center

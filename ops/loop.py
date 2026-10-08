@@ -2,13 +2,10 @@
 Loop operation - creates seamless infinite video loops.
 """
 
+from typing import Any
+
 import cv2
 import numpy as np
-import subprocess
-import tempfile
-import shutil
-from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional
 
 from core import register_operation
 from core.utils import parse_color_rgba
@@ -38,8 +35,8 @@ def apply_blend_mode(frame1: np.ndarray, frame2: np.ndarray, mode: str) -> np.nd
 
 
 def detect_cycle_period(
-    frames: List[np.ndarray], max_period: int = 120
-) -> Optional[int]:
+    frames: list[np.ndarray], max_period: int = 120
+) -> int | None:
     """Auto-detect periodic motion using frame differences.
 
     Returns: Detected cycle period in frames, or None if no clear cycle.
@@ -59,9 +56,12 @@ def detect_cycle_period(
 
     peaks = []
     for i in range(2, len(autocorr) - 1):
-        if autocorr[i] > autocorr[i - 1] and autocorr[i] > autocorr[i + 1]:
-            if autocorr[i] > np.mean(autocorr) * 1.2:
-                peaks.append(i)
+        if (
+            autocorr[i] > autocorr[i - 1]
+            and autocorr[i] > autocorr[i + 1]
+            and autocorr[i] > np.mean(autocorr) * 1.2
+        ):
+            peaks.append(i)
 
     if peaks:
         return peaks[0]
@@ -70,7 +70,7 @@ def detect_cycle_period(
 
 def extract_all_frames(
     video_path: str, show_progress: bool = False
-) -> List[np.ndarray]:
+) -> list[np.ndarray]:
     """Extract all frames from video."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -102,7 +102,7 @@ def extract_all_frames(
     return frames
 
 
-def create_pingpong_loop(frames: List[np.ndarray], fps: float = 30.0, until: Optional[float] = None) -> List[np.ndarray]:
+def create_pingpong_loop(frames: list[np.ndarray], fps: float = 30.0, until: float | None = None) -> list[np.ndarray]:
     """Create pingpong (boomerang) loop - forward then backward.
 
     Best for: bouncing objects, pendulum, breathing, any reversible motion.
@@ -136,7 +136,7 @@ def create_pingpong_loop(frames: List[np.ndarray], fps: float = 30.0, until: Opt
 
 
 
-def create_reverse_loop(frames: List[np.ndarray]) -> List[np.ndarray]:
+def create_reverse_loop(frames: list[np.ndarray]) -> list[np.ndarray]:
     """Create reverse loop - forward then full reverse.
 
     Best for: reversible motion like water ripples, fire, particles,
@@ -152,8 +152,8 @@ def create_reverse_loop(frames: List[np.ndarray]) -> List[np.ndarray]:
 
 
 def create_hold_loop(
-    frames: List[np.ndarray], hold_frames: int = 2
-) -> List[np.ndarray]:
+    frames: list[np.ndarray], hold_frames: int = 2
+) -> list[np.ndarray]:
     """Create hold loop - freeze briefly at transition point.
 
     Best for: videos with natural pauses or holds in the motion.
@@ -171,11 +171,11 @@ def create_hold_loop(
 
 
 def create_fade_loop(
-    frames: List[np.ndarray],
+    frames: list[np.ndarray],
     fade_color: str = "transparent",
     fade_frames: int = 10,
     fade_type: str = "both",
-) -> List[np.ndarray]:
+) -> list[np.ndarray]:
     """Create fade loop - fade out/in at transition point.
 
     Best for: when nothing else works - masks seams completely with fade.
@@ -206,11 +206,10 @@ def create_fade_loop(
                 alpha = min(1.0, alpha)
                 frame = cv2.addWeighted(frame, 1 - alpha, fade_frame, alpha, 0)
 
-        if fade_type in ("in", "both"):
-            if i < fade_frames * 2:
-                alpha = 1 - (i / fade_frames)
-                alpha = max(0, alpha)
-                frame = cv2.addWeighted(frame, 1 - alpha, fade_frame, alpha, 0)
+        if fade_type in ("in", "both") and i < fade_frames * 2:
+            alpha = 1 - (i / fade_frames)
+            alpha = max(0, alpha)
+            frame = cv2.addWeighted(frame, 1 - alpha, fade_frame, alpha, 0)
 
         result.append(frame)
 
@@ -218,8 +217,8 @@ def create_fade_loop(
 
 
 def create_blend_loop(
-    frames: List[np.ndarray], blend_mode: str = "add", blend_frames: int = 5
-) -> List[np.ndarray]:
+    frames: list[np.ndarray], blend_mode: str = "add", blend_frames: int = 5
+) -> list[np.ndarray]:
     """Create blend loop - creative blend between end and start.
 
     Best for: artistic effects, creative transitions.
@@ -234,7 +233,6 @@ def create_blend_loop(
     last_frames = frames[-blend_frames:][::-1]
 
     for i in range(blend_frames):
-        w = (i + 1) / (blend_frames + 1)
         blended = apply_blend_mode(last_frames[i], first_frames[i], blend_mode)
         result.append(blended)
 
@@ -244,8 +242,8 @@ def create_blend_loop(
 
 
 def create_speedramp_loop(
-    frames: List[np.ndarray], ramp_factor: float = 1.0
-) -> List[np.ndarray]:
+    frames: list[np.ndarray], ramp_factor: float = 1.0
+) -> list[np.ndarray]:
     """Create speedramp loop - adjust playback speed at transition.
 
     Best for: when loop points almost match but need slight speed adjustment.
@@ -267,8 +265,8 @@ def create_speedramp_loop(
 
 
 def create_morph_loop(
-    frames: List[np.ndarray], morph_steps: int = 10
-) -> List[np.ndarray]:
+    frames: list[np.ndarray], morph_steps: int = 10
+) -> list[np.ndarray]:
     """Create morph loop - multiple warp steps between end and start.
 
     Best for: complex motion where simple interpolation fails.
@@ -306,8 +304,8 @@ def create_morph_loop(
 
 
 def create_periodic_loop(
-    frames: List[np.ndarray], cycle_frames: Optional[int] = None
-) -> List[np.ndarray]:
+    frames: list[np.ndarray], cycle_frames: int | None = None
+) -> list[np.ndarray]:
     """Create periodic loop - loop at natural cycle points.
 
     Best for: walking, running, waves - any rhythmic/repetitive motion.
@@ -327,7 +325,7 @@ def create_periodic_loop(
     return frames[:cycle_frames]
 
 
-def analyze_best_method(frames: List[np.ndarray]) -> Dict[str, Any]:
+def analyze_best_method(frames: list[np.ndarray]) -> dict[str, Any]:
     """Analyze video and recommend best loop method.
 
     Returns dict with:
@@ -424,12 +422,12 @@ def compute_frame_similarity(
 
 
 def find_best_loop_points(
-    frames: List[np.ndarray],
+    frames: list[np.ndarray],
     scan_range: int = 100,
     threshold: float = 70.0,
     similarity_method: str = "optical_flow",
     show_progress: bool = False,
-) -> Tuple[Optional[int], Optional[int], float]:
+) -> tuple[int | None, int | None, float]:
     """
     Scan video for best loop points (start and end).
 
@@ -484,11 +482,11 @@ def find_best_loop_points(
 
 
 def find_best_match_point(
-    first_frames: List[np.ndarray],
-    last_frames: List[np.ndarray],
+    first_frames: list[np.ndarray],
+    last_frames: list[np.ndarray],
     threshold: int = 85,
     similarity_method: str = "mse",
-) -> Tuple[Optional[int], Optional[int], float]:
+) -> tuple[int | None, int | None, float]:
     """Find best matching frame pair between first and last frames."""
     if not first_frames or not last_frames:
         return (None, None, 0.0)
@@ -512,7 +510,7 @@ def find_best_match_point(
     return (None, None, best_score)
 
 
-def encode_video(frames: List[np.ndarray], output_path: str, fps: float, workers: int = 1) -> str:
+def encode_video(frames: list[np.ndarray], output_path: str, fps: float, workers: int = 1) -> str:
     """Encode frames to video using FFmpeg without saving to disk."""
     if not frames:
         raise ValueError("No frames to encode")
@@ -546,15 +544,15 @@ def create_loop(
     fade_frames: int = 10,
     fade_type: str = "both",
     morph_steps: int = 10,
-    cycle_frames: Optional[int] = None,
+    cycle_frames: int | None = None,
     hold_frames: int = 2,
     blend_mode: str = "add",
     ramp_factor: float = 1.0,
     analyze_only: bool = False,
     progress: bool = False,
-    until: Optional[float] = None,
+    until: float | None = None,
     workers: int = 1,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Main entry point for loop operation.
 
@@ -571,7 +569,7 @@ def create_loop(
     - speedramp: Speed adjustment (best when endpoints almost match)
     - auto: Analyze and pick best method
     """
-    result: Dict[str, Any] = {"success": False, "output_path": None, "error": None}
+    result: dict[str, Any] = {"success": False, "output_path": None, "error": None}
 
     try:
         all_frames = extract_all_frames(input_path, show_progress=progress)
@@ -618,7 +616,7 @@ def create_loop(
         result["success"] = True
         result["output_path"] = output_path
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - operation boundary reports any failure in `result`
         result["error"] = str(e)
 
     return result

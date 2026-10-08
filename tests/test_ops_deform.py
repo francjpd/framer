@@ -17,8 +17,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import framer_worker  # noqa: E402
-from ops.deform import deform_video  # noqa: E402
+import framer_worker
+from ops.deform import deform_video
 
 
 def make_rig(tmp_path: Path, frames: int = 8, fps: float = 8.0) -> Path:
@@ -90,6 +90,7 @@ def test_deform_video_writes_an_alpha_video_for_the_requested_range(tmp_path, ti
             "-",
         ],
         capture_output=True,
+        check=False,
     ).stdout
     assert len(raw) >= 32 * 32 * 4
     frame = np.frombuffer(raw[: 32 * 32 * 4], dtype=np.uint8).reshape(32, 32, 4)

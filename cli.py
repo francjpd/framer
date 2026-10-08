@@ -18,25 +18,33 @@ Operations:
     deform - Deform a still image with a rig/bones puppet warp
 """
 
-import sys
-import os
+# This module is the command-line boundary: each command calls an operation that
+# can raise an arbitrary exception from OpenCV, FFmpeg, or PyTorch, and turns
+# any failure into a clean user-facing message and a non-zero exit. Catching
+# ``Exception`` here is therefore deliberate, so BLE001 is suppressed for this
+# module only.
+# ruff: file-ignore[BLE001] CLI boundary converts any operation failure into a user error.
+
 import json
+import os
+import sys
 from pathlib import Path
-from typing import Optional, Annotated
+from typing import Annotated
+
 import typer
 from rich import print
 
 from core.utils import parse_color
-from ops.remove_bg import remove_bg as op_remove_bg
+from ops.deform import deform_video as op_deform
+from ops.export import export_web as op_export
 from ops.fps_boost import boost_fps as op_boost_fps
+from ops.glow import add_glow as op_glow
 from ops.loop import create_loop as op_loop
+from ops.outline import add_outline as op_outline
+from ops.recolor import recolor_video as op_recolor
+from ops.remove_bg import remove_bg as op_remove_bg
 from ops.resize import resize_video as op_resize
 from ops.trim import trim_video as op_trim
-from ops.export import export_web as op_export
-from ops.recolor import recolor_video as op_recolor
-from ops.glow import add_glow as op_glow
-from ops.outline import add_outline as op_outline
-from ops.deform import deform_video as op_deform
 
 app = typer.Typer(
     help="Video processing CLI with composable operations",
@@ -73,7 +81,7 @@ def handle_result(result: dict):
 def remove_bg_cmd(
     input_path: Annotated[str, typer.Argument(help="Input video file")],
     output_path: Annotated[str, typer.Argument(help="Output video file")],
-    color: Annotated[Optional[str], typer.Option("-c", "--color", help="Background color (BGR: '0,255,0', hex: '#00FF00')")] = None,
+    color: Annotated[str | None, typer.Option("-c", "--color", help="Background color (BGR: '0,255,0', hex: '#00FF00')")] = None,
     tolerance: Annotated[int, typer.Option("-t", "--tolerance", help="Color tolerance")] = 30,
     edges: Annotated[int, typer.Option("-e", "--edges", help="Soft edge size")] = 5,
     auto_ranges: Annotated[bool, typer.Option(help="Auto-generate color ranges")] = True,
@@ -87,7 +95,7 @@ def remove_bg_cmd(
     refine_block_size: Annotated[int, typer.Option("-rb", "--refine-block-size", help="Refinement block size")] = 32,
     progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress bar")] = False,
     workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
-    config: Annotated[Optional[str], typer.Option("--config", help="Path to JSON config file")] = None,
+    config: Annotated[str | None, typer.Option("--config", help="Path to JSON config file")] = None,
 ):
     kwargs = {
         "color": list(parse_color(color)) if color else None,
@@ -114,7 +122,7 @@ def remove_bg_cmd(
         result = op_remove_bg(input_path=input_path, output_path=output_path, **kwargs)
         handle_result(result)
     except Exception as e:
-        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        print(f"\n[bold red]❌ Error:[/bold red] {e!s}")
         sys.exit(1)
 
 @app.command(name="fps-boost", help="Increase video frame rate to make it smoother")
@@ -124,7 +132,7 @@ def fps_boost_cmd(
     to: Annotated[int, typer.Option(help="Target FPS")] = 60,
     progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress bar")] = False,
     workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
-    config: Annotated[Optional[str], typer.Option("--config", help="Path to JSON config file")] = None,
+    config: Annotated[str | None, typer.Option("--config", help="Path to JSON config file")] = None,
 ):
     kwargs = {"to": to, "progress": progress, "workers": workers}
     if config:
@@ -134,7 +142,7 @@ def fps_boost_cmd(
         result = op_boost_fps(input_path=input_path, output_path=output_path, **kwargs)
         handle_result(result)
     except Exception as e:
-        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        print(f"\n[bold red]❌ Error:[/bold red] {e!s}")
         sys.exit(1)
 
 @app.command(name="loop", help="Create seamless infinite video loops with various methods")
@@ -146,15 +154,15 @@ def loop_cmd(
     fade_frames: Annotated[int, typer.Option(help="Number of frames for fade transition")] = 10,
     fade_type: Annotated[str, typer.Option(help="Fade type: in, out, both")] = "both",
     morph_steps: Annotated[int, typer.Option(help="Number of warp steps for morph transition")] = 10,
-    cycle_frames: Annotated[Optional[int], typer.Option(help="Manual cycle length for periodic method")] = None,
+    cycle_frames: Annotated[int | None, typer.Option(help="Manual cycle length for periodic method")] = None,
     hold_frames: Annotated[int, typer.Option(help="Number of frames to freeze at transition")] = 2,
     blend_mode: Annotated[str, typer.Option(help="Blend mode: add, multiply, screen, overlay")] = "add",
     ramp_factor: Annotated[float, typer.Option(help="Speed multiplier 0.8-1.2 for speedramp")] = 1.0,
-    until: Annotated[Optional[float], typer.Option("-u", "--until", help="Start pingpong from this second (negative means from end)")] = None,
+    until: Annotated[float | None, typer.Option("-u", "--until", help="Start pingpong from this second (negative means from end)")] = None,
     analyze_only: Annotated[bool, typer.Option(help="Just analyze and report best method, don't process video")] = False,
     progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress bar")] = False,
     workers: Annotated[int, typer.Option("-w", "--workers", help="Number of worker threads")] = get_default_workers(),
-    config: Annotated[Optional[str], typer.Option("--config", help="Path to JSON config file")] = None,
+    config: Annotated[str | None, typer.Option("--config", help="Path to JSON config file")] = None,
 ):
     kwargs = {
         "method": method,
@@ -184,7 +192,7 @@ def loop_cmd(
         else:
             handle_result(result)
     except Exception as e:
-        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        print(f"\n[bold red]❌ Error:[/bold red] {e!s}")
         sys.exit(1)
 
 
@@ -202,23 +210,23 @@ def resize_cmd(
         result = op_resize(input_path=input_path, output_path=output_path, width=width, height=height, pad=pad, workers=workers, progress=progress)
         handle_result(result)
     except Exception as e:
-        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        print(f"\n[bold red]❌ Error:[/bold red] {e!s}")
         sys.exit(1)
 
 @app.command(name="trim", help="Trim a segment of a video")
 def trim_cmd(
     input_path: Annotated[str, typer.Argument(help="Input video file")],
     output_path: Annotated[str, typer.Argument(help="Output video file")],
-    start: Annotated[Optional[float], typer.Option("-s", "--start", help="Start time in seconds")] = None,
-    end: Annotated[Optional[float], typer.Option("-e", "--end", help="End time in seconds")] = None,
-    duration: Annotated[Optional[float], typer.Option("-d", "--duration", help="Duration in seconds")] = None,
+    start: Annotated[float | None, typer.Option("-s", "--start", help="Start time in seconds")] = None,
+    end: Annotated[float | None, typer.Option("-e", "--end", help="End time in seconds")] = None,
+    duration: Annotated[float | None, typer.Option("-d", "--duration", help="Duration in seconds")] = None,
     progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress")] = False,
 ):
     try:
         result = op_trim(input_path=input_path, output_path=output_path, start=start, end=end, duration=duration, progress=progress)
         handle_result(result)
     except Exception as e:
-        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        print(f"\n[bold red]❌ Error:[/bold red] {e!s}")
         sys.exit(1)
 
 @app.command(name="export", help="Export to optimized web formats (gif, webm, mp4)")
@@ -235,7 +243,7 @@ def export_cmd(
         result = op_export(input_path=input_path, output_dir=output_dir, format=format, fps=fps, scale=scale, workers=workers, progress=progress)
         handle_result(result)
     except Exception as e:
-        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        print(f"\n[bold red]❌ Error:[/bold red] {e!s}")
         sys.exit(1)
 
 @app.command(name="recolor", help="Replace a specific color with a new color")
@@ -252,7 +260,7 @@ def recolor_cmd(
         result = op_recolor(input_path=input_path, output_path=output_path, target=target, new_color=new_color, tolerance=tolerance, workers=workers, progress=progress)
         handle_result(result)
     except Exception as e:
-        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        print(f"\n[bold red]❌ Error:[/bold red] {e!s}")
         sys.exit(1)
 
 @app.command(name="glow", help="Add a soft glow behind an object with a transparent background")
@@ -269,7 +277,7 @@ def glow_cmd(
         result = op_glow(input_path=input_path, output_path=output_path, color=color, radius=radius, intensity=intensity, workers=workers, progress=progress)
         handle_result(result)
     except Exception as e:
-        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        print(f"\n[bold red]❌ Error:[/bold red] {e!s}")
         sys.exit(1)
 
 @app.command(name="outline", help="Add a solid outline to a video with a transparent background")
@@ -285,7 +293,7 @@ def outline_cmd(
         result = op_outline(input_path=input_path, output_path=output_path, color=color, thickness=thickness, workers=workers, progress=progress)
         handle_result(result)
     except Exception as e:
-        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        print(f"\n[bold red]❌ Error:[/bold red] {e!s}")
         sys.exit(1)
 
 
@@ -295,11 +303,11 @@ def deform_cmd(
     output_path: Annotated[str, typer.Argument(help="Output video (.webm/.mov/.gif) or image (.png) for one frame")],
     rig: Annotated[str, typer.Option("-r", "--rig", help="Path to a framer.rig JSON document")],
     start_frame: Annotated[int, typer.Option("--start-frame", help="First frame of the range")] = 0,
-    end_frame: Annotated[Optional[int], typer.Option("--end-frame", help="Last frame of the range (default: rig.duration.frames)")] = None,
-    fps: Annotated[Optional[float], typer.Option("--fps", help="Output fps (default: rig.duration.fps)")] = None,
+    end_frame: Annotated[int | None, typer.Option("--end-frame", help="Last frame of the range (default: rig.duration.frames)")] = None,
+    fps: Annotated[float | None, typer.Option("--fps", help="Output fps (default: rig.duration.fps)")] = None,
     iterations: Annotated[int, typer.Option("-i", "--iterations", help="Fixed-point inversion iterations")] = 5,
-    weights: Annotated[Optional[str], typer.Option("--weights", help="Optional dense-weight .npz cache path")] = None,
-    radius_scale: Annotated[Optional[float], typer.Option("--radius-scale", help="Scale all bone influence radii")] = None,
+    weights: Annotated[str | None, typer.Option("--weights", help="Optional dense-weight .npz cache path")] = None,
+    radius_scale: Annotated[float | None, typer.Option("--radius-scale", help="Scale all bone influence radii")] = None,
     progress: Annotated[bool, typer.Option("-p", "--progress", help="Show progress")] = False,
 ):
     try:
@@ -317,7 +325,7 @@ def deform_cmd(
         )
         handle_result(result)
     except Exception as e:
-        print(f"\n[bold red]❌ Error:[/bold red] {str(e)}")
+        print(f"\n[bold red]❌ Error:[/bold red] {e!s}")
         sys.exit(1)
 
 

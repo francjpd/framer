@@ -5,22 +5,22 @@ Provides GPU-backed versions of common image processing operations.
 Falls back to CPU (numpy/OpenCV) when GPU is not available.
 """
 
+
 import numpy as np
-from typing import Tuple, Optional, Union, List
 
 from core.gpu import (
+    device_synchronize,
+    from_device,
+    get_array_module,
     get_backend,
     is_available,
     to_device,
-    from_device,
-    get_array_module,
-    device_synchronize,
 )
 
 
 def color_distance(
     frame: np.ndarray,
-    target_color: Union[Tuple[int, int, int], List[int], np.ndarray],
+    target_color: tuple[int, int, int] | list[int] | np.ndarray,
 ) -> np.ndarray:
     """
     Calculate Euclidean distance from each pixel to target color.
@@ -68,8 +68,8 @@ def _color_distance_cpu(frame: np.ndarray, target_color) -> np.ndarray:
 
 def in_range(
     frame: np.ndarray,
-    lower: Union[Tuple[int, int, int], List[int], np.ndarray],
-    upper: Union[Tuple[int, int, int], List[int], np.ndarray],
+    lower: tuple[int, int, int] | list[int] | np.ndarray,
+    upper: tuple[int, int, int] | list[int] | np.ndarray,
 ) -> np.ndarray:
     """
     Create a binary mask for pixels within the specified range.
@@ -153,8 +153,8 @@ def _gaussian_blur_gpu(frame: np.ndarray, kernel_size, sigma) -> np.ndarray:
 
         blurred = ndi.gaussian_filter(device, sigma, mode="reflect")
     else:
-        import torch.nn.functional as F
         import torch
+        import torch.nn.functional as F
 
         # For torch, use padding + conv2d for gaussian blur approximation
         pad = kernel_size // 2
@@ -247,9 +247,8 @@ def _dilate_gpu(frame: np.ndarray, kernel_size, iterations) -> np.ndarray:
         result = ndi.binary_dilation(device, structure=kernel, iterations=iterations)
         result = result.astype(xp.uint8) * 255
     else:
-        import torch.nn as nn
-        import torch.nn.functional as F
         import torch
+        import torch.nn.functional as F
 
         pad = kernel_size // 2
         x = device.float() if device.dtype == torch.uint8 else device
@@ -324,9 +323,8 @@ def _erode_gpu(frame: np.ndarray, kernel_size, iterations) -> np.ndarray:
         result = ndi.binary_erosion(device, structure=kernel, iterations=iterations)
         result = result.astype(xp.uint8) * 255
     else:
-        import torch.nn as nn
-        import torch.nn.functional as F
         import torch
+        import torch.nn.functional as F
 
         # For erosion, we need to invert, max_pool, then invert back
         if device.dtype == torch.uint8:
@@ -418,7 +416,7 @@ def _merge_bgra_cpu(b, g, r, alpha) -> np.ndarray:
 
 def split_bgra(
     frame: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Split BGRA frame into individual channels.
     GPU-accelerated version of cv2.split.
@@ -436,7 +434,7 @@ def split_bgra(
 
 def _split_bgra_gpu(
     frame: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """GPU implementation of split_bgra."""
     xp = get_array_module()
 
@@ -451,7 +449,7 @@ def _split_bgra_gpu(
 
 def _split_bgra_cpu(
     frame: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """CPU fallback for split_bgra."""
     import cv2
 
@@ -619,7 +617,7 @@ def _bitwise_not_cpu(frame: np.ndarray) -> np.ndarray:
 def composite(
     foreground: np.ndarray,
     background: np.ndarray,
-    alpha: Optional[np.ndarray] = None,
+    alpha: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Composite foreground over background using alpha channel.
@@ -667,7 +665,6 @@ def _composite_gpu(foreground, background, alpha) -> np.ndarray:
 
 def _composite_cpu(foreground, background, alpha) -> np.ndarray:
     """CPU fallback for composite."""
-    import cv2
 
     fg = foreground.copy()
 
@@ -692,8 +689,8 @@ def _composite_cpu(foreground, background, alpha) -> np.ndarray:
 
 def apply_color_replacement(
     frame: np.ndarray,
-    target_color: Tuple[int, int, int],
-    new_color: Tuple[int, int, int],
+    target_color: tuple[int, int, int],
+    new_color: tuple[int, int, int],
     tolerance: int = 30,
 ) -> np.ndarray:
     """
@@ -756,8 +753,8 @@ def _apply_color_replacement_cpu(
 
 
 def batch_process_frames(
-    frames: List[np.ndarray], operation: str, **kwargs
-) -> List[np.ndarray]:
+    frames: list[np.ndarray], operation: str, **kwargs
+) -> list[np.ndarray]:
     """
     Process multiple frames in a batch for better GPU utilization.
 

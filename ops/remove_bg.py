@@ -2,10 +2,10 @@
 Remove background operation - removes background from video with alpha channel.
 """
 
-import sys
 import json
+import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
 from core import register_operation
 from core.utils import parse_color
@@ -35,7 +35,7 @@ def remove_bg(
     workers: int = 1,
     config: str | None = None,
     force_cpu: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Remove background from video.
 

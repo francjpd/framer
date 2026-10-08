@@ -37,8 +37,8 @@ def refine_frame(
     background_color: list,
     tolerance: int = 45,
     block_size: int = 32,
-    edge_cleanup: int = None,
-    soft_edges: int = None,
+    edge_cleanup: int | None = None,
+    soft_edges: int | None = None,
 ) -> np.ndarray:
     """
     Refine a single frame to catch missed background-colored pixels inline.
@@ -47,8 +47,6 @@ def refine_frame(
     color_ranges = generate_color_ranges(
         background_color, num_ranges=3, base_tolerance=tolerance
     )
-
-    original_alpha = alpha.copy()
 
     missed_pixels = []
 
@@ -128,7 +126,6 @@ def _detect_missed_background_pixel(
     foreground_pixels, color_ranges, tolerance_override=None
 ):
     """Detect pixels that match background color but weren't removed."""
-    tolerance = tolerance_override if tolerance_override else 45
     missed = []
     for y, x, pixel in foreground_pixels:
         b, g, r = pixel

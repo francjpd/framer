@@ -3,15 +3,15 @@ Glow / Drop-shadow operation.
 Adds a soft glowing aura behind objects with an alpha channel.
 """
 
+from typing import Any
+
 import cv2
 import numpy as np
-from typing import Dict, Any
 
-from core import register_operation
+from core import gpu_ops, register_operation
+from core.gpu import is_available
 from core.parallel import process_video_parallel
 from core.utils import parse_color
-from core.gpu import is_available
-from core import gpu_ops
 
 
 def _apply_glow(
@@ -27,7 +27,7 @@ def _apply_glow(
     if frame.shape[2] != 4:
         return frame
 
-    b, g, r, a = cv2.split(frame)
+    _b, _g, _r, a = cv2.split(frame)
 
     kernel_size = radius * 2 + 1
 
@@ -71,13 +71,13 @@ def add_glow(
     color: str = "#FFFFFF",
     radius: int = 15,
     intensity: float = 1.0,
-    workers: int = None,
+    workers: int | None = None,
     progress: bool = False,
     force_cpu: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Add a soft glow/drop-shadow to a transparent video."""
-    from ops.outline import check_alpha_channel
     from core.gpu import notify_gpu_usage
+    from ops.outline import check_alpha_channel
 
     if not check_alpha_channel(input_path):
         return {

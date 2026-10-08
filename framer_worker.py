@@ -49,7 +49,7 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # Make the repository root importable regardless of the working directory the
 # Elixir port was spawned from.
@@ -80,7 +80,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
-def _probe_video(input_path: str) -> Dict[str, Any]:
+def _probe_video(input_path: str) -> dict[str, Any]:
     """Return width/height/fps/total_frames for a video using ffprobe."""
     cmd = [
         _ffprobe(), "-v", "error", "-select_streams", "v:0",
@@ -92,7 +92,7 @@ def _probe_video(input_path: str) -> Dict[str, Any]:
     data = json.loads(out)
     stream = (data.get("streams") or [{}])[0]
 
-    def parse_rate(value: Optional[str]) -> float:
+    def parse_rate(value: str | None) -> float:
         if not value or value == "0/0":
             return 0.0
         num, _, den = value.partition("/")
@@ -113,7 +113,7 @@ def _probe_video(input_path: str) -> Dict[str, Any]:
         except (TypeError, ValueError):
             duration = 0.0
         if duration and fps:
-            total = int(round(duration * fps))
+            total = round(duration * fps)
 
     if total <= 0:
         # Last resort: count decoded frames.
@@ -123,7 +123,7 @@ def _probe_video(input_path: str) -> Dict[str, Any]:
                 "-count_frames", "-show_entries", "stream=nb_read_frames",
                 "-of", "csv=p=0", input_path,
             ]
-            counted = subprocess.run(count_cmd, capture_output=True, text=True).stdout.strip()
+            counted = subprocess.run(count_cmd, capture_output=True, text=True, check=False).stdout.strip()
             total = int(counted)
         except (ValueError, subprocess.SubprocessError):
             total = 0
@@ -131,7 +131,7 @@ def _probe_video(input_path: str) -> Dict[str, Any]:
     return {"width": width, "height": height, "fps": fps, "total_frames": total}
 
 
-def _chunk_bounds(req: Dict[str, Any], total_frames: int) -> tuple[int, int]:
+def _chunk_bounds(req: dict[str, Any], total_frames: int) -> tuple[int, int]:
     start = int(req.get("start_frame") or 0)
     end = req.get("end_frame")
     if end is None or int(end) < 0:
@@ -141,7 +141,7 @@ def _chunk_bounds(req: Dict[str, Any], total_frames: int) -> tuple[int, int]:
     return start, end
 
 
-def _alpha_codec_args(output_path: str, has_alpha: bool) -> List[str]:
+def _alpha_codec_args(output_path: str, has_alpha: bool) -> list[str]:
     """Pick encoder arguments based on the output extension."""
     ext = Path(output_path).suffix.lower()
     if ext == ".webm":
@@ -162,12 +162,12 @@ def _alpha_codec_args(output_path: str, has_alpha: bool) -> List[str]:
 # operations
 # ---------------------------------------------------------------------------
 
-def op_info(req: Dict[str, Any]) -> Dict[str, Any]:
+def op_info(req: dict[str, Any]) -> dict[str, Any]:
     info = _probe_video(req["input"])
     return {"output": req.get("output"), **info}
 
 
-def op_remove_bg(req: Dict[str, Any]) -> Dict[str, Any]:
+def op_remove_bg(req: dict[str, Any]) -> dict[str, Any]:
     """Key the background out of a frame range and write a BGRA chunk."""
     import cv2
 
@@ -254,7 +254,7 @@ def op_remove_bg(req: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def op_fps_boost(req: Dict[str, Any]) -> Dict[str, Any]:
+def op_fps_boost(req: dict[str, Any]) -> dict[str, Any]:
     """Interpolate a frame range to a higher frame rate (FFmpeg)."""
     input_path = req["input"]
     output_path = req["output"]
@@ -286,7 +286,7 @@ def op_fps_boost(req: Dict[str, Any]) -> Dict[str, Any]:
     filters = []
     try:
         filters_out = subprocess.run(
-            [_ffmpeg(), "-filters"], capture_output=True, text=True
+            [_ffmpeg(), "-filters"], capture_output=True, text=True, check=False
         ).stdout
         has_minterpolate = "minterpolate" in filters_out
     except subprocess.SubprocessError:
@@ -305,14 +305,14 @@ def op_fps_boost(req: Dict[str, Any]) -> Dict[str, Any]:
     cmd += _alpha_codec_args(output_path, has_alpha)
     cmd.append(output_path)
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"FFmpeg fps-boost failed: {proc.stderr[-2000:]}")
 
     return {"output": output_path, "target_fps": target_fps, "frames": (end - start + 1)}
 
 
-def op_loop(req: Dict[str, Any]) -> Dict[str, Any]:
+def op_loop(req: dict[str, Any]) -> dict[str, Any]:
     """Create a seamless loop for a whole file (single Port call)."""
     from ops.loop import create_loop
 
@@ -332,7 +332,7 @@ def op_loop(req: Dict[str, Any]) -> Dict[str, Any]:
     return {"output": req["output"]}
 
 
-def op_deform(req: Dict[str, Any]) -> Dict[str, Any]:
+def op_deform(req: dict[str, Any]) -> dict[str, Any]:
     """Puppet-warp a still image over a chunk range with a rig/bones document.
 
     The source is a still image (read once, looped over ``[start_frame,
@@ -367,10 +367,10 @@ def op_deform(req: Dict[str, Any]) -> Dict[str, Any]:
     return {"output": result["output_path"], "frames": result.get("frames", 0)}
 
 
-def op_merge(req: Dict[str, Any]) -> Dict[str, Any]:
+def op_merge(req: dict[str, Any]) -> dict[str, Any]:
     """Concatenate finished chunk files into the final output."""
     opts = req.get("options") or {}
-    chunks: List[str] = [str(c) for c in (opts.get("chunks") or [])]
+    chunks: list[str] = [str(c) for c in (opts.get("chunks") or [])]
     output_path = req["output"]
 
     if not chunks:
@@ -391,7 +391,7 @@ def op_merge(req: Dict[str, Any]) -> Dict[str, Any]:
             _ffmpeg(), "-y", "-f", "concat", "-safe", "0",
             "-i", concat_path, "-c", "copy", output_path,
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if proc.returncode != 0:
             raise RuntimeError(f"FFmpeg merge failed: {proc.stderr[-2000:]}")
     finally:
@@ -411,7 +411,7 @@ _OPERATIONS = {
 }
 
 
-def handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
+def handle_request(req: dict[str, Any]) -> dict[str, Any]:
     req_id = req.get("id")
     try:
         op = req.get("op")

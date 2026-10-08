@@ -3,15 +3,15 @@ Outline operation - adds a colored border around objects with an alpha channel.
 """
 
 import subprocess
+from typing import Any
+
 import cv2
 import numpy as np
-from typing import Dict, Any
 
-from core import register_operation
+from core import gpu_ops, register_operation
+from core.gpu import is_available
 from core.parallel import process_video_parallel
 from core.utils import parse_color
-from core.gpu import is_available
-from core import gpu_ops
 
 
 def _apply_outline(
@@ -24,7 +24,7 @@ def _apply_outline(
     if frame.shape[2] != 4:
         return frame
 
-    b, g, r, a = cv2.split(frame)
+    _b, _g, _r, a = cv2.split(frame)
 
     kernel_size = 2 * thickness + 1
 
@@ -75,7 +75,7 @@ def check_alpha_channel(video_path: str) -> bool:
             "csv=p=0",
             video_path,
         ]
-        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True)
+        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True, check=False)
         if "1" in alpha_result.stdout:
             return True
 
@@ -91,10 +91,10 @@ def check_alpha_channel(video_path: str) -> bool:
             "csv=p=0",
             video_path,
         ]
-        pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True)
+        pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True, check=False)
         pix_fmt = pix_fmt_result.stdout.strip()
         return any(x in pix_fmt for x in ["yuva", "bgra", "argb", "gba", "rgba"])
-    except Exception:
+    except Exception:  # noqa: BLE001 - ffprobe is a best-effort alpha probe; failure means "no alpha"
         return False
 
 
@@ -103,10 +103,10 @@ def add_outline(
     output_path: str,
     color: str = "#FFFFFF",
     thickness: int = 5,
-    workers: int = None,
+    workers: int | None = None,
     progress: bool = False,
     force_cpu: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Add a solid outline around objects in an alpha-channel video."""
     from core.gpu import notify_gpu_usage
 

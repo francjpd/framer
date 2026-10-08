@@ -46,6 +46,7 @@ def make_clip(path: Path, width: int = 32, height: int = 32, frames: int = 8, fp
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode != 0:
         pytest.fail(f"could not generate test clip: {result.stderr[-1000:]}")

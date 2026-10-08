@@ -1,13 +1,13 @@
-import pytest
-import numpy as np
-import cv2
 import sys
 from pathlib import Path
+
+import numpy as np
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ops.recolor import _apply_recolor
+
 
 def test_apply_recolor():
     # BGR frame (10x10)

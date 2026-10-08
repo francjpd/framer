@@ -5,14 +5,15 @@ Outputs a .webm, .mp4, or highly optimized .gif
 
 import subprocess
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
 from core import register_operation
+
 
 def export_web(
     input_path: str, output_dir: str, format: str = "all", 
     fps: int = -1, scale: int = -1, workers: int = 1, progress: bool = False
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Export to web-optimized formats."""
     
     out_dir = Path(output_dir)

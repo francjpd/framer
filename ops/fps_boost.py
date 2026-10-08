@@ -2,17 +2,18 @@
 FPS boost operation - increases video frame rate using FFmpeg.
 """
 
-import subprocess
+import contextlib
 import shutil
+import subprocess
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
 from core import register_operation
 
 
 def boost_fps(
     input_path: str, output_path: str, to: int = 60, progress: bool = False, workers: int = 1
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Increase video frame rate to target fps using FFmpeg.
 
@@ -78,7 +79,7 @@ def boost_fps(
             "csv=p=0",
             str(input_path),
         ]
-        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True)
+        alpha_result = subprocess.run(alpha_cmd, capture_output=True, text=True, check=False)
         has_alpha = "1" in alpha_result.stdout
 
         # Also check pix_fmt as fallback for other formats
@@ -94,7 +95,7 @@ def boost_fps(
             "csv=p=0",
             str(input_path),
         ]
-        pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True)
+        pix_fmt_result = subprocess.run(pix_fmt_cmd, capture_output=True, text=True, check=False)
         input_pix_fmt = pix_fmt_result.stdout.strip()
         has_alpha = has_alpha or (
             "yuva" in input_pix_fmt
@@ -149,10 +150,10 @@ def boost_fps(
             # Check for minterpolate filter availability
             try:
                 test_result = subprocess.run(
-                    ["ffmpeg", "-filters"], capture_output=True, text=True
+                    ["ffmpeg", "-filters"], capture_output=True, text=True, check=False
                 )
                 has_minterpolate = "minterpolate" in test_result.stdout
-            except Exception:
+            except Exception:  # noqa: BLE001 - probe failure falls back to fps conversion
                 has_minterpolate = False
 
             if has_minterpolate:
@@ -175,17 +176,15 @@ def boost_fps(
 
         total_frames_est = 0
         if progress:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 dur_cmd = [
                     "ffprobe", "-v", "error", "-show_entries",
                     "format=duration", "-of",
                     "default=noprint_wrappers=1:nokey=1", str(input_path)
                 ]
-                dur_result = subprocess.run(dur_cmd, capture_output=True, text=True)
+                dur_result = subprocess.run(dur_cmd, capture_output=True, text=True, check=False)
                 duration = float(dur_result.stdout.strip())
                 total_frames_est = int(duration * to)
-            except Exception:
-                pass
 
         if progress:
             cmd.insert(1, "-progress")
@@ -200,15 +199,13 @@ def boost_fps(
             
             for line in process.stdout:
                 if line.startswith("frame="):
-                    try:
+                    with contextlib.suppress(ValueError, IndexError):
                         frame_val = line.split("=")[1].strip()
                         if frame_val and frame_val.isdigit():
                             frame = int(frame_val)
                             if total_frames_est > 0:
                                 perc = min(100.0, (frame / total_frames_est) * 100)
                                 print(f"\rProcessing: {perc:.1f}%", end="", flush=True)
-                    except Exception:
-                        pass
             
             process.wait()
             if process.returncode != 0:
@@ -226,7 +223,7 @@ def boost_fps(
 
     except subprocess.CalledProcessError as e:
         result["error"] = f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary reports any operation failure in `result`
         result["error"] = str(e)
 
     return result

@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.deform import (  # noqa: E402
+from core.deform import (
     DeformRenderer,
     RigError,
     apply_lbs,

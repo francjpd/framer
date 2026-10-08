@@ -1,5 +1,5 @@
 import cv2
-import numpy as np
+
 
 def check_alpha():
     cap = cv2.VideoCapture("../agent-hotel/agent_collab/priv/static/videos/octo-infinity-bg.webm")

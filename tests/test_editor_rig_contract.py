@@ -16,14 +16,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.deform import (  # noqa: E402
+from core.deform import (
     DeformRenderer,
     build_grid_mesh,
     compute_vertex_weights,
     load_rig,
     validate_rig,
 )
-from tests.deform_scene import build_scene  # noqa: E402
+from tests.deform_scene import build_scene
 
 
 def _editor_document() -> dict:

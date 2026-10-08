@@ -5,37 +5,31 @@ Provides color-based and motion-based segmentation, mask refinement,
 and video processing utilities with alpha channel support.
 """
 
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any
+
 import cv2
 import numpy as np
-import subprocess
-import shutil
-import tempfile
-import re
-from pathlib import Path
-from typing import Dict, Any
 
-from core.video import get_output_format
-from core.parallel import process_video_parallel
-from core.gpu import is_available
 from core import gpu_ops
-
 from core.color_ranges import (
-    generate_color_ranges,
-    detect_background_color_from_video,
     detect_background_color_from_frame_border,
+    detect_background_color_from_video,
+    generate_color_ranges,
 )
+from core.gpu import is_available
 from core.mask_refinement import (
-    _apply_soft_edges,
     _apply_edge_cleanup,
+    _apply_soft_edges,
     refine_frame,
 )
 from core.motion_detection import (
-    detect_motion_region,
     create_motion_based_mask,
+    detect_motion_region,
 )
-
-
-
+from core.parallel import process_video_parallel
 
 
 class VideoBackgroundRemover:
@@ -346,8 +340,8 @@ def _process_frame(
 def _process_frame_gpu(
     frame: np.ndarray,
     color_ranges: list,
-    soft_edges: int = None,
-    edge_cleanup: int = None,
+    soft_edges: int | None = None,
+    edge_cleanup: int | None = None,
     use_adaptive_bg: bool = False,
 ) -> np.ndarray:
     """GPU-accelerated version of _process_frame."""
@@ -505,7 +499,7 @@ def _remove_bg_frame_processor(frame: np.ndarray, **kwargs) -> np.ndarray:
 def remove_background(
     input_path: str,
     output_path: str,
-    background_color: list = None,
+    background_color: list | None = None,
     tolerance: int = 30,
     soft_edges: int = 5,
     show_progress: bool = False,
@@ -523,11 +517,11 @@ def remove_background(
     refine_save_previews: bool = False,
     workers: int = 1,
     use_gpu: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Remove background from video and output with alpha channel using stream encoding.
     """
-    result: Dict[str, Any] = {"success": False, "output_path": None, "error": None}
+    result: dict[str, Any] = {"success": False, "output_path": None, "error": None}
 
     try:
         input_file = Path(input_path)
@@ -677,7 +671,7 @@ def remove_background(
 
             cap.release()
             if show_progress:
-                print(f"\rProcessing: 100%")
+                print("\rProcessing: 100%")
 
             result["success"] = True
             result["output_path"] = output_path
@@ -685,7 +679,7 @@ def remove_background(
 
     except subprocess.CalledProcessError as e:
         result["error"] = f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - operation boundary reports any failure in `result`
         result["error"] = str(e)
 
     return result

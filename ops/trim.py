@@ -3,15 +3,16 @@ Trim operation using FFmpeg.
 """
 
 import subprocess
-from typing import Dict, Any, Optional
+from typing import Any
 
 from core import register_operation
 
+
 def trim_video(
-    input_path: str, output_path: str, start: Optional[float] = None, 
-    end: Optional[float] = None, duration: Optional[float] = None,
+    input_path: str, output_path: str, start: float | None = None,
+    end: float | None = None, duration: float | None = None,
     progress: bool = False
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Trim a specific time window from video."""
     
     cmd = ["ffmpeg", "-y"]
@@ -38,7 +39,7 @@ def trim_video(
         if progress:
             print("Done!")
         return {"success": True, "output_path": output_path, "error": None}
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         # If copy fails (e.g., container mismatch), try re-encoding
         try:
             cmd.remove("-c")

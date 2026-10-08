@@ -2,8 +2,8 @@
 Utility functions for frame operations.
 """
 
-from typing import Union, List, Tuple, Optional
-from core.gpu import get_backend, is_available, get_device_info
+
+from core.gpu import get_backend, get_device_info, is_available
 
 
 def get_gpu_info() -> dict:
@@ -16,8 +16,8 @@ def get_gpu_info() -> dict:
 
 
 def parse_color(
-    color_str: Union[str, List, Tuple, None], default_alpha: int = 255
-) -> Optional[List[int]]:
+    color_str: str | list | tuple | None, default_alpha: int = 255
+) -> list[int] | None:
     """
     Parse color from BGR string, hex, or list/tuple.
 
@@ -75,8 +75,8 @@ def parse_color(
 
 
 def parse_color_rgba(
-    color_str: Union[str, List, Tuple, None],
-) -> Optional[Tuple[int, int, int, int]]:
+    color_str: str | list | tuple | None,
+) -> tuple[int, int, int, int] | None:
     """
     Parse fade color string to RGBA tuple.
 

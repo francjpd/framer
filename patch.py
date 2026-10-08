@@ -1,5 +1,6 @@
 import sys
 
+
 def patch_bg_removal():
     with open("core/bg_removal.py", "r") as f:
         content = f.read()
