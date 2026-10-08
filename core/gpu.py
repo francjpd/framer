@@ -5,11 +5,17 @@ Supports CUDA (NVIDIA), ROCm (AMD), and MPS (Apple Silicon) backends.
 Automatically falls back to CPU if no GPU is available.
 """
 
-import os
+# Every backend below is optional: detection imports and initializes it, and
+# any failure (missing package, driver, or device) simply means that backend is
+# unavailable. The broad ``except Exception`` handlers are therefore deliberate
+# best-effort probing, not swallowed bugs, so BLE001 (blind-except) and S110
+# (try-except-pass) are suppressed for this module only.
+# ruff: file-ignore[BLE001, S110] Optional GPU backends are probed by catching any failure.
+
 import sys
 import warnings
-from typing import Optional, Any, Tuple
 from enum import Enum
+from typing import Any
 
 _gpu_backend = None
 _gpu_device = None
@@ -256,7 +262,7 @@ def get_array_module():
     return np
 
 
-def to_device(arr, backend: Optional[str] = None) -> Any:
+def to_device(arr, backend: str | None = None) -> Any:
     """
     Transfer numpy array to GPU memory.
 

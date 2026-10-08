@@ -1,14 +1,20 @@
-import cv2
-import multiprocessing as mp
 import math
-import tempfile
-import subprocess
+import multiprocessing as mp
 import os
-import time
+import subprocess
 import sys
+import tempfile
+import time
 
-from core.bg_removal import _process_frame, generate_color_ranges, detect_background_color_from_video
+import cv2
+
+from core.bg_removal import (
+    _process_frame,
+    detect_background_color_from_video,
+    generate_color_ranges,
+)
 from core.video import VideoStreamWriter
+
 
 def worker(args):
     import time
@@ -40,7 +46,6 @@ def worker(args):
     t3 = time.time()
     
     frames_to_process = end_frame - start_frame
-    frames_processed = 0
     
     for _ in range(frames_to_process):
         ret, frame = cap.read()
@@ -58,8 +63,7 @@ def worker(args):
         b, g, r = cv2.split(frame)
         bgra = cv2.merge([b, g, r, alpha])
         writer.write_frame(bgra)
-        frames_processed += 1
-        
+
     t4 = time.time()
     writer.close()
     cap.release()
@@ -73,7 +77,6 @@ def parallel_remove_bg(input_path, output_path, num_threads=4):
     
     cap = cv2.VideoCapture(input_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
     cap.release()
     
     print(f"Video has {total_frames} frames.")
@@ -103,9 +106,8 @@ def parallel_remove_bg(input_path, output_path, num_threads=4):
     
     concat_file = os.path.join(temp_dir, "concat.txt")
     with open(concat_file, "w") as f:
-        for temp_file in temp_files:
-            # Escape path for FFmpeg if needed, but safe here
-            f.write(f"file '{temp_file}'\n")
+        # Paths are safe here, so no FFmpeg escaping is needed.
+        f.writelines(f"file '{temp_file}'\n" for temp_file in temp_files)
             
     # run ffmpeg to concat
     cmd = [

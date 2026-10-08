@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tests.deform_scene import GOLDEN_PATH, render_golden_frame  # noqa: E402
+from tests.deform_scene import GOLDEN_PATH, render_golden_frame
 
 
 def main() -> int:

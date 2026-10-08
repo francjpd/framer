@@ -1,11 +1,13 @@
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.utils import parse_color, parse_color_rgba
+
 
 def test_parse_color_hex():
     # Hex to BGR

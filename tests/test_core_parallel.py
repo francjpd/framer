@@ -1,15 +1,14 @@
-import pytest
-import numpy as np
-import cv2
-import multiprocessing as mp
-from unittest.mock import patch, MagicMock
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import cv2
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.parallel import process_video_parallel
+
 
 @patch("cv2.VideoCapture")
 @patch("multiprocessing.Pool")

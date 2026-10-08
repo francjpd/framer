@@ -4,12 +4,8 @@ Operations module for frame.
 Each operation is a function that takes input_path, output_path, and operation-specific args.
 """
 
-from core import get_registry, register_operation
+# Import operations so their module-level @register_operation decorators run;
+# importing this package is what makes the operations available to the CLI.
+from ops import deform, fps_boost, loop, remove_bg
 
-# Import operations to register them
-from ops import fps_boost
-from ops import remove_bg
-from ops import loop
-from ops import deform
-
-__all__ = ["fps_boost", "remove_bg", "deform"]
+__all__ = ["deform", "fps_boost", "loop", "remove_bg"]

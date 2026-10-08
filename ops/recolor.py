@@ -3,15 +3,15 @@ Recolor / Tint operation.
 Replaces a specific color (or range of colors) with a new color.
 """
 
+from typing import Any
+
 import cv2
 import numpy as np
-from typing import Dict, Any
 
-from core import register_operation
+from core import gpu_ops, register_operation
+from core.gpu import is_available
 from core.parallel import process_video_parallel
 from core.utils import parse_color
-from core.gpu import is_available
-from core import gpu_ops
 
 
 def _apply_recolor(
@@ -53,10 +53,10 @@ def recolor_video(
     target: str,
     new_color: str,
     tolerance: int = 30,
-    workers: int = None,
+    workers: int | None = None,
     progress: bool = False,
     force_cpu: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Replace a target color with a new color in the video."""
     from core.gpu import notify_gpu_usage
 

@@ -40,8 +40,9 @@ import json
 import math
 import os
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
@@ -75,7 +76,7 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def validate_rig(rig: Any) -> Dict[str, Any]:
+def validate_rig(rig: Any) -> dict[str, Any]:
     """
     Validate a rig document and return it unchanged.
 
@@ -194,11 +195,11 @@ def validate_rig(rig: Any) -> Dict[str, Any]:
     return rig
 
 
-def _assert_acyclic(bones: Sequence[Dict[str, Any]]) -> None:
+def _assert_acyclic(bones: Sequence[dict[str, Any]]) -> None:
     parents = {bone["id"]: bone.get("parent") for bone in bones}
-    for bone_id in parents:
+    for bone_id, parent in parents.items():
         seen = {bone_id}
-        current = parents[bone_id]
+        current = parent
         while current is not None:
             if current in seen:
                 raise RigError(f"cycle detected in bone hierarchy at {bone_id!r}")
@@ -206,7 +207,7 @@ def _assert_acyclic(bones: Sequence[Dict[str, Any]]) -> None:
             current = parents.get(current)
 
 
-def load_rig(path: str | os.PathLike[str]) -> Dict[str, Any]:
+def load_rig(path: str | os.PathLike[str]) -> dict[str, Any]:
     """Load and validate a rig JSON document from disk."""
     rig_path = Path(path)
     if not rig_path.exists():
@@ -221,7 +222,7 @@ def load_rig(path: str | os.PathLike[str]) -> Dict[str, Any]:
     return validate_rig(rig)
 
 
-def rig_fingerprint(rig: Dict[str, Any]) -> str:
+def rig_fingerprint(rig: dict[str, Any]) -> str:
     """Stable fingerprint of the parts of a rig that determine the weights."""
     relevant = {
         "canvas": rig.get("canvas"),
@@ -245,7 +246,7 @@ def rig_fingerprint(rig: Dict[str, Any]) -> str:
 # weights
 # ---------------------------------------------------------------------------
 
-def _bone_segments(rig: Dict[str, Any]) -> List[Tuple[float, float, float, float]]:
+def _bone_segments(rig: dict[str, Any]) -> list[tuple[float, float, float, float]]:
     segments = []
     for bone in rig["bones"]:
         head = bone["rest"]["head"]
@@ -286,9 +287,9 @@ def _falloff_power(falloff: str, default_power: float) -> float:
 
 
 def compute_dense_weights(
-    rig: Dict[str, Any],
-    width: Optional[int] = None,
-    height: Optional[int] = None,
+    rig: dict[str, Any],
+    width: int | None = None,
+    height: int | None = None,
 ) -> np.ndarray:
     """
     Compute dense per-pixel bone weights for the bind pose.
@@ -309,8 +310,8 @@ def compute_dense_weights(
     default_power = float(bind.get("power", DEFAULT_POWER))
     radius_scale = float(bind.get("radius_scale", 1.0))
 
-    weights: List[np.ndarray] = []
-    distances: List[np.ndarray] = []
+    weights: list[np.ndarray] = []
+    distances: list[np.ndarray] = []
 
     for bone, segment in zip(rig["bones"], _bone_segments(rig)):
         distance = _distance_to_segment(grid_x, grid_y, *segment)
@@ -343,10 +344,10 @@ def compute_dense_weights(
 
 
 def load_or_build_weights(
-    rig: Dict[str, Any],
-    width: Optional[int] = None,
-    height: Optional[int] = None,
-    cache_path: Optional[str | os.PathLike[str]] = None,
+    rig: dict[str, Any],
+    width: int | None = None,
+    height: int | None = None,
+    cache_path: str | os.PathLike[str] | None = None,
 ) -> np.ndarray:
     """
     Return the dense weights for ``rig``, using an ``.npz`` cache when possible.
@@ -382,7 +383,7 @@ def load_or_build_weights(
     return weights
 
 
-_WEIGHT_CACHE: Dict[Tuple[str, Optional[int], Optional[int]], np.ndarray] = {}
+_WEIGHT_CACHE: dict[tuple[str, int | None, int | None], np.ndarray] = {}
 
 
 def _write_weights_atomic(path: Path, weights: np.ndarray) -> None:
@@ -402,9 +403,9 @@ def _write_weights_atomic(path: Path, weights: np.ndarray) -> None:
 # ---------------------------------------------------------------------------
 
 def build_grid_mesh(
-    rig: Dict[str, Any],
-    cell_size: Optional[float] = None,
-) -> Tuple[np.ndarray, np.ndarray]:
+    rig: dict[str, Any],
+    cell_size: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Build the bind-pose control mesh as a regular grid over the canvas.
 
@@ -420,8 +421,8 @@ def build_grid_mesh(
         cell_size = max(8.0, min(width, height) / 8.0)
     cell_size = float(cell_size)
 
-    cols = max(2, int(math.ceil(width / cell_size)) + 1)
-    rows = max(2, int(math.ceil(height / cell_size)) + 1)
+    cols = max(2, math.ceil(width / cell_size) + 1)
+    rows = max(2, math.ceil(height / cell_size) + 1)
 
     xs = np.linspace(0.0, float(width - 1), cols, dtype=np.float32)
     ys = np.linspace(0.0, float(height - 1), rows, dtype=np.float32)
@@ -442,7 +443,7 @@ def build_grid_mesh(
 
 
 def compute_vertex_weights(
-    rig: Dict[str, Any],
+    rig: dict[str, Any],
     vertices: np.ndarray,
 ) -> np.ndarray:
     """
@@ -502,7 +503,7 @@ def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 
-def interpolate_keyframes(rig: Dict[str, Any], frame: int) -> Dict[str, Dict[str, float]]:
+def interpolate_keyframes(rig: dict[str, Any], frame: int) -> dict[str, dict[str, float]]:
     """
     Interpolate per-bone local poses at ``frame``.
 
@@ -538,7 +539,7 @@ def interpolate_keyframes(rig: Dict[str, Any], frame: int) -> Dict[str, Dict[str
     span = right["frame"] - left["frame"]
     t = 0.0 if span <= 0 else (frame - left["frame"]) / span
 
-    poses: Dict[str, Dict[str, float]] = {}
+    poses: dict[str, dict[str, float]] = {}
     for bone in rig["bones"]:
         bone_id = bone["id"]
         left_pose = {**zero, **(left.get("pose", {}).get(bone_id) or {})}
@@ -550,7 +551,7 @@ def interpolate_keyframes(rig: Dict[str, Any], frame: int) -> Dict[str, Dict[str
     return poses
 
 
-def bone_local_matrix(head: Sequence[float], pose: Dict[str, float]) -> np.ndarray:
+def bone_local_matrix(head: Sequence[float], pose: dict[str, float]) -> np.ndarray:
     """Rotation about the rest head followed by a translation, as a 3x3 matrix."""
     rot = float(pose.get("rot", 0.0))
     tx = float(pose.get("tx", 0.0))
@@ -567,10 +568,10 @@ def bone_local_matrix(head: Sequence[float], pose: Dict[str, float]) -> np.ndarr
 
 
 def evaluate_bones(
-    rig: Dict[str, Any],
+    rig: dict[str, Any],
     frame: int,
-    poses: Optional[Dict[str, Dict[str, float]]] = None,
-) -> List[np.ndarray]:
+    poses: dict[str, dict[str, float]] | None = None,
+) -> list[np.ndarray]:
     """
     World transform for every bone at ``frame`` (same order as ``rig.bones``).
 
@@ -581,9 +582,9 @@ def evaluate_bones(
         poses = interpolate_keyframes(rig, frame)
 
     bones_by_id = {bone["id"]: bone for bone in rig["bones"]}
-    world: Dict[str, np.ndarray] = {}
+    world: dict[str, np.ndarray] = {}
 
-    def resolve(bone: Dict[str, Any], stack: Tuple[str, ...]) -> np.ndarray:
+    def resolve(bone: dict[str, Any], stack: tuple[str, ...]) -> np.ndarray:
         bone_id = bone["id"]
         if bone_id in world:
             return world[bone_id]
@@ -605,7 +606,7 @@ def evaluate_bones(
     return [resolve(bone, ()) for bone in rig["bones"]]
 
 
-def _bind_poses(rig: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+def _bind_poses(rig: dict[str, Any]) -> dict[str, dict[str, float]]:
     return {bone["id"]: {"rot": 0.0, "tx": 0.0, "ty": 0.0} for bone in rig["bones"]}
 
 
@@ -617,7 +618,7 @@ def skinning_fields(
     world: Sequence[np.ndarray],
     bind: Sequence[np.ndarray],
     weights: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Weighted skinning matrix field ``A`` (H, W, 2, 2) and translation ``t`` (H, W, 2).
 
@@ -642,7 +643,7 @@ def compute_backward_map(
     matrix_field: np.ndarray,
     translation_field: np.ndarray,
     iterations: int = 5,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Solve ``F(p) = q`` for every output pixel ``q`` with a fixed-point iteration.
 
@@ -752,7 +753,7 @@ def is_image_path(path: str | os.PathLike[str]) -> bool:
 
 def load_source(
     path: str | os.PathLike[str],
-    still: Optional[bool] = None,
+    still: bool | None = None,
 ) -> np.ndarray:
     """
     Load the deformation source, honouring the still-image convention.
@@ -779,12 +780,12 @@ class DeformRenderer:
 
     def __init__(
         self,
-        rig: Dict[str, Any],
+        rig: dict[str, Any],
         source: np.ndarray,
         iterations: int = 5,
-        weights: Optional[np.ndarray] = None,
-        weights_cache: Optional[str | os.PathLike[str]] = None,
-        still: Optional[bool] = None,
+        weights: np.ndarray | None = None,
+        weights_cache: str | os.PathLike[str] | None = None,
+        still: bool | None = None,
     ):
         self.rig = validate_rig(rig)
 

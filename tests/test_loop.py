@@ -1,23 +1,21 @@
-import pytest
-import numpy as np
 import sys
 from pathlib import Path
+
+import numpy as np
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.utils import parse_color_rgba
 from ops.loop import (
-    create_pingpong_loop,
-    create_morph_loop,
-    create_periodic_loop,
-    create_hold_loop,
-    create_fade_loop,
+    analyze_best_method,
     create_blend_loop,
+    create_fade_loop,
+    create_hold_loop,
+    create_pingpong_loop,
     create_reverse_loop,
     create_speedramp_loop,
-    analyze_best_method,
 )
-from core.utils import parse_color_rgba
 
 
 def test_parse_color_rgba_transparent():

@@ -1,26 +1,23 @@
-import pytest
-import numpy as np
-import cv2
 import sys
 from pathlib import Path
+
+import numpy as np
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.bg_removal import VideoBackgroundRemover, _process_frame
 from core.color_ranges import (
-    generate_color_ranges,
-    _color_distance,
     _cluster_colors,
+    _color_distance,
     detect_background_color_from_frame_border,
+    generate_color_ranges,
 )
 from core.mask_refinement import (
-    _apply_soft_edges,
     _apply_edge_cleanup,
+    _apply_soft_edges,
 )
-from core.bg_removal import (
-    _process_frame,
-    VideoBackgroundRemover
-)
+
 
 def test_generate_color_ranges():
     base_color = [100, 150, 200]

@@ -10,7 +10,7 @@ Port worker, so the CLI and the orchestrator run the exact same code.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import cv2
 
@@ -25,7 +25,7 @@ from core.deform import (
 from core.video import VideoStreamWriter
 
 
-def _resolve_rig(rig: Any) -> Dict[str, Any]:
+def _resolve_rig(rig: Any) -> dict[str, Any]:
     if isinstance(rig, dict):
         from core.deform import validate_rig
 
@@ -36,9 +36,9 @@ def _resolve_rig(rig: Any) -> Dict[str, Any]:
 
 
 def _resolve_frame_range(
-    rig: Dict[str, Any],
-    start_frame: Optional[int],
-    end_frame: Optional[int],
+    rig: dict[str, Any],
+    start_frame: int | None,
+    end_frame: int | None,
 ) -> tuple[int, int]:
     start = int(start_frame or 0)
 
@@ -63,16 +63,16 @@ def deform_video(
     input_path: str,
     output_path: str,
     rig: Any,
-    start_frame: Optional[int] = None,
-    end_frame: Optional[int] = None,
-    fps: Optional[float] = None,
+    start_frame: int | None = None,
+    end_frame: int | None = None,
+    fps: float | None = None,
     iterations: int = 5,
-    weights: Optional[str] = None,
-    still: Optional[bool] = None,
-    radius_scale: Optional[float] = None,
+    weights: str | None = None,
+    still: bool | None = None,
+    radius_scale: float | None = None,
     progress: bool = False,
     **_: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Deform ``input_path`` over ``[start_frame, end_frame]`` and write ``output_path``.
 

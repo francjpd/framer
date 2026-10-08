@@ -2,24 +2,25 @@
 Core module for frame - video processing pipeline.
 """
 
-import tempfile
 import shutil
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Dict, Any, List, Callable, Optional
+from typing import Any
 
 
 class Pipeline:
     """Execute a pipeline of operations on video files."""
 
     def __init__(self):
-        self.operations: List[Dict[str, Any]] = []
+        self.operations: list[dict[str, Any]] = []
         self.temp_dir = None
 
-    def add_operation(self, name: str, func: Callable, args: Dict[str, Any]):
+    def add_operation(self, name: str, func: Callable, args: dict[str, Any]):
         """Add an operation to the pipeline."""
         self.operations.append({"name": name, "func": func, "args": args})
 
-    def execute(self, input_path: str, output_path: str) -> Dict[str, Any]:
+    def execute(self, input_path: str, output_path: str) -> dict[str, Any]:
         """Execute all operations in sequence."""
         self.temp_dir = Path(tempfile.mkdtemp())
 
@@ -55,14 +56,14 @@ class Pipeline:
             for tf in temp_files:
                 try:
                     Path(tf).unlink(missing_ok=True)
-                except:
+                except OSError:
                     pass
 
             # Cleanup temp directory
             if self.temp_dir and self.temp_dir.exists():
                 try:
                     shutil.rmtree(self.temp_dir)
-                except:
+                except OSError:
                     pass
 
 
@@ -70,13 +71,13 @@ class OperationRegistry:
     """Registry of available operations."""
 
     def __init__(self):
-        self._operations: Dict[str, Dict[str, Any]] = {}
+        self._operations: dict[str, dict[str, Any]] = {}
 
     def register(
         self,
         name: str,
         func: Callable,
-        args_schema: Dict[str, Any],
+        args_schema: dict[str, Any],
         description: str = "",
     ):
         """Register an operation."""
@@ -88,15 +89,15 @@ class OperationRegistry:
             "description": description,
         }
 
-    def get(self, name: str) -> Optional[Dict[str, Any]]:
+    def get(self, name: str) -> dict[str, Any] | None:
         """Get operation by name."""
         return self._operations.get(name, {})
 
-    def list_operations(self) -> Dict[str, Dict[str, Any]]:
+    def list_operations(self) -> dict[str, dict[str, Any]]:
         """List all registered operations."""
         return self._operations
 
-    def get_args_schema(self, name: str) -> Dict[str, Any]:
+    def get_args_schema(self, name: str) -> dict[str, Any]:
         """Get args schema for operation."""
         op = self._operations.get(name)
         return op["args_schema"] if op else {}

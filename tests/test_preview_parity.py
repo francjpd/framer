@@ -32,12 +32,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from core.deform import (  # noqa: E402
+from core.deform import (
     DeformRenderer,
     compute_dense_weights,
     interpolate_keyframes,
 )
-from tests.deform_scene import GOLDEN_FRAME, build_scene  # noqa: E402
+from tests.deform_scene import GOLDEN_FRAME, build_scene
 
 RUNNER = Path(__file__).parent / "preview_parity_runner.mjs"
 NODE = shutil.which("node")
@@ -76,6 +76,7 @@ def _render_preview(tmp_path: Path, rig: dict, source: np.ndarray, frame: int, i
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
+        check=False,
     )
     assert completed.returncode == 0, f"node preview failed:\n{completed.stderr}"
 
@@ -99,6 +100,7 @@ def _interpolated_poses(tmp_path: Path, rig: dict, frames: list[int]) -> dict[st
         capture_output=True,
         text=True,
         cwd=str(REPO_ROOT),
+        check=False,
     )
     assert completed.returncode == 0, f"node pose interpolation failed:\n{completed.stderr}"
 

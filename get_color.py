@@ -1,6 +1,8 @@
+import sys
+
 import cv2
 import numpy as np
-import sys
+
 
 def get_dominant_color(video_path):
     cap = cv2.VideoCapture(video_path)

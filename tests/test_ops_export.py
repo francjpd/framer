@@ -13,8 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core import get_registry  # noqa: E402
-from ops.export import export_web  # noqa: E402
+from core import get_registry
+from ops.export import export_web
 
 
 def test_export_is_registered():

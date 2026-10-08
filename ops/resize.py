@@ -4,15 +4,16 @@ Resize / scale operation using FFmpeg.
 
 import subprocess
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
 from core import register_operation
 from core.video import has_alpha_channel
 
+
 def resize_video(
     input_path: str, output_path: str, width: int = -1, height: int = -1, 
     pad: bool = False, workers: int = 1, progress: bool = False
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Resize/scale video."""
     
     if width == -1 and height == -1:

@@ -1,13 +1,12 @@
-import pytest
-import subprocess
-from unittest.mock import patch, MagicMock
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ops.resize import resize_video
+
 
 @patch("subprocess.run")
 def test_resize_video_basic(mock_run):

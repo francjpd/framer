@@ -14,7 +14,7 @@ Rename project from `bg-remover` to `framer` and add video looper feature for cr
 - [ ] Rename `bgremover.py` → `framer.py`
 - [ ] Rename `bg-remover/` directory → `framer/` (in imports)
 - [ ] Update `README.md` title and references
-- [ ] Update `requirements.txt` project name (optional)
+- [ ] Update `pyproject.toml` project name (optional)
 - [ ] Git commit with rename
 
 ---

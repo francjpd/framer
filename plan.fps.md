@@ -55,7 +55,8 @@ frame/
 │   ├── remove_bg.py    # Background removal operation
 │   └── fps_boost.py    # FPS boost operation
 ├── tests/
-└── requirements.txt
+├── pyproject.toml      # uv project metadata + Ruff config
+└── uv.lock             # locked dependency set
 ```
 
 ## Implementation Details

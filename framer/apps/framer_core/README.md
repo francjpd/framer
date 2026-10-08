@@ -32,8 +32,7 @@ FramerCore.Supervisor
 
 ```bash
 # Python operation layer (from the repository root)
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+uv sync
 
 # Elixir
 cd framer

@@ -251,14 +251,8 @@ The Elixir orchestrator drives the Python core, so set up both halves.
 **1. Python operation layer** (from the repository root):
 
 ```bash
-# uv (recommended)
-uv venv .venv
-uv pip install -r requirements.txt
-
-# or conda
-conda create -n framer python=3.10
-conda activate framer
-pip install -r requirements.txt
+# Creates .venv from the locked dependency set in uv.lock.
+uv sync
 ```
 
 **2. Elixir orchestration:**
@@ -367,8 +361,9 @@ def my_operation(input_path, output_path, param1=10):
 
 ## 📋 Requirements
 
-- Python 3.9+ and the packages in [`requirements.txt`](requirements.txt)
-  (NumPy, OpenCV, Typer, Rich, and PyTorch, which powers GPU acceleration).
+- Python 3.12+ and the locked packages in [`pyproject.toml`](pyproject.toml) /
+  [`uv.lock`](uv.lock) (NumPy, OpenCV, Typer, Rich, and PyTorch, which powers
+  GPU acceleration).
 - Elixir `~> 1.15` with a matching Erlang/OTP (see
   [`framer/.tool-versions`](framer/.tool-versions)) for the orchestration layer.
 - FFmpeg (installed and in PATH).
@@ -377,7 +372,7 @@ def my_operation(input_path, output_path, param1=10):
 
 ```bash
 # Python operation core
-.venv/bin/python -m pytest tests/
+uv run python -m pytest tests/
 
 # Elixir orchestration (includes the end-to-end Port integration test)
 cd framer

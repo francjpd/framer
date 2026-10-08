@@ -18,8 +18,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core import get_registry  # noqa: E402
-from ops.fps_boost import boost_fps  # noqa: E402
+from core import get_registry
+from ops.fps_boost import boost_fps
 
 
 def test_fps_boost_is_registered():
@@ -84,6 +84,7 @@ def test_boost_fps_actually_raises_the_frame_rate(tmp_path):
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
     numerator, _, denominator = probe.stdout.strip().partition("/")
     achieved = float(numerator) / float(denominator or 1)

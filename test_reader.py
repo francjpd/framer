@@ -1,6 +1,8 @@
 import subprocess
-import numpy as np
 import time
+
+import numpy as np
+
 
 def read_frames_ffmpeg(input_path, start_frame, num_frames, fps, width, height, has_alpha=True):
     start_time_sec = start_frame / fps

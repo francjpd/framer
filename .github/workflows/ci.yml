@@ -27,9 +27,6 @@ jobs:
       # uv-managed interpreter that has OpenCV installed, instead of silently
       # excluding the :requires_cv2 integration tests.
       FRAMER_PYTHON: ${{ github.workspace }}/.venv/bin/python
-      # CI has no GPU: install the CPU torch build rather than the CUDA/XPU
-      # payload pulled by the default index.
-      UV_TORCH_BACKEND: cpu
 
     steps:
       - uses: actions/checkout@v4
@@ -48,11 +45,14 @@ jobs:
           enable-cache: true
 
       # Creates .venv/bin/python, the interpreter the Elixir Port suite and the
-      # engine tests both use.
+      # engine tests both use. `--locked` fails if pyproject.toml and uv.lock
+      # have drifted, so CI proves the committed lock is current. The CPU-only
+      # PyTorch index is configured in pyproject.toml.
       - name: Install Python dependencies
-        run: |
-          uv venv .venv
-          uv pip install -r requirements.txt
+        run: uv sync --locked
+
+      - name: Lint Python (Ruff)
+        run: uv run ruff check .
 
       # tests/test_preview_parity.py runs lbs.mjs under Node and is otherwise
       # skipped, so the parity suite only counts if Node is on PATH.
@@ -73,5 +73,5 @@ jobs:
 
       - name: Test
         run: |
-          .venv/bin/python -m pytest tests/ -q
+          uv run python -m pytest tests/ -q
           cd framer && mix test

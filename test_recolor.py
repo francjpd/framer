@@ -1,6 +1,7 @@
+
 import cv2
-import sys
 import numpy as np
+
 
 def check(file):
     cap = cv2.VideoCapture(file)
@@ -9,7 +10,7 @@ def check(file):
         print(f"Could not read {file}")
         return
     
-    h, w, c = frame.shape
+    _h, _w, c = frame.shape
     print(f"{file} shape: {frame.shape}")
     if c == 4:
         # Check if alpha is just all 255

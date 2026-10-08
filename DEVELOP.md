@@ -4,26 +4,19 @@ This guide helps developers understand the codebase architecture and start contr
 
 ## Quick Start
 
-You can set up this project using either `uv` or `conda`.
+The Python layer is a uv-managed application: `pyproject.toml` declares the
+dependencies, `uv.lock` pins them, and `uv sync` materializes `.venv` - the
+interpreter at `.venv/bin/python` that the Elixir Port Worker looks for.
 
-**Option 1: uv (Recommended)**
 ```bash
-# Clone and set up the Python environment (interpreter at .venv/bin/python)
-uv venv .venv
-uv pip install -r requirements.txt
+# Clone and set up the Python environment
+uv sync
 
 # Run tests
-.venv/bin/python -m pytest tests/
+uv run python -m pytest tests/
 
 # Try the CLI
-.venv/bin/python cli.py input.mp4 output.webm -c "0,255,0" -p
-```
-
-**Option 2: Conda**
-```bash
-conda create -n framer python=3.10
-conda activate framer
-pip install -r requirements.txt
+uv run python cli.py input.mp4 output.webm -c "0,255,0" -p
 ```
 
 ## Architecture Overview
@@ -97,7 +90,7 @@ Input Video (MP4)
 ### 1. CLI (Most Common)
 
 ```bash
-python cli.py input.mp4 output.webm -c "0,255,0" -t 30 -p
+uv run python cli.py input.mp4 output.webm -c "0,255,0" -t 30 -p
 ```
 
 ### 2. Python Library
@@ -171,10 +164,10 @@ Originally, the codebase wrote intermediate PNGs to disk and encoded them using 
 
 ```bash
 # Run all tests
-pytest tests/
+uv run pytest tests/
 
 # Run specific test file
-pytest tests/test_bgremover.py -v
+uv run pytest tests/test_bgremover.py -v
 ```
 
 ## Adding New Features

@@ -1,14 +1,14 @@
-import pytest
-import numpy as np
-import subprocess
-from unittest.mock import patch, MagicMock
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import numpy as np
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.video import VideoStreamReader, VideoStreamWriter, get_output_format
+
 
 def test_get_output_format():
     assert get_output_format("test.webm") == "webm"
@@ -29,7 +29,7 @@ def test_video_stream_reader_init(mock_popen):
         assert reader.channels == 3
         
     # Verify ffmpeg command
-    args, kwargs = mock_popen.call_args
+    args, _kwargs = mock_popen.call_args
     cmd = args[0]
     assert "ffmpeg" in cmd
     assert "input.mp4" in cmd
@@ -61,7 +61,7 @@ def test_video_stream_writer_init(mock_popen):
         assert writer.format == "webm"
         
     # Verify ffmpeg command
-    args, kwargs = mock_popen.call_args
+    args, _kwargs = mock_popen.call_args
     cmd = args[0]
     assert "ffmpeg" in cmd
     assert "output.webm" in cmd

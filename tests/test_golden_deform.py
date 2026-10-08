@@ -23,8 +23,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.deform import DeformRenderer  # noqa: E402
-from tests.deform_scene import (  # noqa: E402
+from core.deform import DeformRenderer
+from tests.deform_scene import (
     GOLDEN_PATH,
     build_scene,
     render_golden_frame,
