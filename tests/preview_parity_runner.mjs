@@ -9,18 +9,32 @@
 
 import fs from "node:fs";
 
-import { computeDenseWeights, renderFrameRGBA } from "../framer/apps/framer_web/assets/js/lbs.mjs";
+import {
+  computeDenseWeights,
+  interpolatePoses,
+  renderFrameRGBA,
+} from "../framer/apps/framer_web/assets/js/lbs.mjs";
 
 const spec = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const source = new Uint8Array(fs.readFileSync(spec.source));
 
-const output = renderFrameRGBA(source, spec.width, spec.height, spec.rig, spec.frame, {
-  iterations: spec.iterations,
-});
+if (spec.source) {
+  const source = new Uint8Array(fs.readFileSync(spec.source));
 
-fs.writeFileSync(spec.output, Buffer.from(output));
+  const output = renderFrameRGBA(source, spec.width, spec.height, spec.rig, spec.frame, {
+    iterations: spec.iterations,
+  });
+
+  fs.writeFileSync(spec.output, Buffer.from(output));
+}
 
 if (spec.weights_output) {
   const weights = computeDenseWeights(spec.rig, spec.width, spec.height);
   fs.writeFileSync(spec.weights_output, Buffer.from(weights.buffer));
+}
+
+if (spec.poses_output) {
+  const frames = spec.poses_frames || [];
+  const poses = {};
+  for (const frame of frames) poses[String(frame)] = interpolatePoses(spec.rig, frame);
+  fs.writeFileSync(spec.poses_output, JSON.stringify(poses));
 }

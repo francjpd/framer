@@ -32,7 +32,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from core.deform import DeformRenderer, compute_dense_weights  # noqa: E402
+from core.deform import (  # noqa: E402
+    DeformRenderer,
+    compute_dense_weights,
+    interpolate_keyframes,
+)
 from tests.deform_scene import GOLDEN_FRAME, build_scene  # noqa: E402
 
 RUNNER = Path(__file__).parent / "preview_parity_runner.mjs"
@@ -82,6 +86,25 @@ def _render_preview(tmp_path: Path, rig: dict, source: np.ndarray, frame: int, i
     return rgba, weights
 
 
+def _interpolated_poses(tmp_path: Path, rig: dict, frames: list[int]) -> dict[str, dict]:
+    """Return the `lbs.mjs` interpolated poses (keyed by frame string) via Node."""
+    poses_path = tmp_path / "preview_poses.json"
+
+    spec = {"rig": rig, "poses_output": str(poses_path), "poses_frames": list(frames)}
+    spec_path = tmp_path / "spec_poses.json"
+    spec_path.write_text(json.dumps(spec))
+
+    completed = subprocess.run(
+        [NODE, str(RUNNER), str(spec_path)],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+    )
+    assert completed.returncode == 0, f"node pose interpolation failed:\n{completed.stderr}"
+
+    return json.loads(poses_path.read_text())
+
+
 def test_preview_weights_match_the_engine(tmp_path):
     rig, source = build_scene()
 
@@ -129,3 +152,19 @@ def test_preview_actually_deforms_and_preserves_alpha(tmp_path):
     assert not np.array_equal(bind, posed)
     assert posed[:, :, 3].max() == 255
     assert posed[:, :, 3].min() == 0
+
+
+def test_interpolated_poses_match_the_engine(tmp_path):
+    rig, _source = build_scene()
+
+    frames = [0, 2, 4, GOLDEN_FRAME, 20]
+    js_poses = _interpolated_poses(tmp_path, rig, frames)
+
+    for frame in frames:
+        expected = interpolate_keyframes(rig, frame)
+        actual = js_poses[str(frame)]
+
+        assert set(actual) == set(expected)
+        for bone_id, pose in expected.items():
+            for channel in ("rot", "tx", "ty"):
+                assert float(actual[bone_id][channel]) == pytest.approx(pose[channel], abs=1e-6)

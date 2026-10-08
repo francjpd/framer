@@ -272,6 +272,25 @@ defmodule FramerWeb.RigTest do
       rig = Rig.record_keyframe(rig, 5, %{a => %{rot: 0.4}})
       assert Rig.delete_keyframe(rig, 5)["keyframes"] == []
     end
+
+    test "interpolate_pose clamps, interpolates and defaults missing bones" do
+      {rig, a} = Rig.add_bone(Rig.new(100, 100), [50, 90], [50, 10])
+      rig =
+        rig
+        |> Rig.record_keyframe(0, %{a => %{rot: 0.0, tx: 0.0, ty: 0.0}})
+        |> Rig.record_keyframe(10, %{a => %{rot: 1.0, tx: 10.0, ty: 20.0}})
+
+      assert Rig.interpolate_pose(rig, a, -5) == %{"rot" => 0.0, "tx" => 0.0, "ty" => 0.0}
+      assert Rig.interpolate_pose(rig, a, 20) == %{"rot" => 1.0, "tx" => 10.0, "ty" => 20.0}
+
+      mid = Rig.interpolate_pose(rig, a, 5)
+      assert_in_delta mid["rot"], 0.5, 1.0e-9
+      assert_in_delta mid["tx"], 5.0, 1.0e-9
+      assert_in_delta mid["ty"], 10.0, 1.0e-9
+
+      empty = Rig.new(100, 100) |> Map.put("bones", [%{"id" => "b0"}])
+      assert Rig.interpolate_pose(empty, "b0", 0) == %{"rot" => 0.0, "tx" => 0.0, "ty" => 0.0}
+    end
   end
 
   describe "geometry helpers" do

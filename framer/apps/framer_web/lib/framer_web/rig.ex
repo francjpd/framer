@@ -650,6 +650,63 @@ defmodule FramerWeb.Rig do
     Map.put(rig, "keyframes", Enum.reject(keyframes(rig), &(&1["frame"] == frame)))
   end
 
+  @doc """
+  The interpolated local pose (`%{"rot" => _, "tx" => _, "ty" => _}`) for a single
+  bone at `frame`.
+
+  Mirrors `core.deform.interpolate_keyframes/2` (and `lbs.mjs` `interpolatePoses`):
+  linear interpolation between the surrounding keyframes, clamped before the first
+  and after the last, with a missing bone defaulting to the identity pose.
+  """
+  def interpolate_pose(rig, bone_id, frame) do
+    case Enum.sort_by(keyframes(rig), & &1["frame"]) do
+      [] ->
+        %{"rot" => 0.0, "tx" => 0.0, "ty" => 0.0}
+
+      keyframes ->
+        first = hd(keyframes)
+        last = List.last(keyframes)
+
+        cond do
+          frame <= first["frame"] ->
+            bone_pose(first, bone_id)
+
+          frame >= last["frame"] ->
+            bone_pose(last, bone_id)
+
+          true ->
+            {left, right} = bracket(keyframes, frame)
+            span = right["frame"] - left["frame"]
+            t = if span <= 0, do: 0.0, else: (frame - left["frame"]) / span
+            lp = bone_pose(left, bone_id)
+            rp = bone_pose(right, bone_id)
+
+            %{
+              "rot" => lp["rot"] + (rp["rot"] - lp["rot"]) * t,
+              "tx" => lp["tx"] + (rp["tx"] - lp["tx"]) * t,
+              "ty" => lp["ty"] + (rp["ty"] - lp["ty"]) * t
+            }
+        end
+    end
+  end
+
+  defp bracket(keyframes, frame) do
+    keyframes
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.find(fn [left, right] -> left["frame"] <= frame and frame <= right["frame"] end)
+    |> then(fn [left, right] -> {left, right} end)
+  end
+
+  defp bone_pose(keyframe, bone_id) do
+    raw = (keyframe["pose"] || %{})[bone_id] || %{}
+
+    %{
+      "rot" => to_number(raw["rot"]),
+      "tx" => to_number(raw["tx"]),
+      "ty" => to_number(raw["ty"])
+    }
+  end
+
   # ---------------------------------------------------------------------------
   # geometry helpers
   # ---------------------------------------------------------------------------
