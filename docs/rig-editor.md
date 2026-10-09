@@ -49,7 +49,10 @@ path, a frame range and JSON options - exactly the existing Port contract.
     on pointer-up and persisted.
   * **Pose tool** - drag a joint to rotate about the bone's rest head, drag the
     body to translate. The pose stays local until **Record keyframe** writes it
-    into `keyframes[playhead]`.
+    into `keyframes[playhead]`. Recording with nothing posed does not mint an
+    empty keyframe - it shows a status hint instead, and stepping the playhead
+    with an un-recorded pose hints "Pose not recorded" rather than discarding it
+    silently. The pose-pending badge stays as the persistent indicator.
 * **Timeline (bottom).** A frame ruler, a transport group (jump to
   start/end, step, play/pause, loop), record/delete keyframe, the playhead
   readout, and `Render frame` / `Export`. The track has two keyframe rows - one

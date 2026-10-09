@@ -162,6 +162,7 @@ defmodule FramerWebWeb.EditorLive do
   def handle_event("step_frame", %{"delta" => delta}, socket) do
     {:noreply,
      socket
+     |> hint_unrecorded_pose()
      |> assign(
        playhead: clamp_frame(socket, socket.assigns.playhead + to_int(delta)),
        pending_pose: %{}
@@ -245,6 +246,7 @@ defmodule FramerWebWeb.EditorLive do
   def handle_event("set_playhead", %{"frame" => frame}, socket) do
     {:noreply,
      socket
+     |> hint_unrecorded_pose()
      |> assign(playhead: clamp_frame(socket, frame), pending_pose: %{})
      |> push_clear_overrides()}
   end
@@ -256,12 +258,17 @@ defmodule FramerWebWeb.EditorLive do
   def handle_event("record_keyframe", _params, socket) do
     frame = socket.assigns.playhead
 
-    socket =
-      mutate(socket, fn rig -> Rig.record_keyframe(rig, frame, socket.assigns.pending_pose) end,
-        status: "Recorded keyframe at frame #{frame}"
-      )
+    if map_size(socket.assigns.pending_pose) == 0 do
+      {:noreply,
+       assign(socket, :status, "Nothing to record - pose a bone with the Pose tool, then record (K)")}
+    else
+      socket =
+        mutate(socket, fn rig -> Rig.record_keyframe(rig, frame, socket.assigns.pending_pose) end,
+          status: "Recorded keyframe at frame #{frame}"
+        )
 
-    {:noreply, socket |> assign(:pending_pose, %{}) |> push_clear_overrides()}
+      {:noreply, socket |> assign(:pending_pose, %{}) |> push_clear_overrides()}
+    end
   end
 
   def handle_event("delete_keyframe", _params, socket) do
@@ -279,6 +286,7 @@ defmodule FramerWebWeb.EditorLive do
     else
       {:noreply,
        socket
+       |> hint_unrecorded_pose()
        |> assign(playing: true, pending_pose: %{})
        |> push_clear_overrides()
        |> schedule_tick()}
@@ -1217,6 +1225,13 @@ defmodule FramerWebWeb.EditorLive do
     |> assign(:rendered, nil)
     |> push_rig()
   end
+
+  defp hint_unrecorded_pose(%{assigns: %{pending_pose: pose}} = socket)
+       when map_size(pose) > 0 do
+    assign(socket, :status, "Pose not recorded")
+  end
+
+  defp hint_unrecorded_pose(socket), do: socket
 
   defp mutate(socket, fun, opts \\ []) do
     socket = maybe_push_undo(socket, opts)
