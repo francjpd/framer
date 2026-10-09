@@ -106,6 +106,38 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert keyframe["pose"]["b0"]["tx"] == 12.0
   end
 
+  test "recording with nothing posed shows a hint and persists no keyframe", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    html = render_hook(view, "record_keyframe", %{})
+
+    assert html =~ "Nothing to record"
+
+    {:ok, loaded} = RigStore.load(id)
+    assert FramerWeb.Rig.keyframes(loaded) == []
+  end
+
+  test "stepping away from an unrecorded pose hints instead of discarding it silently", %{
+    conn: conn
+  } do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    render_hook(view, "pose_changed", %{
+      "pose" => %{"b0" => %{"rot" => 0.5, "tx" => 12, "ty" => -3}}
+    })
+
+    render_hook(view, "step_frame", %{"delta" => 1})
+
+    assert render(view) =~ "Pose not recorded"
+
+    {:ok, loaded} = RigStore.load(id)
+    assert FramerWeb.Rig.keyframes(loaded) == []
+  end
+
   test "a failed merge shows an error and offers no Download link", %{conn: conn} do
     {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
     id = rig["id"]
