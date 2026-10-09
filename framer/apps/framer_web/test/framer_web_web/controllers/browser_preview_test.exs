@@ -447,6 +447,116 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     assert run_scenario(spec, root) == :ok
   end
 
+  test "pose tool: the move handle poses instead of mutating rest geometry", %{root: root} do
+    shots = Path.join(root, "handle_pose")
+    File.mkdir_p!(shots)
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps: [
+        %{name: "open the editor shell", open: "/editor"},
+        %{name: "shell renders", waitForSelector: "#editor-shell"},
+        %{
+          name: "create a rig",
+          fetch: %{
+            url: "/api/rigs",
+            method: "POST",
+            headers: %{"content-type" => "application/json"},
+            body: %{
+              "name" => "browser-handle-pose",
+              "filename" => "subject.png",
+              "source_base64" => Base.encode64(Fixtures.png_with_subject(600, 600, @subject))
+            }
+          },
+          saveAs: "create"
+        },
+        %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+        %{name: "viewport renders", waitForSelector: "#viewport"},
+        %{
+          name: "source image drawn",
+          waitForFunction:
+            "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+        },
+        %{name: "let the preview settle", sleep: 1_000},
+        %{
+          name: "create a bone from image (300,300) to (420,300)",
+          dragImage: %{from: [300, 300], to: [420, 300], imgW: 600, imgH: 600, settleMs: 300}
+        },
+        %{name: "bone reaches the editor hierarchy", waitForSelector: "button[phx-click=\"select_bone\"]"},
+        %{
+          name: "switch to the pose tool",
+          click: %{selector: "button[phx-click=\"select_tool\"][phx-value-tool=\"pose\"]"}
+        },
+        %{name: "let the tool switch settle", sleep: 300},
+        %{
+          name: "drag the move handle by (30,0) image px",
+          dragHandle: %{handle: "move", head: [300, 300], tail: [420, 300], imgW: 600, delta: [30, 0], settleMs: 300}
+        },
+        %{
+          name: "a pose becomes pending (not a structural edit)",
+          waitForFunction: "() => document.body.textContent.includes('pose pending')"
+        },
+        bone_joint_error(0, "head", 300, 300),
+        bone_joint_error(0, "tail", 420, 300)
+      ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+  end
+
+  test "bones tool: the rotate handle drags the tail without a start jump", %{root: root} do
+    shots = Path.join(root, "handle_rotate")
+    File.mkdir_p!(shots)
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps: [
+        %{name: "open the editor shell", open: "/editor"},
+        %{name: "shell renders", waitForSelector: "#editor-shell"},
+        %{
+          name: "create a rig",
+          fetch: %{
+            url: "/api/rigs",
+            method: "POST",
+            headers: %{"content-type" => "application/json"},
+            body: %{
+              "name" => "browser-handle-rotate",
+              "filename" => "subject.png",
+              "source_base64" => Base.encode64(Fixtures.png_with_subject(600, 600, @subject))
+            }
+          },
+          saveAs: "create"
+        },
+        %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+        %{name: "viewport renders", waitForSelector: "#viewport"},
+        %{
+          name: "source image drawn",
+          waitForFunction:
+            "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+        },
+        %{name: "let the preview settle", sleep: 1_000},
+        %{
+          name: "create a bone from image (300,300) to (420,300)",
+          dragImage: %{from: [300, 300], to: [420, 300], imgW: 600, imgH: 600, settleMs: 300}
+        },
+        %{name: "bone reaches the editor hierarchy", waitForSelector: "button[phx-click=\"select_bone\"]"},
+        %{
+          name: "nudge the rotate handle by (6,0) image px",
+          dragHandle: %{handle: "rotate", head: [300, 300], tail: [420, 300], imgW: 600, delta: [6, 0], settleMs: 300}
+        },
+        # The tail must move by the nudge (6px), not snap to the handle that sits
+        # HANDLE_OFFSET/scale beyond it: assert it landed at rest + delta.
+        bone_joint_error(0, "tail", 426, 300)
+      ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+  end
+
   # --- scenario runner -----------------------------------------------------
 
   # The steps every slice-4 scenario shares: create a rig with the red-subject
@@ -506,6 +616,18 @@ defmodule FramerWebWeb.BrowserPreviewTest do
       name: "bone #{bone_index} head lands at (#{x}, #{y})",
       evaluate:
         "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; const head = rig.bones[#{bone_index}].rest.head; return Math.hypot(head[0] - #{x}, head[1] - #{y}); }",
+      expect: %{lt: 2}
+    }
+  end
+
+  # Asserts a bone's head or tail ("head" | "tail") landed at the expected image
+  # point. Reads the rig back over the API and returns the euclidean distance;
+  # the runner compares it against a 2px tolerance.
+  defp bone_joint_error(bone_index, which, x, y) do
+    %{
+      name: "bone #{bone_index} #{which} lands at (#{x}, #{y})",
+      evaluate:
+        "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; const joint = rig.bones[#{bone_index}].rest.#{which}; return Math.hypot(joint[0] - #{x}, joint[1] - #{y}); }",
       expect: %{lt: 2}
     }
   end

@@ -837,13 +837,24 @@ export const LbsPreview = {
     if (handle) {
       this.selectBone(handle.id);
       if (handle.type === "move") {
-        this.drag = {
-          type: "translate",
-          id: handle.id,
-          start: point,
-          head: parsePoint(this.rig.bones[handle.index].rest.head),
-          tail: parsePoint(this.rig.bones[handle.index].rest.tail),
-        };
+        if (this.tool === "pose") {
+          this.drag = {
+            type: "pose",
+            id: handle.id,
+            start: point,
+            initial: poseFor(this.poses(), handle.id),
+            mode: "translate",
+            head: lastWorldPoint(world, handle.index, this.rig, "head"),
+          };
+        } else {
+          this.drag = {
+            type: "translate",
+            id: handle.id,
+            start: point,
+            head: parsePoint(this.rig.bones[handle.index].rest.head),
+            tail: parsePoint(this.rig.bones[handle.index].rest.tail),
+          };
+        }
       } else if (this.tool === "pose") {
         this.drag = {
           type: "pose",
@@ -854,12 +865,14 @@ export const LbsPreview = {
           head: lastWorldPoint(world, handle.index, this.rig, "head"),
         };
       } else {
+        const tail = parsePoint(this.rig.bones[handle.index].rest.tail);
         this.drag = {
           type: "move",
           id: handle.id,
           which: "tail",
           head: parsePoint(this.rig.bones[handle.index].rest.head),
-          tail: parsePoint(this.rig.bones[handle.index].rest.tail),
+          tail,
+          grab: [point[0] - tail[0], point[1] - tail[1]],
         };
       }
       this.setCursor("grabbing");
@@ -914,8 +927,9 @@ export const LbsPreview = {
     if (this.drag.type === "create") {
       this.drag.tail = snap(point, this.drag.head, event.shiftKey);
     } else if (this.drag.type === "move") {
-      if (this.drag.which === "head") this.drag.head = point;
-      else this.drag.tail = point;
+      const grab = this.drag.grab || [0, 0];
+      if (this.drag.which === "head") this.drag.head = [point[0] - grab[0], point[1] - grab[1]];
+      else this.drag.tail = [point[0] - grab[0], point[1] - grab[1]];
     } else if (this.drag.type === "translate") {
       this.drag.offset = [point[0] - this.drag.start[0], point[1] - this.drag.start[1]];
     } else if (this.drag.type === "pose") {
