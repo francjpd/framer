@@ -69,6 +69,28 @@ defmodule FramerWeb.RigStoreTest do
     assert File.exists?(root)
   end
 
+  test "traversal-shaped ids cannot escape the store root and repeat deletes are harmless", %{
+    root: root
+  } do
+    sibling = Path.join(Path.dirname(root), "framer_escape_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(sibling)
+    on_exit(fn -> File.rm_rf(sibling) end)
+
+    sentinel = Path.join(sibling, "keep.txt")
+    File.write!(sentinel, "untouched")
+
+    traversal = "../#{Path.basename(sibling)}"
+    assert {:error, :invalid_id} = RigStore.delete(traversal)
+    assert File.exists?(sentinel)
+    assert File.exists?(root)
+
+    {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+    id = rig["id"]
+    assert {:ok, _} = RigStore.delete(id)
+    assert {:ok, _} = RigStore.delete(id)
+    refute File.exists?(RigStore.project_dir(id))
+  end
+
   test "output and result paths" do
     rig = Fixtures.simple_rig(16)
     {:ok, saved} = RigStore.save(rig)
