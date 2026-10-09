@@ -185,6 +185,7 @@ install the harness and build the assets first:
 
 ```bash
 (cd tests/browser && npm ci)
-(cd framer && MIX_ENV=dev mix assets.setup assets.build)
+(cd framer && MIX_ENV=dev mix assets.setup)
+(cd framer && MIX_ENV=dev mix assets.build)
 cd framer && mix test
 ```

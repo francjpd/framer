@@ -94,7 +94,9 @@ jobs:
       # dev-only deps, hence the dev env.
       - name: Build editor assets
         working-directory: framer
-        run: MIX_ENV=dev mix assets.setup assets.build
+        run: |
+          MIX_ENV=dev mix assets.setup
+          MIX_ENV=dev mix assets.build
 
       - name: Test
         run: |
