@@ -145,6 +145,37 @@ def test_preview_bind_pose_is_the_identity(tmp_path):
     assert np.array_equal(preview, source)
 
 
+def test_zero_bone_rig_previews_the_source_unchanged(tmp_path):
+    # A freshly loaded still has no bones yet, and the preview must show the
+    # source unchanged: skinningFields must fall back to the identity field
+    # instead of a zero matrix that collapses the whole image onto one pixel.
+    # No engine comparison here on purpose: the engine rejects empty bones by
+    # design, so the preview alone must reproduce the source exactly.
+    size = 32
+    source = np.zeros((size, size, 4), dtype=np.uint8)
+
+    # Transparent border with an opaque subject block (same shape as
+    # `Fixtures.png_with_subject` in the Elixir suite).
+    x0, x1 = size // 4, size - size // 4
+    y0, y1 = size // 4, size - size // 4
+    source[y0:y1, x0:x1] = [200, 40, 40, 255]
+
+    rig = {
+        "schema": "framer.rig",
+        "version": 1,
+        "canvas": {"width": size, "height": size},
+        "bones": [],
+        "bind": {"power": 2.0, "radius_scale": 1.0},
+        "keyframes": [],
+        "duration": {"fps": 8, "frames": 1},
+    }
+
+    preview, _ = _render_preview(tmp_path, rig, source, 0, 5)
+
+    assert np.array_equal(preview, source)
+    assert preview[:, :, 3].max() == 255
+
+
 def test_preview_actually_deforms_and_preserves_alpha(tmp_path):
     rig, source = build_scene()
 
