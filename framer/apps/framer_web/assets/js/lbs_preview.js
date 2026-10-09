@@ -92,6 +92,11 @@ export const LbsPreview = {
     this.renderKey = null;
     this.gl = null;
     this.glProgram = null;
+    this.glFailed = false;
+    this.lostCanvas = null;
+
+    this.onContextLost = (event) => this.handleContextLost(event);
+    this.onContextRestored = () => this.handleContextRestored();
 
     this.buildDom();
     this.bindPointer();
@@ -109,6 +114,15 @@ export const LbsPreview = {
       this.draw();
     };
     window.addEventListener("resize", this.onResize);
+
+    // Entering or leaving fullscreen resizes the viewport without a window
+    // resize on every platform: re-fit both canvases at the current
+    // devicePixelRatio, exactly like the resize handler does.
+    this.onFullscreenChange = () => {
+      this.measureView();
+      this.draw();
+    };
+    document.addEventListener("fullscreenchange", this.onFullscreenChange);
   },
 
   updated() {
@@ -132,6 +146,8 @@ export const LbsPreview = {
 
   destroyed() {
     window.removeEventListener("resize", this.onResize);
+    document.removeEventListener("fullscreenchange", this.onFullscreenChange);
+    this.unbindCanvasEvents();
     this.el.removeEventListener("pointerdown", this.onPointerDown);
     window.removeEventListener("pointermove", this.onPointerMove);
     window.removeEventListener("pointerup", this.onPointerUp);
@@ -152,6 +168,7 @@ export const LbsPreview = {
 
     this.surface.append(this.canvas, this.overlay, this.status);
     this.ctx = this.overlay.getContext("2d");
+    this.bindCanvasEvents();
   },
 
   bindPointer() {
@@ -467,6 +484,67 @@ export const LbsPreview = {
     this.glSourceTex = null;
     this.glMapTex = null;
     this.glProgram = null;
+  },
+
+  // --- WebGL context loss / restore ----------------------------------------
+  //
+  // The image canvas yields either a WebGL2 context (the fast path) or a 2D
+  // context (the fallback), never both. A lost WebGL context is terminal for
+  // the canvas that held it: its drawing buffer is gone and the element
+  // refuses getContext("2d") forever, so the preview swaps in a fresh canvas
+  // and keeps the image visible through the 2D fallback. The listeners are
+  // bound by the same helper everywhere a canvas is created, so a recreated
+  // canvas keeps its context-loss handling.
+
+  bindCanvasEvents() {
+    this.canvas.addEventListener("webglcontextlost", this.onContextLost);
+    this.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+  },
+
+  unbindCanvasEvents() {
+    for (const canvas of [this.canvas, this.lostCanvas]) {
+      if (!canvas) continue;
+      canvas.removeEventListener("webglcontextlost", this.onContextLost);
+      canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
+    }
+    this.lostCanvas = null;
+  },
+
+  // Replace the image canvas with a clean element. The replaced canvas is
+  // kept on the hook rather than discarded: its lost WebGL context may still
+  // be restored later and must be able to deliver `webglcontextrestored` so
+  // the WebGL2 path can come back.
+  replaceCanvas() {
+    const old = this.canvas;
+    const fresh = document.createElement("canvas");
+    fresh.className = "framer-viewport-canvas";
+    old.replaceWith(fresh);
+    this.canvas = fresh;
+    this.ctx2d = null;
+    this.lostCanvas = old;
+    this.bindCanvasEvents();
+  },
+
+  handleContextLost(event) {
+    event.preventDefault();
+    this.releaseGl();
+    this.glFailed = true;
+    this.replaceCanvas();
+    this.invalidate();
+    this.draw();
+  },
+
+  handleContextRestored() {
+    // The restored event fires on the canvas that lost its context (kept as
+    // lostCanvas). Its replacement already carries a 2D context, which can
+    // never yield WebGL2, so swap in another clean canvas and clear the
+    // failed flag: ensureViewportCanvas then re-initialises the WebGL2 path.
+    this.unbindCanvasEvents();
+    this.glFailed = false;
+    this.replaceCanvas();
+    this.lostCanvas = null;
+    this.invalidate();
+    this.draw();
   },
 
   drawOverlay() {

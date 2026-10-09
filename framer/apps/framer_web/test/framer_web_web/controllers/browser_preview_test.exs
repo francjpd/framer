@@ -206,7 +206,227 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     assert bone_pixels(one_bone, w1, h1) >= @bone_min
   end
 
+  test "resize regression: bone overlay and subject survive 1280 -> 1600 -> 2000", %{
+    root: root
+  } do
+    shots = Path.join(root, "resize")
+    File.mkdir_p!(shots)
+
+    w1280 = Path.join(shots, "w1280.png")
+    w1600 = Path.join(shots, "w1600.png")
+    w2000 = Path.join(shots, "w2000.png")
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        rig_with_bone_steps("browser-resize") ++
+          [
+            %{name: "screenshot at 1280px", screenshot: %{path: w1280, selector: "#viewport"}},
+            %{name: "resize the viewport to 1600px", resize: %{width: 1600, height: 1000}},
+            %{name: "let the preview re-fit", sleep: 500},
+            %{name: "screenshot at 1600px", screenshot: %{path: w1600, selector: "#viewport"}},
+            %{name: "resize the viewport to 2000px", resize: %{width: 2000, height: 1200}},
+            %{name: "let the preview re-fit", sleep: 500},
+            %{name: "screenshot at 2000px", screenshot: %{path: w2000, selector: "#viewport"}}
+          ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+
+    %{width: w1, height: h1} = assert_png!(w1280)
+    %{width: w2, height: h2} = assert_png!(w1600)
+    %{width: w3, height: h3} = assert_png!(w2000)
+
+    # The audit's demanded regression test for the unconfirmed "bones
+    # disappear on resize" report. It stays unconfirmed: the test asserts
+    # presence and growth (bone pixels non-decreasing, image present after
+    # every resize), not exact counts, so it stays DPR-independent.
+    b1 = bone_pixels(w1280, w1, h1)
+    b2 = bone_pixels(w1600, w2, h2)
+    b3 = bone_pixels(w2000, w3, h3)
+
+    assert b1 >= @bone_min
+    assert b2 >= b1
+    assert b3 >= b2
+
+    assert subject_pixels(w1280, w1, h1) >= @subject_min
+    assert subject_pixels(w1600, w2, h2) >= @subject_min
+    assert subject_pixels(w2000, w3, h3) >= @subject_min
+  end
+
+  test "context loss: the image survives via the 2D fallback and after restore", %{
+    root: root
+  } do
+    shots = Path.join(root, "ctxloss")
+    File.mkdir_p!(shots)
+
+    fallback = Path.join(shots, "fallback.png")
+    restored = Path.join(shots, "restored.png")
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        rig_with_bone_steps("browser-ctxloss") ++
+          [
+            %{
+              name: "lose the viewport canvas's WebGL context",
+              evaluate:
+                "() => { const c = document.querySelector('#viewport canvas'); window.__firstCanvas = c; const gl = c.getContext('webgl2'); window.__lostExt = gl.getExtension('WEBGL_lose_context'); window.__lostExt.loseContext(); return true; }",
+              expect: %{eq: true}
+            },
+            %{
+              name: "the hook swaps in a clean canvas",
+              waitForFunction:
+                "() => document.querySelector('#viewport canvas') !== window.__firstCanvas"
+            },
+            %{name: "let the 2D fallback settle", sleep: 500},
+            %{
+              name: "the replacement canvas carries a 2D context, not WebGL2",
+              evaluate:
+                "() => document.querySelector('#viewport canvas').getContext('webgl2') === null",
+              expect: %{eq: true}
+            },
+            %{
+              name: "screenshot the 2D fallback",
+              screenshot: %{path: fallback, selector: "#viewport"}
+            },
+            %{
+              name: "restore the lost context",
+              evaluate:
+                "() => { window.__fallbackCanvas = document.querySelector('#viewport canvas'); window.__lostExt.restoreContext(); return true; }",
+              expect: %{eq: true}
+            },
+            %{
+              name: "the hook re-initialises WebGL2 on a fresh canvas",
+              waitForFunction:
+                "() => document.querySelector('#viewport canvas') !== window.__fallbackCanvas"
+            },
+            %{name: "let the WebGL2 redraw settle", sleep: 500},
+            %{
+              name: "the fresh canvas holds a live WebGL2 context",
+              evaluate:
+                "() => { const gl = document.querySelector('#viewport canvas').getContext('webgl2'); return !!gl && !gl.isContextLost(); }",
+              expect: %{eq: true}
+            },
+            %{
+              name: "zero page errors",
+              evaluate: "() => window.__framerErrors.length",
+              expect: %{eq: 0}
+            },
+            %{
+              name: "screenshot the restored WebGL2 preview",
+              screenshot: %{path: restored, selector: "#viewport"}
+            }
+          ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+
+    # The context-loss contract: the image stays visible through the 2D
+    # fallback after loseContext(), and again after restoreContext()
+    # re-initialises the WebGL2 path; the bone overlay (a separate 2D canvas)
+    # is present throughout.
+    assert %{width: wf, height: hf} = assert_png!(fallback)
+    assert subject_pixels(fallback, wf, hf) >= @subject_min
+    assert bone_pixels(fallback, wf, hf) >= @bone_min
+
+    assert %{width: wr, height: hr} = assert_png!(restored)
+    assert subject_pixels(restored, wr, hr) >= @subject_min
+    assert bone_pixels(restored, wr, hr) >= @bone_min
+  end
+
+  test "fullscreen re-measure: the canvas re-fits the container and bones remain", %{
+    root: root
+  } do
+    shots = Path.join(root, "fullscreen")
+    File.mkdir_p!(shots)
+
+    after_shot = Path.join(shots, "after_fullscreenchange.png")
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        rig_with_bone_steps("browser-fullscreen") ++
+          [
+            %{
+              name: "fire fullscreenchange and verify the canvas re-fits the container",
+              evaluate:
+                "async () => { document.dispatchEvent(new Event('fullscreenchange')); await new Promise(r => setTimeout(r, 100)); const c = document.querySelector('#viewport canvas'); const o = document.querySelector('#viewport .framer-viewport-overlay'); const s = document.querySelector('#viewport-surface'); const cr = c.getBoundingClientRect(); const or = o.getBoundingClientRect(); const sr = s.getBoundingClientRect(); const fits = cr.width > 0 && cr.height > 0 && cr.left >= sr.left - 1 && cr.top >= sr.top - 1 && cr.right <= sr.right + 1 && cr.bottom <= sr.bottom + 1; const centered = Math.abs((cr.left - sr.left) - (sr.right - cr.right)) <= 1 && Math.abs((cr.top - sr.top) - (sr.bottom - cr.bottom)) <= 1; const aligned = Math.abs(cr.left - or.left) < 1 && Math.abs(cr.top - or.top) < 1 && Math.abs(cr.width - or.width) < 1 && Math.abs(cr.height - or.height) < 1; return fits && centered && aligned; }",
+              expect: %{eq: true}
+            },
+            %{name: "let the re-fit settle", sleep: 300},
+            %{
+              name: "screenshot after fullscreenchange",
+              screenshot: %{path: after_shot, selector: "#viewport"}
+            }
+          ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+
+    # Headless Chromium makes a real requestFullscreen best-effort, so the
+    # reliable assertion is the re-measure effect: the canvas still fits the
+    # container (centered and aligned with the overlay) and the bone overlay
+    # pixels remain present after the event.
+    assert %{width: w, height: h} = assert_png!(after_shot)
+    assert subject_pixels(after_shot, w, h) >= @subject_min
+    assert bone_pixels(after_shot, w, h) >= @bone_min
+  end
+
   # --- scenario runner -----------------------------------------------------
+
+  # The steps every slice-4 scenario shares: create a rig with the red-subject
+  # still, open it, wait for the preview, and drag one bone into the viewport
+  # (bone_created selects it, so its amber overlay stroke is countable).
+  defp rig_with_bone_steps(name) do
+    [
+      %{name: "open the editor shell", open: "/editor"},
+      %{name: "shell renders", waitForSelector: "#editor-shell"},
+      %{
+        name: "create a rig over the API",
+        fetch: %{
+          url: "/api/rigs",
+          method: "POST",
+          headers: %{"content-type" => "application/json"},
+          body: %{
+            "name" => name,
+            "filename" => "subject.png",
+            "source_base64" => Base.encode64(Fixtures.png_with_subject(64, 64, @subject))
+          }
+        },
+        saveAs: "create"
+      },
+      %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+      %{name: "viewport renders", waitForSelector: "#viewport"},
+      %{
+        name: "source image drawn",
+        waitForFunction:
+          "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+      },
+      %{name: "let the preview settle", sleep: 1_000},
+      %{
+        name: "draw one bone (drag across the viewport)",
+        drag: %{
+          selector: "#viewport",
+          from: %{fx: 0.5, fy: 0.35},
+          to: %{fx: 0.5, fy: 0.65},
+          steps: 8,
+          settleMs: 300
+        }
+      },
+      %{
+        name: "bone reaches the editor hierarchy",
+        waitForSelector: "button[phx-click=\"select_bone\"]"
+      },
+      %{name: "let the bone overlay draw", sleep: 500}
+    ]
+  end
 
   defp run_scenario(spec, root) do
     spec_path = Path.join(root, "scenario_#{System.unique_integer([:positive])}.json")
