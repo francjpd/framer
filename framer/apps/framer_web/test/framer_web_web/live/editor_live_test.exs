@@ -217,4 +217,128 @@ defmodule FramerWebWeb.EditorLiveTest do
     render_hook(view, "set_falloff", %{"id" => "b0", "falloff" => "bogus"})
     assert render(view) =~ "Unknown falloff"
   end
+
+  # --- workflow step guide ---------------------------------------------------
+
+  test "fresh editor shows the five-step guide with step 1 current", %{conn: conn} do
+    {:ok, view, html} = live(conn, ~p"/editor")
+
+    assert has_element?(view, "#step-guide")
+    assert has_element?(view, "#step-guide [data-step='1'][data-current='true']")
+    assert has_element?(view, "#step-guide [data-step='1'][data-done='false']")
+
+    for step <- 2..5 do
+      assert has_element?(view, "#step-guide [data-step='#{step}']")
+      refute has_element?(view, "#step-guide [data-step='#{step}'][data-current='true']")
+      refute has_element?(view, "#step-guide [data-step='#{step}'][data-done='true']")
+    end
+
+    assert html =~ "Load a still image"
+    refute has_element?(view, "#viewport-hint")
+  end
+
+  test "a zero-bone rig shows step 2 current with the draw-a-bone hint", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.zero_bone_rig(64))
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    assert has_element?(view, "#step-guide [data-step='2'][data-current='true']")
+    assert has_element?(view, "#step-guide [data-step='1'][data-done='true']")
+    refute has_element?(view, "#step-guide [data-step='2'][data-done='true']")
+    refute has_element?(view, "#step-guide [data-step='3'][data-done='true']")
+
+    assert has_element?(view, "#viewport-hint", "draw a bone")
+  end
+
+  test "bones that were never bound show step 3 with the Auto-bind hint", %{conn: conn} do
+    rig = FramerWeb.Rig.new(64, 64, name: "Unbound fixture")
+    {rig, _id} = FramerWeb.Rig.add_bone(rig, [16, 32], [48, 32])
+    {:ok, saved} = RigStore.save(rig)
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{saved["id"]}")
+
+    assert has_element?(view, "#step-guide [data-step='3'][data-current='true']")
+    assert has_element?(view, "#step-guide [data-step='2'][data-done='true']")
+    refute has_element?(view, "#step-guide [data-step='3'][data-done='true']")
+
+    assert has_element?(view, "#viewport-hint", "Auto-bind mesh")
+  end
+
+  test "a bound rig without keyframes shows step 4 with the pose-and-record hint", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    assert has_element?(view, "#step-guide [data-step='4'][data-current='true']")
+    assert has_element?(view, "#step-guide [data-step='3'][data-done='true']")
+    refute has_element?(view, "#step-guide [data-step='4'][data-done='true']")
+
+    assert has_element?(view, "#viewport-hint", "Record keyframe")
+  end
+
+  test "posing and recording a keyframe advances the guide to step 5", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    render_hook(view, "pose_changed", %{
+      "pose" => %{"b0" => %{"rot" => 0.4, "tx" => 2, "ty" => 0}}
+    })
+
+    render_hook(view, "record_keyframe", %{})
+
+    assert has_element?(view, "#step-guide [data-step='5'][data-current='true']")
+
+    for step <- 1..4 do
+      assert has_element?(view, "#step-guide [data-step='#{step}'][data-done='true']")
+    end
+
+    refute has_element?(view, "#step-guide [data-step='5'][data-done='true']")
+    refute has_element?(view, "#viewport-hint")
+  end
+
+  test "re-binding after posing keeps keyframes, stays on step 5, and gates nothing", %{
+    conn: conn
+  } do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    render_hook(view, "pose_changed", %{
+      "pose" => %{"b0" => %{"rot" => 0.7, "tx" => 5, "ty" => 1}}
+    })
+
+    render_hook(view, "record_keyframe", %{})
+    assert has_element?(view, "#step-guide [data-step='5'][data-current='true']")
+
+    render_click(view, "auto_bind")
+
+    {:ok, rebound} = RigStore.load(id)
+    assert length(FramerWeb.Rig.keyframes(rebound)) == 1
+
+    assert has_element?(view, "#step-guide [data-step='5'][data-current='true']")
+
+    for step <- 1..4 do
+      assert has_element?(view, "#step-guide [data-step='#{step}'][data-done='true']")
+    end
+
+    for selector <- [
+          "#palette button[phx-click='select_tool'][phx-value-tool='bones']",
+          "#palette button[phx-click='select_tool'][phx-value-tool='pose']",
+          "#palette button[phx-click='auto_bind']",
+          "button[phx-click='record_keyframe']",
+          "button[phx-click='render_frame']",
+          "form[phx-submit='export'] button[type='submit']"
+        ] do
+      assert has_element?(view, selector)
+      refute has_element?(view, selector <> "[disabled]")
+    end
+  end
+
+  test "deleting the last bone walks the guide back to step 2", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    render_hook(view, "bone_deleted", %{"id" => "b0"})
+
+    assert has_element?(view, "#step-guide [data-step='2'][data-current='true']")
+    assert has_element?(view, "#step-guide [data-step='1'][data-done='true']")
+    refute has_element?(view, "#step-guide [data-step='2'][data-done='true']")
+  end
 end

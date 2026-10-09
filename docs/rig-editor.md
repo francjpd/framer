@@ -66,6 +66,18 @@ command/catalog/MCP surface (already scoped as a separate future task) and a
 multi-track NLE timeline with trim algebra. Per-property (rot/tx/ty) keying
 would also need a rig-schema change, so the slice still keys the whole pose.
 
+## Workflow guide
+
+The left palette opens with a five-step workflow guide (`#step-guide`): upload
+the still, create the skeleton, bind the mesh, pose and record keyframes,
+render/export. It is a pure render of the rig's real state - the current step
+is derived from the loaded document (no rig -> step 1, no bones -> step 2,
+unbound mesh -> step 3, no keyframes -> step 4, otherwise step 5), completed
+steps carry a check mark and the current step is highlighted. While a rig is
+loaded the viewport overlays a `pointer-events-none` hint naming the next
+step. The guide never gates the editor: every tool and control stays enabled
+in any order, and re-binding after posing keeps the recorded keyframes.
+
 ## Preview vs final render
 
 One fixed-point linear-blend-skinning implementation, two consumers:
