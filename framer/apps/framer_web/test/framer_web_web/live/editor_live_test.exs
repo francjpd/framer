@@ -20,6 +20,12 @@ defmodule FramerWebWeb.EditorLiveTest do
     :ok
   end
 
+  # Save a rig under a distinct display name so list-based tests can target it.
+  defp saved_rig(name, size \\ 32) do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(size) |> Map.put("name", name))
+    rig
+  end
+
   test "renders the three-pane shell and the upload control", %{conn: conn} do
     {:ok, view, html} = live(conn, ~p"/editor")
 
@@ -398,5 +404,64 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert has_element?(view, "#step-guide [data-step='2'][data-current='true']")
     assert has_element?(view, "#step-guide [data-step='1'][data-done='true']")
     refute has_element?(view, "#step-guide [data-step='2'][data-done='true']")
+  end
+
+  # --- removing saved rigs ---------------------------------------------------
+
+  test "removing a rig deletes its directory and drops it from the list", %{conn: conn} do
+    kept = saved_rig("Keep me")
+    doomed = saved_rig("Remove me")
+    {:ok, view, _html} = live(conn, ~p"/editor")
+
+    assert has_element?(view, "button[phx-value-id='#{kept["id"]}']")
+    assert has_element?(view, "button[phx-value-id='#{doomed["id"]}']")
+
+    # The remove control only reveals an inline confirm; it deletes nothing yet.
+    render_click(view, "request_delete_project", %{"id" => doomed["id"]})
+
+    assert has_element?(
+             view,
+             "button[phx-click='delete_project'][phx-value-id='#{doomed["id"]}']"
+           )
+
+    assert File.exists?(RigStore.project_dir(doomed["id"]))
+
+    render_click(view, "delete_project", %{"id" => doomed["id"]})
+
+    refute File.exists?(RigStore.project_dir(doomed["id"]))
+    assert RigStore.load(doomed["id"]) == {:error, :enoent}
+    refute has_element?(view, "button[phx-value-id='#{doomed["id"]}']")
+    assert has_element?(view, "button[phx-value-id='#{kept["id"]}']")
+    assert render(view) =~ "Removed Remove me"
+  end
+
+  test "cancelling the remove confirm deletes nothing", %{conn: conn} do
+    rig = saved_rig("Keep me")
+    {:ok, view, _html} = live(conn, ~p"/editor")
+
+    render_click(view, "request_delete_project", %{"id" => rig["id"]})
+    render_click(view, "cancel_delete_project", %{})
+
+    refute has_element?(view, "button[phx-click='cancel_delete_project']")
+    assert File.exists?(RigStore.project_dir(rig["id"]))
+    assert {:ok, _loaded} = RigStore.load(rig["id"])
+    assert has_element?(view, "button[phx-value-id='#{rig["id"]}']")
+  end
+
+  test "removing the open rig returns the editor to its empty state", %{conn: conn} do
+    rig = saved_rig("Open me")
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    assert has_element?(view, "#viewport")
+
+    render_click(view, "request_delete_project", %{"id" => id})
+    render_click(view, "delete_project", %{"id" => id})
+
+    refute File.exists?(RigStore.project_dir(id))
+    refute has_element?(view, "#viewport")
+    assert has_element?(view, "#palette")
+    assert render(view) =~ "Load a still image to start rigging."
+    refute has_element?(view, "button[phx-value-id='#{id}']")
   end
 end

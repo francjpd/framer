@@ -135,7 +135,11 @@ defmodule FramerWeb.RigStore do
     end
   end
 
-  @doc "Delete a project directory."
+  @doc """
+  Delete a project's directory - source still, `rig.json` and any exported
+  result. Succeeds when the directory is already missing, so a repeat delete is
+  harmless.
+  """
   def delete(id) do
     with :ok <- validate_id(id), do: File.rm_rf(project_dir(id))
   end
