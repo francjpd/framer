@@ -35,7 +35,7 @@ end
 # browser harness and builds the assets, so the suite runs there.
 chromium_available? =
   try do
-    chromium = System.get_env("FRAMER_CHROMIUM") || "/usr/bin/chromium"
+    chromium = System.get_env("FRAMER_CHROMIUM") || System.find_executable("chromium")
     assets = Path.expand("../priv/static/assets", __DIR__)
 
     # --version doubles as a real-binary check: Ubuntu 24.04's apt

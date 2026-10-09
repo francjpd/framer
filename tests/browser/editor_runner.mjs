@@ -69,7 +69,22 @@ try {
   process.exit(2);
 }
 
-const executablePath = process.env.FRAMER_CHROMIUM || "/usr/bin/chromium";
+function findExecutable(name) {
+  const dirs = (process.env.PATH || "").split(path.delimiter);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // keep searching the next PATH entry
+    }
+  }
+  return null;
+}
+
+const executablePath =
+  process.env.FRAMER_CHROMIUM || findExecutable("chromium") || "/usr/bin/chromium";
 if (!fs.existsSync(executablePath)) {
   console.error(
     `chromium not found at ${executablePath} — install Chromium or set FRAMER_CHROMIUM to its path`
