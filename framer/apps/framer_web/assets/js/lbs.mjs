@@ -324,6 +324,17 @@ export function skinningFields(weights, world, count, w, h) {
   const matrices = world.map((m) => [m[0], m[1], m[3], m[4]]);
   const translations = world.map((m) => [m[2], m[5]]);
 
+  if (count === 0) {
+    // A rig with no bones is the bind pose: identity field, zero translation.
+    // Without this, the zero A field collapses every map entry onto one pixel
+    // and a freshly loaded still previews blank until the first bone is drawn.
+    for (let i = 0; i < plane; i++) {
+      A[i * 4] = 1;
+      A[i * 4 + 3] = 1;
+    }
+    return { A, T };
+  }
+
   for (let i = 0; i < plane; i++) {
     let a00 = 0;
     let a01 = 0;
