@@ -89,8 +89,11 @@ One fixed-point linear-blend-skinning implementation, two consumers:
   `assets/js/lbs.mjs` (`computeDenseWeights`, `evaluateBones`,
   `computeBackwardMap`, `remapBilinear`) - the same math as `core/deform.py`.
   A WebGL2 fragment shader resamples the backward map; when WebGL2 is
-  unavailable the hook falls back to a 2D canvas. The preview runs at a proxy
-  resolution and is deliberately labelled a proxy. A rig with no bones yet
+  unavailable - or its context is lost - the hook falls back to a 2D canvas
+  (swapping in a fresh element, then re-initialising WebGL2 when the context
+  is restored), and it re-measures on both window resize and fullscreen
+  change. The preview runs at a proxy resolution and is deliberately labelled
+  a proxy. A rig with no bones yet
   (a freshly loaded still) previews the source unchanged: `skinningFields`
   falls back to the identity field, whereas the engine rejects an empty bone
   list outright.
@@ -194,7 +197,9 @@ The browser proof suite (`browser_preview_test.exs`, tagged
 `:requires_chromium`) drives the real Chromium through
 `tests/browser/editor_runner.mjs` (playwright-core, no browser download) and
 asserts preview pixels on saved `#viewport` screenshots - the browser-level
-regression for the slice-1 blank-preview defect. It excludes itself when
+regressions for the slice-1 blank-preview defect and, since slice 4, for
+viewport resize, WebGL context loss/recovery and fullscreen re-measure. It
+excludes itself when
 Chromium, Node or the built editor assets are missing, so to run it locally,
 install the harness and build the assets first:
 
