@@ -42,13 +42,21 @@ path, a frame range and JSON options - exactly the existing Port contract.
 * **Centre viewport.** A `phx-hook="LbsPreview"` element with a small toolbar:
   **Mesh** (toggle the wireframe) and **Labels** (toggle bone names), plus a
   `proxy preview` badge. It renders the source still, the control mesh and the
-  bones, and handles all pointer interaction locally:
+  bones, and handles all pointer interaction locally. The selected bone also
+  carries two call-to-action handles: a **move** disc beside its midpoint
+  (translate) and a **rotate** ring just beyond its tail (rotate about the
+  head), so posing no longer needs a precise grab of a thin joint. The cursor
+  reflects what is under the pointer - a grab cursor over a handle or the bone
+  body, a select cursor over a joint, and a crosshair (Bones) or default (Pose)
+  cursor over empty canvas:
   * **Bones tool** - drag empty canvas to create a bone (`head → tail`); drag a
     joint to move it; drag the body to translate it; dropping near another
-    bone's tip parents to it (chains). Structural edits are pushed to LiveView
+    bone's tip parents to it (chains). The move handle translates the bone and
+    the rotate handle moves its tail. Structural edits are pushed to LiveView
     on pointer-up and persisted.
   * **Pose tool** - drag a joint to rotate about the bone's rest head, drag the
-    body to translate. The pose stays local until **Record keyframe** writes it
+    body to translate. The move handle translates and the rotate handle rotates
+    the pending pose. The pose stays local until **Record keyframe** writes it
     into `keyframes[playhead]`. Recording with nothing posed does not mint an
     empty keyframe - it shows a status hint instead, and stepping the playhead
     with an un-recorded pose hints "Pose not recorded" rather than discarding it
@@ -201,8 +209,11 @@ The browser proof suite (`browser_preview_test.exs`, tagged
 `tests/browser/editor_runner.mjs` (playwright-core, no browser download) and
 asserts preview pixels on saved `#viewport` screenshots - the browser-level
 regressions for the slice-1 blank-preview defect and, since slice 4, for
-viewport resize, WebGL context loss/recovery and fullscreen re-measure. It
-excludes itself when
+viewport resize, WebGL context loss/recovery and fullscreen re-measure. It also
+covers click precision (a bone landing where clicked at non-1 DPR and after a
+resize) and the call-to-action handles (the move handle posing rather than
+mutating rest geometry, the rotate handle dragging the tail without a start
+jump). It excludes itself when
 Chromium, Node or the built editor assets are missing, so to run it locally,
 install the harness and build the assets first:
 
