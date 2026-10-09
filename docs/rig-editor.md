@@ -174,3 +174,17 @@ The editor end-to-end path (`framer_web/test/.../rig_e2e_test.exs`) uploads a
 still, binds a rig, renders a frame and exports a video through the JSON
 surface, then decodes the merged WebM and asserts the deformation on pixels -
 the same shape as the engine's `port_integration_test.exs`.
+
+The browser proof suite (`browser_preview_test.exs`, tagged
+`:requires_chromium`) drives the real Chromium through
+`tests/browser/editor_runner.mjs` (playwright-core, no browser download) and
+asserts preview pixels on saved `#viewport` screenshots - the browser-level
+regression for the slice-1 blank-preview defect. It excludes itself when
+Chromium, Node or the built editor assets are missing, so to run it locally,
+install the harness and build the assets first:
+
+```bash
+(cd tests/browser && npm ci)
+(cd framer && MIX_ENV=dev mix assets.setup assets.build)
+cd framer && mix test
+```
