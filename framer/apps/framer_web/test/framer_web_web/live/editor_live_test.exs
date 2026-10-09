@@ -86,6 +86,32 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert length(FramerWeb.Rig.bones(after_delete)) == 1
   end
 
+  test "the move handle translates a bone (bone_translated)", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    # The move handle's drag path pushes bone_translated with a delta.
+    render_hook(view, "bone_translated", %{"id" => "b0", "dx" => 5, "dy" => -3})
+
+    {:ok, loaded} = RigStore.load(id)
+    assert FramerWeb.Rig.bone(loaded, "b0")["rest"]["head"] == [37.0, 29.0]
+    assert FramerWeb.Rig.bone(loaded, "b0")["rest"]["tail"] == [37.0, 13.0]
+  end
+
+  test "the rotate handle moves the tail in the bones tool (bone_moved)", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    # The rotate handle's bones-tool drag path pushes bone_moved with a new tail.
+    render_hook(view, "bone_moved", %{"id" => "b0", "head" => [32, 32], "tail" => [48, 8]})
+
+    {:ok, loaded} = RigStore.load(id)
+    assert FramerWeb.Rig.bone(loaded, "b0")["rest"]["head"] == [32.0, 32.0]
+    assert FramerWeb.Rig.bone(loaded, "b0")["rest"]["tail"] == [48.0, 8.0]
+  end
+
   test "recording a pose as a keyframe persists it", %{conn: conn} do
     {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
     id = rig["id"]

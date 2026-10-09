@@ -21,6 +21,7 @@
 // {
 //   "baseUrl": "http://127.0.0.1:4002",
 //   "viewport": {"width": 1280, "height": 900},     // optional browser window
+//   "deviceScaleFactor": 1,                          // optional DPR (HiDPI)
 //   "stepTimeoutMs": 30000,                          // optional per-wait timeout
 //   "failureScreenshot": "/abs/path.png",            // optional, on failure
 //   "steps": [
@@ -41,6 +42,10 @@
 //        "selector": "#viewport",
 //        "from": {"fx": 0.5, "fy": 0.35},          // fraction of the box, or
 //        "to":   {"x": 640, "y": 500},             // absolute page coords
+//        "steps": 8, "settleMs": 300}},
+//     {"name": "...", "dragImage": {                               // image coords
+//        "from": [100, 50], "to": [140, 70],          // [ix, iy] in the image
+//        "imgW": 200, "imgH": 100,                     // image dimensions
 //        "steps": 8, "settleMs": 300}},
 //     {"name": "...", "resize": {"width": 1600, "height": 1000}},
 //     {"name": "...", "screenshot": {"path": "/abs/out.png", "selector": "#viewport"}}
@@ -107,6 +112,7 @@ const browser = await chromium
 
 const context = await browser.newContext({
   viewport: spec.viewport || { width: 1280, height: 900 },
+  deviceScaleFactor: spec.deviceScaleFactor || 1,
 });
 
 // Record page-side errors (exceptions, unhandled rejections, console.error
@@ -268,6 +274,36 @@ async function runStep(step, index, total) {
       await page.mouse.move(
         from.x + ((to.x - from.x) * i) / steps,
         from.y + ((to.y - from.y) * i) / steps
+      );
+    }
+    await page.mouse.up();
+    if (drag.settleMs) await page.waitForTimeout(drag.settleMs);
+  } else if (step.dragImage) {
+    // Drag between two *image* coordinates (not page/fraction coordinates).
+    // The step computes the viewport's letterbox mapping in-page so a scenario
+    // can click a known image point and assert the bone lands exactly there -
+    // the click-precision regression the offset report demands.
+    const drag = step.dragImage;
+    const selector = drag.selector || "#viewport";
+    const pts = await page.evaluate(
+      ({ selector, from, to, imgW, imgH }) => {
+        const el = document.querySelector(selector);
+        const r = el.getBoundingClientRect();
+        const scale = Math.min(r.width / imgW, r.height / imgH);
+        const offsetX = (r.width - imgW * scale) / 2;
+        const offsetY = (r.height - imgH * scale) / 2;
+        const toClient = ([ix, iy]) => [r.left + offsetX + ix * scale, r.top + offsetY + iy * scale];
+        return { from: toClient(from), to: toClient(to) };
+      },
+      { selector, from: drag.from, to: drag.to, imgW: drag.imgW, imgH: drag.imgH }
+    );
+    const steps = drag.steps || 8;
+    await page.mouse.move(pts.from[0], pts.from[1]);
+    await page.mouse.down();
+    for (let i = 1; i <= steps; i++) {
+      await page.mouse.move(
+        pts.from[0] + ((pts.to[0] - pts.from[0]) * i) / steps,
+        pts.from[1] + ((pts.to[1] - pts.from[1]) * i) / steps
       );
     }
     await page.mouse.up();

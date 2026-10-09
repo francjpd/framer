@@ -25,6 +25,8 @@ import {
 const PROXY_MAX = 512;
 const HIT_RADIUS = 9; // display pixels
 const SNAP_RADIANS = Math.PI / 12;
+const HANDLE_RADIUS = 7; // display pixels: call-to-action handle radius
+const HANDLE_OFFSET = 16; // display pixels: handle standoff from the bone
 
 function parsePoint(value) {
   if (!Array.isArray(value)) return [0, 0];
@@ -101,6 +103,7 @@ export const LbsPreview = {
     this.buildDom();
     this.bindPointer();
     this.loadSource();
+    this.setCursor(this.tool === "bones" ? "crosshair" : "default");
 
     this.handleEvent("rig", ({ rig }) => this.setRig(rig));
     this.handleEvent("clear_overrides", () => {
@@ -214,6 +217,15 @@ export const LbsPreview = {
   setStatus(message) {
     this.status.textContent = message || "";
     this.status.style.display = message ? "block" : "none";
+  },
+
+  // Set the pointer cursor across the viewport and its canvases. The overlay
+  // is pointer-events:none and the image canvas sits above the viewport, so
+  // both must follow the hook's chosen cursor for the affordance to show.
+  setCursor(cursor) {
+    this.el.style.cursor = cursor;
+    if (this.canvas) this.canvas.style.cursor = cursor;
+    if (this.overlay) this.overlay.style.cursor = cursor;
   },
 
   invalidate() {
@@ -562,6 +574,7 @@ export const LbsPreview = {
 
     if (this.meshVisible) this.drawMesh(world);
     this.drawBones(world);
+    this.drawHandles(world);
     this.drawDrag();
   },
 
@@ -653,6 +666,43 @@ export const LbsPreview = {
     ctx.restore();
   },
 
+  drawHandles(world) {
+    const centers = this.handleCenters(world);
+    if (!centers) return;
+
+    const move = this.project(centers.move);
+    const rotate = this.project(centers.rotate);
+    const radius = HANDLE_RADIUS;
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.lineWidth = 1.5;
+    ctx.fillStyle = "#fbbf24";
+    ctx.strokeStyle = "#f59e0b";
+
+    // Move handle: a filled disc with a cross - drag to translate the bone.
+    ctx.beginPath();
+    ctx.arc(move[0], move[1], radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(move[0] - radius * 0.5, move[1]);
+    ctx.lineTo(move[0] + radius * 0.5, move[1]);
+    ctx.moveTo(move[0], move[1] - radius * 0.5);
+    ctx.lineTo(move[0], move[1] + radius * 0.5);
+    ctx.stroke();
+
+    // Rotate handle: a ring - drag to rotate the bone around its head.
+    ctx.beginPath();
+    ctx.arc(rotate[0], rotate[1], radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(rotate[0], rotate[1], 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  },
+
   drawDrag() {
     if (!this.drag || this.drag.type !== "create") return;
     const ctx = this.ctx;
@@ -700,12 +750,123 @@ export const LbsPreview = {
     return best;
   },
 
+  // Image-coordinate centres of the two call-to-action handles on the selected
+  // bone: a move handle beside the midpoint and a rotate handle just beyond the
+  // tail. They are affordances only - dragging them drives the existing
+  // translate / rotate / move-tail drag paths, so posing no longer needs a
+  // precise grab of a thin joint.
+  handleCenters(world) {
+    if (!this.rig || !this.selected) return null;
+    const index = this.rig.bones.findIndex((bone) => bone.id === this.selected);
+    if (index < 0) return null;
+
+    const bone = this.rig.bones[index];
+    const head = applyMatrix(world[index], parsePoint(bone.rest.head));
+    const tail = applyMatrix(world[index], parsePoint(bone.rest.tail));
+    const dx = tail[0] - head[0];
+    const dy = tail[1] - head[1];
+    const length = Math.hypot(dx, dy) || 1;
+    const ux = dx / length;
+    const uy = dy / length;
+    const offset = HANDLE_OFFSET / this.view.scale;
+    const midX = (head[0] + tail[0]) / 2;
+    const midY = (head[1] + tail[1]) / 2;
+
+    return {
+      index,
+      move: [midX - uy * offset, midY + ux * offset],
+      rotate: [tail[0] + ux * offset, tail[1] + uy * offset],
+    };
+  },
+
+  handleHit(point, world) {
+    const centers = this.handleCenters(world);
+    if (!centers) return null;
+
+    const threshold = (HANDLE_RADIUS + 4) / this.view.scale;
+    const [x, y] = point;
+
+    if (Math.hypot(x - centers.move[0], y - centers.move[1]) <= threshold) {
+      return { type: "move", id: this.selected, index: centers.index };
+    }
+    if (Math.hypot(x - centers.rotate[0], y - centers.rotate[1]) <= threshold) {
+      return { type: "rotate", id: this.selected, index: centers.index };
+    }
+    return null;
+  },
+
+  // Reflect what is under the cursor: a grab cursor over a handle or the bone
+  // body (both drag to translate/rotate), a select cursor over a joint, and a
+  // crosshair / default cursor over empty canvas depending on the tool.
+  updateHover(event) {
+    if (!this.rig || !this.view) return;
+
+    const rect = this.el.getBoundingClientRect();
+    const inside =
+      event.clientX >= rect.left &&
+      event.clientX <= rect.right &&
+      event.clientY >= rect.top &&
+      event.clientY <= rect.bottom;
+    if (!inside) return;
+
+    const point = this.toImage(event);
+    const world = evaluateBones(this.rig, this.frame, this.poses());
+
+    if (this.handleHit(point, world)) {
+      this.setCursor("grab");
+      return;
+    }
+
+    const hit = this.hitTest(point, world);
+    if (hit) {
+      this.setCursor(hit.kind === "body" ? "grab" : "pointer");
+      return;
+    }
+
+    this.setCursor(this.tool === "bones" ? "crosshair" : "default");
+  },
+
   pointerDown(event) {
     if (event.button !== 0 || !this.rig || !this.view) return;
     event.preventDefault();
 
     const point = this.toImage(event);
     const world = evaluateBones(this.rig, this.frame, this.poses());
+
+    const handle = this.handleHit(point, world);
+    if (handle) {
+      this.selectBone(handle.id);
+      if (handle.type === "move") {
+        this.drag = {
+          type: "translate",
+          id: handle.id,
+          start: point,
+          head: parsePoint(this.rig.bones[handle.index].rest.head),
+          tail: parsePoint(this.rig.bones[handle.index].rest.tail),
+        };
+      } else if (this.tool === "pose") {
+        this.drag = {
+          type: "pose",
+          id: handle.id,
+          start: point,
+          initial: poseFor(this.poses(), handle.id),
+          mode: "rotate",
+          head: lastWorldPoint(world, handle.index, this.rig, "head"),
+        };
+      } else {
+        this.drag = {
+          type: "move",
+          id: handle.id,
+          which: "tail",
+          head: parsePoint(this.rig.bones[handle.index].rest.head),
+          tail: parsePoint(this.rig.bones[handle.index].rest.tail),
+        };
+      }
+      this.setCursor("grabbing");
+      this.draw();
+      return;
+    }
+
     const hit = this.hitTest(point, world);
 
     if (this.tool === "pose") {
@@ -719,6 +880,7 @@ export const LbsPreview = {
           mode: hit.kind === "body" ? "translate" : "rotate",
           head: lastWorldPoint(world, hit.index, this.rig, "head"),
         };
+        this.setCursor("grabbing");
       }
       return;
     }
@@ -738,11 +900,15 @@ export const LbsPreview = {
       this.drag = { type: "create", head: point, tail: point, parent };
     }
 
+    this.setCursor("grabbing");
     this.draw();
   },
 
   pointerMove(event) {
-    if (!this.drag) return;
+    if (!this.drag) {
+      this.updateHover(event);
+      return;
+    }
     const point = this.toImage(event);
 
     if (this.drag.type === "create") {
@@ -783,6 +949,7 @@ export const LbsPreview = {
     if (!this.drag) return;
     const drag = this.drag;
     this.drag = null;
+    this.setCursor(this.tool === "bones" ? "crosshair" : "default");
 
     if (drag.type === "create") {
       if (Math.hypot(drag.tail[0] - drag.head[0], drag.tail[1] - drag.head[1]) < 2) {

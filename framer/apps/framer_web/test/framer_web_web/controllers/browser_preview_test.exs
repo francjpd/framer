@@ -379,6 +379,74 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     assert bone_pixels(after_shot, w, h) >= @bone_min
   end
 
+  test "click precision: a bone lands where clicked at non-1 DPR and after a fullscreen resize",
+       %{root: root} do
+    shots = Path.join(root, "precision")
+    File.mkdir_p!(shots)
+
+    # A non-square subject exercises the letterboxing the captain's report says
+    # the offset depends on; deviceScaleFactor 2 exercises HiDPI. The two
+    # dragImage steps click known image points and the evaluate steps assert the
+    # created bone lands within tolerance - at DPR 2 and again after a resize
+    # (the fullscreen re-measure path, which is what "it moves with fullscreen"
+    # exercised).
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      deviceScaleFactor: 2,
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps: [
+        %{name: "open the editor shell", open: "/editor"},
+        %{name: "shell renders", waitForSelector: "#editor-shell"},
+        %{
+          name: "create a non-square rig",
+          fetch: %{
+            url: "/api/rigs",
+            method: "POST",
+            headers: %{"content-type" => "application/json"},
+            body: %{
+              "name" => "browser-precision",
+              "filename" => "subject.png",
+              "source_base64" => Base.encode64(Fixtures.png_with_subject(200, 100, @subject))
+            }
+          },
+          saveAs: "create"
+        },
+        %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+        %{name: "viewport renders", waitForSelector: "#viewport"},
+        %{
+          name: "source image drawn",
+          waitForFunction:
+            "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+        },
+        %{name: "let the preview settle", sleep: 1_000},
+        %{
+          name: "create a bone from image (100,50) to (140,70)",
+          dragImage: %{from: [100, 50], to: [140, 70], imgW: 200, imgH: 100, settleMs: 300}
+        },
+        %{
+          name: "bone reaches the editor hierarchy",
+          waitForSelector: "button[phx-click=\"select_bone\"]"
+        },
+        bone_head_error(0, 100, 50),
+        %{name: "resize to fullscreen-like dimensions", resize: %{width: 1600, height: 1000}},
+        %{name: "let the preview re-fit", sleep: 500},
+        %{
+          name: "create a second bone from image (40,80) to (80,80)",
+          dragImage: %{from: [40, 80], to: [80, 80], imgW: 200, imgH: 100, settleMs: 300}
+        },
+        %{
+          name: "second bone reaches the editor hierarchy",
+          waitForFunction:
+            "() => document.querySelectorAll('button[phx-click=\"select_bone\"]').length >= 2"
+        },
+        bone_head_error(1, 40, 80)
+      ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+  end
+
   # --- scenario runner -----------------------------------------------------
 
   # The steps every slice-4 scenario shares: create a rig with the red-subject
@@ -426,6 +494,20 @@ defmodule FramerWebWeb.BrowserPreviewTest do
       },
       %{name: "let the bone overlay draw", sleep: 500}
     ]
+  end
+
+  # Asserts a bone's head landed at the clicked image point. Reads the rig back
+  # over the API (the store the editor persists through) and returns the
+  # euclidean distance to the expected point; the runner compares it against a
+  # 2px tolerance, tight enough to catch the stale-view offset the captain
+  # reported but generous enough to ignore sub-pixel mouse rounding.
+  defp bone_head_error(bone_index, x, y) do
+    %{
+      name: "bone #{bone_index} head lands at (#{x}, #{y})",
+      evaluate:
+        "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; const head = rig.bones[#{bone_index}].rest.head; return Math.hypot(head[0] - #{x}, head[1] - #{y}); }",
+      expect: %{lt: 2}
+    }
   end
 
   defp run_scenario(spec, root) do
