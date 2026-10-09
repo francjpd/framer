@@ -59,13 +59,20 @@ normal Port error; a document that does not validate never renders.
 | `canvas.width` / `canvas.height` | yes | positive integers; the render output size |
 | `bones[]` | yes | non-empty; each bone needs a unique `id` and a `rest.head`/`rest.tail` |
 | `bones[].parent` | no | `null` or another bone `id`; the hierarchy must be acyclic |
-| `bones[].radius` | no | influence radius in pixels, default `10` |
+| `bones[].radius` | no | influence radius in pixels. The engine default is `10` (`core/deform.py` `DEFAULT_RADIUS`); the editor instead auto-assigns `max(canvas.width, canvas.height) / 5`, floored at 16 px, when a bone is created (`FramerWeb.Rig.auto_radius`) |
 | `bones[].falloff` | no | `smooth` (default), `linear`, or `hard` |
 | `bind.power` | no | falloff exponent for `smooth`, default `2.0` |
 | `bind.radius_scale` | no | multiplies every bone radius, default `1.0` |
 | `keyframes[]` | no | each `{frame, pose}` with a per-bone `{rot, tx, ty}` local pose |
 | `duration.frames` / `duration.fps` | no | used to loop a still when the request omits a range |
-| `mesh`, `source`, `playback`, `id` | no | reserved for the editor (M3-M5) |
+| `mesh`, `source`, `playback`, `id` | no | written by the editor (`FramerWeb.Rig.new`, `FramerWeb.Rig.auto_bind`); the engine ignores them |
+
+The editor's auto-radius is deliberate, not a divergence to align away: at the
+engine default of 10 px a fresh bone's influence is tiny, so the nearest-bone
+fallback would bind every pixel rigidly and the editor would read as "bones do
+nothing". Aligning the editor to 10 px was deliberately not chosen; the
+auto-scale is the intended editor behaviour, and the Properties slider adjusts
+the radius from there.
 
 Coordinates are image space: `x` right, `y` down, origin top-left.  `rot` is
 radians.  Weights are **derived** from bones, never read from `mesh.weights` by

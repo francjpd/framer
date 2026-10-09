@@ -40,6 +40,8 @@ path, a frame range and JSON options - exactly the existing Port contract.
   * **Hierarchy** - the bone list as an indented tree (children under their
     parent), with selection and delete.
   * **Properties** - the selected bone's **radius**, **falloff** and **parent**.
+    The editor auto-assigns the radius when the bone is created; the slider
+    then adjusts it.
   * **Bind** - the global bind **power** / **radius scale** and `Auto-bind
     mesh`, which rebuilds the control mesh and per-vertex weights.
 * **Centre viewport.** A `phx-hook="LbsPreview"` element with a small toolbar:
