@@ -71,6 +71,15 @@ defmodule FramerWebWeb.Fixtures do
     Rig.auto_bind(rig)
   end
 
+  @doc """
+  A rig with no bones yet - a freshly created still before any skeleton is
+  drawn. `RigStore.save/1` accepts it because saving validates with
+  `allow_empty_bones: true`.
+  """
+  def zero_bone_rig(size \\ 64) do
+    Rig.new(size, size, name: "Zero-bone fixture rig")
+  end
+
   defp chunk(type, data) do
     crc = :erlang.crc32(type <> data)
     <<byte_size(data)::32, type::binary, data::binary, crc::32>>

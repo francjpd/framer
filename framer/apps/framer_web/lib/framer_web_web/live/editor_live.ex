@@ -22,6 +22,47 @@ defmodule FramerWebWeb.EditorLive do
 
   @max_undo 40
 
+  # The ordered five-step workflow the guide renders. `group` is presentational
+  # only (setup vs animation); `tool` is the optional click-to-focus affordance
+  # a completed row may carry - it re-triggers an existing tool event, never a gate.
+  @steps [
+    %{
+      step: 1,
+      group: :setup,
+      label: "Upload a still image",
+      tool: nil,
+      hint: "Choose a still image and press Load image."
+    },
+    %{
+      step: 2,
+      group: :setup,
+      label: "Create the skeleton (draw & parent bones)",
+      tool: "bones",
+      hint: "Drag on the canvas to create a bone; drop near a joint to chain it."
+    },
+    %{
+      step: 3,
+      group: :setup,
+      label: "Bind the mesh (Auto-bind)",
+      tool: nil,
+      hint: "Press Auto-bind mesh to glue the still to the bones."
+    },
+    %{
+      step: 4,
+      group: :animation,
+      label: "Pose bones & record keyframes",
+      tool: "pose",
+      hint: "Switch to Pose, drag a bone, then press Record keyframe (K)."
+    },
+    %{
+      step: 5,
+      group: :animation,
+      label: "Render frame / export",
+      tool: nil,
+      hint: "Render a frame or export the animation."
+    }
+  ]
+
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
@@ -439,6 +480,81 @@ defmodule FramerWebWeb.EditorLive do
   # --- components ----------------------------------------------------------
 
   attr :rig, :map, default: nil
+
+  defp step_guide(assigns) do
+    current = current_step(assigns.rig)
+
+    steps =
+      Enum.map(@steps, fn step ->
+        Map.merge(step, %{done: step.step < current, current: step.step == current})
+      end)
+
+    assigns = assign(assigns, :steps, steps)
+
+    ~H"""
+    <section>
+      <h2 class="mb-2 font-semibold uppercase tracking-wide opacity-70">Workflow</h2>
+      <ol id="step-guide" class="flex flex-col gap-1">
+        <li
+          :for={step <- @steps}
+          value={step.step}
+          data-step={step.step}
+          data-current={to_string(step.current)}
+          data-done={to_string(step.done)}
+          class={[
+            "rounded px-2 py-1",
+            step.current && "bg-primary/15 ring-1 ring-primary/60",
+            !step.current && step.done && "opacity-80"
+          ]}
+        >
+          <div
+            :if={step.group == :setup and step.step == 1}
+            class="text-[9px] font-semibold uppercase tracking-wider opacity-50"
+          >
+            setup
+          </div>
+          <div
+            :if={step.group == :animation and step.step == 4}
+            class="text-[9px] font-semibold uppercase tracking-wider opacity-50"
+          >
+            animation
+          </div>
+          <div
+            :if={step.done && step.tool}
+            phx-click="select_tool"
+            phx-value-tool={step.tool}
+            title={"Focus the #{step.tool} tool"}
+            class="flex cursor-pointer items-center gap-1.5"
+          >
+            <.step_row_body step={step} />
+          </div>
+          <div :if={!(step.done && step.tool)} class="flex items-center gap-1.5">
+            <.step_row_body step={step} />
+          </div>
+          <p class="pl-6 text-[10px] opacity-60">{step.hint}</p>
+        </li>
+      </ol>
+    </section>
+    """
+  end
+
+  attr :step, :map, required: true
+
+  defp step_row_body(assigns) do
+    ~H"""
+    <span class={[
+      "flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold",
+      @step.current && "bg-primary text-primary-content",
+      !@step.current && "bg-base-300"
+    ]}>
+      {@step.step}
+    </span>
+    <span class="flex-1">{@step.label}</span>
+    <span :if={@step.done} class="shrink-0 text-success" title="completed">✓</span>
+    """
+  end
+
+  attr :rig, :map, default: nil
   attr :projects, :list, default: []
   attr :upload, :any, required: true
   attr :tool, :string, required: true
@@ -446,7 +562,11 @@ defmodule FramerWebWeb.EditorLive do
 
   defp palette(assigns) do
     ~H"""
-    <aside class="flex w-64 flex-col gap-4 overflow-y-auto border-r border-base-300 p-3 text-xs">
+    <aside
+      id="palette"
+      class="flex w-64 flex-col gap-4 overflow-y-auto border-r border-base-300 p-3 text-xs"
+    >
+      <.step_guide rig={@rig} />
       <section>
         <h2 class="mb-2 font-semibold uppercase tracking-wide opacity-70">Media</h2>
         <.upload_form upload={@upload} />
@@ -678,6 +798,15 @@ defmodule FramerWebWeb.EditorLive do
         class="absolute inset-0"
       >
         <div id="viewport-surface" phx-update="ignore" class="absolute inset-0"></div>
+      </div>
+      <div
+        :if={viewport_hint(@rig)}
+        id="viewport-hint"
+        class="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-4"
+      >
+        <span class="rounded-lg bg-base-100/90 px-3 py-1.5 text-xs shadow-md">
+          {viewport_hint(@rig)}
+        </span>
       </div>
       <div :if={!@rig} class="flex h-full items-center justify-center text-sm opacity-60">
         Load a still image to start rigging.
@@ -937,6 +1066,36 @@ defmodule FramerWebWeb.EditorLive do
   end
 
   # --- helpers -------------------------------------------------------------
+
+  # --- workflow step guide helpers -------------------------------------------
+
+  # The five-step guide is a pure render of the same `rig` assign every other
+  # control reads; it never gates the editor. No rig -> step 1; a loaded rig
+  # without bones -> step 2; bones but no bound mesh vertices -> step 3; a
+  # bound mesh without keyframes -> step 4; otherwise step 5. Completed steps
+  # are exactly the ones before the current one. The bones check runs first, so
+  # a stale mesh on a bone-less rig honestly reads step 2.
+  defp current_step(nil), do: 1
+
+  defp current_step(rig) do
+    cond do
+      Rig.bones(rig) == [] -> 2
+      get_in(rig, ["mesh", "vertices"]) == [] -> 3
+      Rig.keyframes(rig) == [] -> 4
+      true -> 5
+    end
+  end
+
+  # The viewport overlay names the next step while a rig is loaded; step 5
+  # shows no hint (the guide and the timeline carry it).
+  defp viewport_hint(rig) do
+    case current_step(rig) do
+      2 -> "Step 2 — draw a bone: drag on the canvas (drop near a joint to chain it)"
+      3 -> "Step 3 — press Auto-bind mesh so the still is glued to the bones"
+      4 -> "Step 4 — switch to Pose, drag a bone, then press Record keyframe (K)"
+      _ -> nil
+    end
+  end
 
   # --- timeline graph helpers ----------------------------------------------
 

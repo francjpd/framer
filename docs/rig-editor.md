@@ -9,10 +9,12 @@ operation for the final render and export.
 ┌───────────────────────────────────────────────────────────────┐
 │ header: title · shortcut hint · undo · save                    │
 ├──────────────┬────────────────────────────────────────────────┤
-│ Media        │ centre viewport                                 │
-│  upload      │  toolbar: Mesh · Labels · proxy badge           │
-│  projects    │  source still + control mesh + bones            │
-│ Tools        │  client-side WebGL2 / canvas LBS preview        │
+│ Workflow     │ centre viewport                                 │
+│  step guide  │  toolbar: Mesh · Labels · proxy badge           │
+│ Media        │  source still + control mesh + bones            │
+│  upload      │  client-side WebGL2 / canvas LBS preview        │
+│  projects    │                                                 │
+│ Tools        │                                                 │
 │ Hierarchy    │                                                 │
 │ Properties   │                                                 │
 │ Bind         │                                                 │
@@ -27,8 +29,9 @@ path, a frame range and JSON options - exactly the existing Port contract.
 
 ## Layout and tools
 
-* **Left panel (media + tool + inspector).** Modelled on the familiar
+* **Left panel (guide + media + tool + inspector).** Modelled on the familiar
   left-hand panel of Premiere Pro / Resolve / Final Cut / Shotcut:
+  * **Workflow** - the five-step guide (`#step-guide`), see below.
   * **Media** - the still-image upload and the list of saved projects.
   * **Tools** - the two first-slice tools, **Bones** and **Pose**.
   * **Hierarchy** - the bone list as an indented tree (children under their
@@ -65,6 +68,18 @@ because they are redesigns rather than polish - the single agent-facing
 command/catalog/MCP surface (already scoped as a separate future task) and a
 multi-track NLE timeline with trim algebra. Per-property (rot/tx/ty) keying
 would also need a rig-schema change, so the slice still keys the whole pose.
+
+## Workflow guide
+
+The left palette opens with a five-step workflow guide (`#step-guide`): upload
+the still, create the skeleton, bind the mesh, pose and record keyframes,
+render/export. It is a pure render of the rig's real state - the current step
+is derived from the loaded document (no rig -> step 1, no bones -> step 2,
+unbound mesh -> step 3, no keyframes -> step 4, otherwise step 5), completed
+steps carry a check mark and the current step is highlighted. While a rig is
+loaded the viewport overlays a `pointer-events-none` hint naming the next
+step. The guide never gates the editor: every tool and control stays enabled
+in any order, and re-binding after posing keeps the recorded keyframes.
 
 ## Preview vs final render
 
