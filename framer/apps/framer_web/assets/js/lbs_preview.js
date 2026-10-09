@@ -96,6 +96,7 @@ export const LbsPreview = {
     this.glProgram = null;
     this.glFailed = false;
     this.lostCanvas = null;
+    this.resizeObserver = null;
 
     this.onContextLost = (event) => this.handleContextLost(event);
     this.onContextRestored = () => this.handleContextRestored();
@@ -112,15 +113,32 @@ export const LbsPreview = {
       this.draw();
     });
 
+    // The one signal that fires on *every* viewport size change: the
+    // ResizeObserver watches the element itself, so it catches the
+    // element-only resizes a window `resize` event never sees - a split/tiled
+    // window manager narrowing the page, a pane or header growing inside the
+    // three-pane shell, or browser fullscreen on platforms that report it only
+    // through the element. The canvases are absolutely positioned inside the
+    // element, so this observer cannot feed back into its own size.
+    this.onViewportResize = () => {
+      this.measureView();
+      this.draw();
+    };
+    this.resizeObserver = new ResizeObserver(this.onViewportResize);
+    this.resizeObserver.observe(this.el);
+
+    // A window resize still needs its own handler: devicePixelRatio changes
+    // (zoom, or moving between scaled monitors) fire `resize` while the
+    // element's CSS size can stay identical, so the overlay canvas must be
+    // re-backed at the new DPR even though the ResizeObserver stays quiet.
     this.onResize = () => {
       this.measureView();
       this.draw();
     };
     window.addEventListener("resize", this.onResize);
 
-    // Entering or leaving fullscreen resizes the viewport without a window
-    // resize on every platform: re-fit both canvases at the current
-    // devicePixelRatio, exactly like the resize handler does.
+    // Entering or leaving fullscreen can re-create the image canvas, so
+    // re-fit and re-draw both canvases at the current devicePixelRatio.
     this.onFullscreenChange = () => {
       this.measureView();
       this.draw();
@@ -148,6 +166,8 @@ export const LbsPreview = {
   },
 
   destroyed() {
+    if (this.resizeObserver) this.resizeObserver.disconnect();
+    this.resizeObserver = null;
     window.removeEventListener("resize", this.onResize);
     document.removeEventListener("fullscreenchange", this.onFullscreenChange);
     this.unbindCanvasEvents();
