@@ -75,7 +75,10 @@ One fixed-point linear-blend-skinning implementation, two consumers:
   `computeBackwardMap`, `remapBilinear`) - the same math as `core/deform.py`.
   A WebGL2 fragment shader resamples the backward map; when WebGL2 is
   unavailable the hook falls back to a 2D canvas. The preview runs at a proxy
-  resolution and is deliberately labelled a proxy.
+  resolution and is deliberately labelled a proxy. A rig with no bones yet
+  (a freshly loaded still) previews the source unchanged: `skinningFields`
+  falls back to the identity field, whereas the engine rejects an empty bone
+  list outright.
 * **Final render** is the engine's `deform` operation. `Render frame` runs a
   single-frame `deform` (`start_frame == end_frame`, image output) through a
   throwaway Port worker; `Export` submits a chunked job to the existing
