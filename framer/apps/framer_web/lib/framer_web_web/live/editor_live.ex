@@ -81,6 +81,7 @@ defmodule FramerWebWeb.EditorLive do
      |> assign(:undo, [])
      |> assign(:status, nil)
      |> assign(:error, nil)
+     |> assign(:pending_delete, nil)
      |> assign(:export, nil)
      |> assign(:rendered, nil)
      |> assign(:rendered_frame, nil)
@@ -133,6 +134,36 @@ defmodule FramerWebWeb.EditorLive do
   end
 
   def handle_event("clear_error", _params, socket), do: {:noreply, assign(socket, :error, nil)}
+
+  # A remove control first asks for confirmation: `request_delete_project`
+  # reveals the inline confirm/cancel pair, and only `delete_project` removes.
+  def handle_event("request_delete_project", %{"id" => id}, socket) do
+    {:noreply, assign(socket, :pending_delete, id)}
+  end
+
+  def handle_event("cancel_delete_project", _params, socket) do
+    {:noreply, assign(socket, :pending_delete, nil)}
+  end
+
+  def handle_event("delete_project", %{"id" => id}, socket) do
+    name = project_name(socket, id)
+
+    case RigStore.delete(id) do
+      {:ok, _removed} ->
+        {:noreply,
+         socket
+         |> assign(:projects, RigStore.list())
+         |> assign(:pending_delete, nil)
+         |> assign(:status, "Removed #{name}")
+         |> reset_if_open(id)}
+
+      {:error, :invalid_id} ->
+        {:noreply, assign(socket, :error, "Could not remove rig #{id}")}
+
+      {:error, reason, _file} ->
+        {:noreply, assign(socket, :error, "Could not remove rig #{id}: #{format_reason(reason)}")}
+    end
+  end
 
   # --- tools / selection ---------------------------------------------------
 
@@ -260,7 +291,11 @@ defmodule FramerWebWeb.EditorLive do
 
     if map_size(socket.assigns.pending_pose) == 0 do
       {:noreply,
-       assign(socket, :status, "Nothing to record - pose a bone with the Pose tool, then record (K)")}
+       assign(
+         socket,
+         :status,
+         "Nothing to record - pose a bone with the Pose tool, then record (K)"
+       )}
     else
       socket =
         mutate(socket, fn rig -> Rig.record_keyframe(rig, frame, socket.assigns.pending_pose) end,
@@ -459,6 +494,7 @@ defmodule FramerWebWeb.EditorLive do
           projects={@projects}
           upload={@uploads.source}
           tool={@tool}
+          pending_delete={@pending_delete}
           selected={selected_bone(@rig, @selected_bone)}
         />
         <.viewport
@@ -566,6 +602,7 @@ defmodule FramerWebWeb.EditorLive do
   attr :projects, :list, default: []
   attr :upload, :any, required: true
   attr :tool, :string, required: true
+  attr :pending_delete, :string, default: nil
   attr :selected, :map, default: nil
 
   defp palette(assigns) do
@@ -579,18 +616,43 @@ defmodule FramerWebWeb.EditorLive do
         <h2 class="mb-2 font-semibold uppercase tracking-wide opacity-70">Media</h2>
         <.upload_form upload={@upload} />
         <ul class="mt-2 flex flex-col gap-1">
-          <li :for={project <- @projects}>
+          <li :for={project <- @projects} class="flex items-center gap-1">
             <button
               phx-click="select_project"
               phx-value-id={project.id}
               class={[
-                "btn btn-xs w-full justify-start gap-2",
+                "btn btn-xs min-w-0 flex-1 justify-start gap-2",
                 @rig && @rig["id"] == project.id && "btn-active"
               ]}
             >
               <span class="truncate">{project.name}</span>
               <span class="ml-auto opacity-50">{project.bones} bones</span>
             </button>
+
+            <button
+              :if={@pending_delete != project.id}
+              phx-click="request_delete_project"
+              phx-value-id={project.id}
+              class="btn btn-ghost btn-xs"
+              title={"Remove #{project.name}"}
+              aria-label={"Remove #{project.name}"}
+            >
+              ×
+            </button>
+
+            <div :if={@pending_delete == project.id} class="flex items-center gap-1">
+              <button
+                phx-click="delete_project"
+                phx-value-id={project.id}
+                class="btn btn-error btn-xs"
+                title={"Confirm removing #{project.name}"}
+              >
+                Remove
+              </button>
+              <button phx-click="cancel_delete_project" class="btn btn-ghost btn-xs">
+                Cancel
+              </button>
+            </div>
           </li>
         </ul>
         <p :if={@projects == []} class="mt-2 opacity-60">No projects yet - load a still image.</p>
@@ -1200,6 +1262,45 @@ defmodule FramerWebWeb.EditorLive do
   end
 
   defp point_str({x, y}), do: "#{Float.round(x, 2)},#{Float.round(y, 2)}"
+
+  # The list summary carries the rig's display name; fall back to the id when
+  # the project has already vanished from the assign.
+  defp project_name(socket, id) do
+    case Enum.find(socket.assigns.projects, &(&1.id == id)) do
+      %{name: name} when is_binary(name) -> name
+      _ -> id
+    end
+  end
+
+  # Removing the rig the editor has open must not leave a dangling reference:
+  # drop the loaded document and return to the empty shell.
+  defp reset_if_open(socket, id) do
+    if socket.assigns.rig && socket.assigns.rig["id"] == id do
+      reset_editor(socket)
+    else
+      socket
+    end
+  end
+
+  defp reset_editor(socket) do
+    if socket.assigns.rig do
+      Phoenix.PubSub.unsubscribe(FramerWeb.PubSub, Renderer.topic(socket.assigns.rig["id"]))
+    end
+
+    socket
+    |> assign(:rig, nil)
+    |> assign(:selected_bone, nil)
+    |> assign(:playhead, 0)
+    |> assign(:playing, false)
+    |> assign(:pending_pose, %{})
+    |> assign(:graph_channel, "rot")
+    |> assign(:undo, [])
+    |> assign(:export, nil)
+    |> assign(:rendered, nil)
+    |> assign(:rendered_frame, nil)
+    |> assign(:error, nil)
+    |> push_patch(to: ~p"/editor")
+  end
 
   defp load_rig(socket, rig) do
     if socket.assigns.rig && socket.assigns.rig["id"] != rig["id"] do
