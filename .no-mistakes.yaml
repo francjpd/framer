@@ -13,7 +13,9 @@
 commands:
   prepare: |
     uv sync --locked
-    cd framer && mix deps.get
+    (cd framer && mix deps.get)
+    (cd framer && MIX_ENV=dev mix assets.setup assets.build)
+    (cd tests/browser && npm ci)
   lint: |
     uv run ruff check .
   test: |

@@ -33,10 +33,20 @@ jobs:
 
       # FFmpeg drives the media-generated operation tests; libgl1/libglib2.0-0
       # are the system libraries the opencv-python wheel loads at import.
+      # Chromium drives the editor's browser preview suite (tests/browser,
+      # playwright-core): the runner image already ships a real Chromium at
+      # /usr/bin/chromium (chrome-linux; needs the --no-sandbox the runner
+      # passes), while Ubuntu 24.04's apt chromium-browser is only a snap stub
+      # that cannot launch in CI - so only fall back to apt if the image ever
+      # stops shipping the binary.
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0
+          if ! command -v chromium >/dev/null 2>&1; then
+            sudo apt-get install -y --no-install-recommends chromium-browser
+          fi
+          chromium --version
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
@@ -61,6 +71,13 @@ jobs:
         with:
           node-version: '22'
 
+      # Installs the browser proof harness (playwright-core only, no browser
+      # download - the suite drives the system Chromium above) from the
+      # committed package-lock.json.
+      - name: Install browser harness dependencies
+        working-directory: tests/browser
+        run: npm ci
+
       - name: Set up Elixir and Erlang/OTP
         uses: erlef/setup-beam@v1
         with:
@@ -70,6 +87,13 @@ jobs:
       - name: Fetch Elixir dependencies
         working-directory: framer
         run: mix deps.get
+
+      # The browser suite loads the editor over HTTP/WebSocket, so the
+      # gitignored priv/static assets must exist. esbuild/tailwind are
+      # dev-only deps, hence the dev env.
+      - name: Build editor assets
+        working-directory: framer
+        run: MIX_ENV=dev mix assets.setup assets.build
 
       - name: Test
         run: |

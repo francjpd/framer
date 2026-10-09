@@ -22,9 +22,15 @@ config :framer_web,
 #   pool_size: System.schedulers_online() * 2
 
 # We don't run a server during test. If one is required,
-# you can enable the server option below.
+# you can enable the server option below. The browser preview suite
+# (browser_preview_test.exs) flips `server` on at runtime and restarts the
+# endpoint, so it serves the editor to the real Chromium on this port.
+# `check_origin: false` lets that browser's LiveView websocket connect: the
+# endpoint url host is "localhost" while the browser origin is 127.0.0.1:4002,
+# which the default origin check would reject (test-only configuration).
 config :framer_web, FramerWebWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
+  check_origin: false,
   secret_key_base: "/iUQ6Ah4UDMhZ3eYkYvluCUyqqAUawO01I/8/N/AUJz6dvCH0yzL+rJfTCuXf2cr",
   server: false
 
