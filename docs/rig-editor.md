@@ -9,10 +9,12 @@ operation for the final render and export.
 ┌───────────────────────────────────────────────────────────────┐
 │ header: title · shortcut hint · undo · save                    │
 ├──────────────┬────────────────────────────────────────────────┤
-│ Media        │ centre viewport                                 │
-│  upload      │  toolbar: Mesh · Labels · proxy badge           │
-│  projects    │  source still + control mesh + bones            │
-│ Tools        │  client-side WebGL2 / canvas LBS preview        │
+│ Workflow     │ centre viewport                                 │
+│  step guide  │  toolbar: Mesh · Labels · proxy badge           │
+│ Media        │  source still + control mesh + bones            │
+│  upload      │  client-side WebGL2 / canvas LBS preview        │
+│  projects    │                                                 │
+│ Tools        │                                                 │
 │ Hierarchy    │                                                 │
 │ Properties   │                                                 │
 │ Bind         │                                                 │
@@ -27,8 +29,9 @@ path, a frame range and JSON options - exactly the existing Port contract.
 
 ## Layout and tools
 
-* **Left panel (media + tool + inspector).** Modelled on the familiar
+* **Left panel (guide + media + tool + inspector).** Modelled on the familiar
   left-hand panel of Premiere Pro / Resolve / Final Cut / Shotcut:
+  * **Workflow** - the five-step guide (`#step-guide`), see below.
   * **Media** - the still-image upload and the list of saved projects.
   * **Tools** - the two first-slice tools, **Bones** and **Pose**.
   * **Hierarchy** - the bone list as an indented tree (children under their
