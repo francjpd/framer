@@ -32,7 +32,10 @@ path, a frame range and JSON options - exactly the existing Port contract.
 * **Left panel (guide + media + tool + inspector).** Modelled on the familiar
   left-hand panel of Premiere Pro / Resolve / Final Cut / Shotcut:
   * **Workflow** - the five-step guide (`#step-guide`), see below.
-  * **Media** - the still-image upload and the list of saved projects.
+  * **Media** - the still-image upload and the list of saved projects. Each
+    project row carries a `×` remove control that reveals an inline
+    confirm/cancel pair before deleting the project's directory; removing the
+    rig currently open resets the editor to its empty state.
   * **Tools** - the two first-slice tools, **Bones** and **Pose**.
   * **Hierarchy** - the bone list as an indented tree (children under their
     parent), with selection and delete.
