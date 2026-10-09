@@ -1,0 +1,10 @@
+{
+  "name": "framer-browser-proof",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser proof harness for the Framer editor: a plain Node scenario runner driving the system Chromium through playwright-core (no browser download).",
+  "type": "module",
+  "devDependencies": {
+    "playwright-core": "1.64.0"
+  }
+}

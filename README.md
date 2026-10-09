@@ -241,7 +241,8 @@ framer/
 │   ├── apps/framer_core/   # Orchestrator, players, Port worker, CLI
 │   └── apps/framer_web/    # Phoenix API + /editor LiveView shell
 ├── docs/               # Port contract, rig schema, design plans
-└── tests/              # Python tests for the operation core
+├── tests/              # Python tests for the operation core
+└── tests/browser/      # Browser proof harness for the editor preview (playwright-core)
 ```
 
 ## 🚀 Quick Start

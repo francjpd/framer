@@ -23,9 +23,17 @@ defmodule FramerWebWeb.Fixtures do
     signature <> chunk("IHDR", ihdr) <> chunk("IDAT", idat) <> chunk("IEND", "")
   end
 
-  @doc "A minimal, decodable PNG with a subject block on a transparent field."
-  def png_with_subject(width \\ 64, height \\ 64) do
-    # Build scanlines directly: transparent except a red block in the middle.
+  @doc """
+  A minimal, decodable PNG with a subject block on a transparent field.
+
+  The subject colour defaults to a saturated blue; the browser preview suite
+  passes a saturated red so its screenshots match the slice spec's
+  "red-block-on-transparent" fixture.
+  """
+  def png_with_subject(width \\ 64, height \\ 64, subject \\ {0, 0, 255, 255}) do
+    {r, g, b, a} = subject
+
+    # Build scanlines directly: transparent except the subject block in the middle.
     x0 = div(width, 4)
     x1 = width - x0
     y0 = div(height, 4)
@@ -35,7 +43,7 @@ defmodule FramerWebWeb.Fixtures do
 
     subject_row =
       :binary.copy(<<0, 0, 0, 0>>, x0) <>
-        :binary.copy(<<0, 0, 255, 255>>, x1 - x0) <>
+        :binary.copy(<<r, g, b, a>>, x1 - x0) <>
         :binary.copy(<<0, 0, 0, 0>>, width - x1)
 
     subject_row = <<0>> <> subject_row
