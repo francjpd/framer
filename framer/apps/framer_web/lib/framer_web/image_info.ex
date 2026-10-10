@@ -72,15 +72,17 @@ defmodule FramerWeb.ImageInfo do
 
   defp webp(_), do: :error
 
-  # JPEG: scan for a Start-Of-Frame marker (C0..CF except C4/C8/CC).
-  defp jpeg(<<0xFF, 0xD8, rest::binary>>), do: jpeg_scan(rest)
-  defp jpeg(_), do: :error
-
-  defp jpeg_scan(<<0xFF, marker, rest::binary>>)
-       when marker in 0xC0..0xCF and marker not in [0xC4, 0xC8, 0xCC] do
-    case rest do
-      <<_length::16, _precision, height::16, width::16, _rest::binary>>
-      when width > 0 and height > 0 ->
+  # JPEG: walk the pre-SOF segment stream for a Start-Of-Frame marker (C0..CF
+  # except C4/C8/CC, the unrotated pixel dimensions) and any APP1 EXIF
+  # orientation. Browsers apply EXIF orientation when decoding a still, so the
+  # canvas must report the *displayed* (oriented) dimensions - otherwise the
+  # editor's letterboxing and click mapping diverge from the image the user
+  # sees, which is the reported "bone does not start where the pointer is"
+  # defect on phone photographs.
+  defp jpeg(<<0xFF, 0xD8, rest::binary>>) do
+    case jpeg_scan(rest, 1) do
+      {:ok, width, height, orientation} when width > 0 and height > 0 ->
+        {width, height} = orient_dimensions(width, height, orientation)
         {:ok, %{width: width, height: height, format: :jpeg}}
 
       _ ->
@@ -88,19 +90,127 @@ defmodule FramerWeb.ImageInfo do
     end
   end
 
-  defp jpeg_scan(<<0xFF, 0xFF, rest::binary>>), do: jpeg_scan(<<0xFF, rest::binary>>)
+  defp jpeg(_), do: :error
 
-  defp jpeg_scan(<<0xFF, marker, rest::binary>>) when marker not in [0x00, 0xD8, 0xD9] do
+  # SOF markers (frame header): precision(1) height(2) width(2) after length.
+  defp jpeg_scan(<<0xFF, marker, rest::binary>>, orientation)
+       when marker in 0xC0..0xCF and marker not in [0xC4, 0xC8, 0xCC] do
     case rest do
-      <<length::16, tail::binary>> when length >= 2 and byte_size(tail) >= length - 2 ->
-        <<_skip::binary-size(length - 2), next::binary>> = tail
-        jpeg_scan(next)
+      <<length::16, _precision, height::16, width::16, _tail::binary>>
+      when length >= 7 and width > 0 and height > 0 ->
+        {:ok, width, height, orientation}
 
       _ ->
         :error
     end
   end
 
-  defp jpeg_scan(<<_byte, rest::binary>>), do: jpeg_scan(rest)
-  defp jpeg_scan(<<>>), do: :error
+  # APP1 (EXIF): "Exif\0\0" then a TIFF header carrying the orientation tag.
+  defp jpeg_scan(<<0xFF, 0xE1, rest::binary>>, orientation) do
+    case rest do
+      <<length::16, seg::binary-size(length - 2), next::binary>> when length >= 2 ->
+        jpeg_scan(next, exif_orientation(seg) || orientation)
+
+      _ ->
+        :error
+    end
+  end
+
+  # 0xFF fill byte before the real marker.
+  defp jpeg_scan(<<0xFF, 0xFF, rest::binary>>, orientation),
+    do: jpeg_scan(<<0xFF, rest::binary>>, orientation)
+
+  # Standalone markers carry no length field: TEM, RSTn, SOI, EOI.
+  defp jpeg_scan(<<0xFF, marker, rest::binary>>, orientation)
+       when marker in [0x01, 0xD8, 0xD9] or marker in 0xD0..0xD7 do
+    jpeg_scan(rest, orientation)
+  end
+
+  # Skip any other segment by its length; 0xFF 0x00 (stuffed data) is only
+  # valid inside entropy-coded data, so it marks a malformed pre-SOF stream.
+  defp jpeg_scan(<<0xFF, marker, rest::binary>>, orientation) when marker != 0x00 do
+    case rest do
+      <<length::16, tail::binary>> when length >= 2 and byte_size(tail) >= length - 2 ->
+        <<_skip::binary-size(length - 2), next::binary>> = tail
+        jpeg_scan(next, orientation)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp jpeg_scan(_other, _orientation), do: :error
+
+  # EXIF orientation (1..8) from a JPEG APP1 payload, or nil when absent.
+  defp exif_orientation(<<"Exif", 0, 0, tiff::binary>>), do: tiff_orientation(tiff)
+  defp exif_orientation(_), do: nil
+
+  defp tiff_orientation(tiff) do
+    case tiff do
+      <<0x49, 0x49, 0x2A, 0x00, offset::little-32, _::binary>> ->
+        ifd0_orientation(tiff, offset, :little)
+
+      <<0x4D, 0x4D, 0x00, 0x2A, offset::big-32, _::binary>> ->
+        ifd0_orientation(tiff, offset, :big)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp ifd0_orientation(tiff, offset, :little) do
+    with true <- offset + 2 <= byte_size(tiff),
+         <<count::little-16>> <- binary_part(tiff, offset, 2) do
+      entries = binary_part(tiff, offset + 2, byte_size(tiff) - offset - 2)
+      find_orientation_little(entries, count)
+    else
+      _ -> nil
+    end
+  end
+
+  defp ifd0_orientation(tiff, offset, :big) do
+    with true <- offset + 2 <= byte_size(tiff),
+         <<count::big-16>> <- binary_part(tiff, offset, 2) do
+      entries = binary_part(tiff, offset + 2, byte_size(tiff) - offset - 2)
+      find_orientation_big(entries, count)
+    else
+      _ -> nil
+    end
+  end
+
+  defp find_orientation_little(_entries, 0), do: nil
+
+  defp find_orientation_little(entries, count) do
+    case entries do
+      <<0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, value::little-16, 0, 0, _rest::binary>> ->
+        value
+
+      <<_entry::binary-size(12), rest::binary>> ->
+        find_orientation_little(rest, count - 1)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp find_orientation_big(_entries, 0), do: nil
+
+  defp find_orientation_big(entries, count) do
+    case entries do
+      <<0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, value::big-16, 0, 0, _rest::binary>> ->
+        value
+
+      <<_entry::binary-size(12), rest::binary>> ->
+        find_orientation_big(rest, count - 1)
+
+      _ ->
+        nil
+    end
+  end
+
+  # EXIF orientations 5..8 rotate the frame 90 degrees, swapping width/height.
+  defp orient_dimensions(width, height, orientation) when orientation in [5, 6, 7, 8],
+    do: {height, width}
+
+  defp orient_dimensions(width, height, _orientation), do: {width, height}
 end
