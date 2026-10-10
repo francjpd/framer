@@ -34,7 +34,7 @@ normal Port error; a document that does not validate never renders.
       "name": "root",
       "parent": null,
       "rest": { "head": [320, 400], "tail": [320, 240] },
-      "radius": 140,
+      "radius": 128,
       "falloff": "smooth"
     }
   ],
