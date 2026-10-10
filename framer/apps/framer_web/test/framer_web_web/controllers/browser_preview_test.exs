@@ -447,6 +447,175 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     assert run_scenario(spec, root) == :ok
   end
 
+  test "element resize without a window resize: a click still lands where placed", %{
+    root: root
+  } do
+    shots = Path.join(root, "element_resize")
+    File.mkdir_p!(shots)
+
+    # The captain's offset: the viewport ELEMENT can change size while the
+    # window does not (a pane or sidebar growing inside the three-pane shell,
+    # or a tiled WM narrowing the page). Without a ResizeObserver the
+    # canvas-to-image mapping goes stale and the next click lands at an offset.
+    # Widening the palette shrinks #viewport with no window resize event, so a
+    # bone drawn afterwards only lands correctly if the hook re-measured the
+    # element. deviceScaleFactor 1.5 matches the captain's display scaling.
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      deviceScaleFactor: 1.5,
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps: [
+        %{name: "open the editor shell", open: "/editor"},
+        %{name: "shell renders", waitForSelector: "#editor-shell"},
+        %{
+          name: "create a non-square rig",
+          fetch: %{
+            url: "/api/rigs",
+            method: "POST",
+            headers: %{"content-type" => "application/json"},
+            body: %{
+              "name" => "browser-element-resize",
+              "filename" => "subject.png",
+              "source_base64" => Base.encode64(Fixtures.png_with_subject(200, 100, @subject))
+            }
+          },
+          saveAs: "create"
+        },
+        %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+        %{name: "viewport renders", waitForSelector: "#viewport"},
+        %{
+          name: "source image drawn",
+          waitForFunction:
+            "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+        },
+        %{name: "let the preview settle", sleep: 1_000},
+        %{
+          name: "create a bone from image (100,50) to (140,70)",
+          dragImage: %{from: [100, 50], to: [140, 70], imgW: 200, imgH: 100, settleMs: 300}
+        },
+        %{
+          name: "bone reaches the editor hierarchy",
+          waitForSelector: "button[phx-click=\"select_bone\"]"
+        },
+        bone_head_error(0, 100, 50),
+        %{
+          name: "widen the palette so #viewport shrinks with no window resize",
+          evaluate:
+            "() => { const vp = document.querySelector('#viewport'); const before = vp.getBoundingClientRect().width; const p = document.querySelector('#palette'); p.style.width = '512px'; p.style.flexShrink = '0'; return before - vp.getBoundingClientRect().width; }",
+          expect: %{gt: 100}
+        },
+        %{name: "let the re-measure settle", sleep: 500},
+        %{
+          name: "create a second bone from image (40,80) to (80,80)",
+          dragImage: %{from: [40, 80], to: [80, 80], imgW: 200, imgH: 100, settleMs: 300}
+        },
+        %{
+          name: "second bone reaches the editor hierarchy",
+          waitForFunction:
+            "() => document.querySelectorAll('button[phx-click=\"select_bone\"]').length >= 2"
+        },
+        bone_head_error(1, 40, 80),
+        %{name: "let the bone overlay draw", sleep: 500},
+        %{
+          name: "screenshot the resized viewport",
+          screenshot: %{path: Path.join(shots, "element_resize.png"), selector: "#viewport"}
+        }
+      ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+
+    # Both the subject and the bone overlay must be present after the
+    # element-only resize: the image survives and the overlay draws at the
+    # re-measured position.
+    assert %{width: w, height: h} = assert_png!(Path.join(shots, "element_resize.png"))
+    assert subject_pixels(Path.join(shots, "element_resize.png"), w, h) >= @subject_min
+    assert bone_pixels(Path.join(shots, "element_resize.png"), w, h) >= @bone_min
+  end
+
+  test "fullscreen entry: overlay renders and a click still lands where placed", %{
+    root: root
+  } do
+    shots = Path.join(root, "fullscreen_entry")
+    File.mkdir_p!(shots)
+
+    # The captain's fullscreen report: entering fullscreen must re-fit the
+    # canvases and keep drawing the bone overlay, and a click must still land
+    # where it was placed. requestFullscreen is the real API (not a synthetic
+    # event) and fires the fullscreenchange handler the hook listens to.
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      deviceScaleFactor: 1.5,
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps: [
+        %{name: "open the editor shell", open: "/editor"},
+        %{name: "shell renders", waitForSelector: "#editor-shell"},
+        %{
+          name: "create a non-square rig",
+          fetch: %{
+            url: "/api/rigs",
+            method: "POST",
+            headers: %{"content-type" => "application/json"},
+            body: %{
+              "name" => "browser-fullscreen-entry",
+              "filename" => "subject.png",
+              "source_base64" => Base.encode64(Fixtures.png_with_subject(200, 100, @subject))
+            }
+          },
+          saveAs: "create"
+        },
+        %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+        %{name: "viewport renders", waitForSelector: "#viewport"},
+        %{
+          name: "source image drawn",
+          waitForFunction:
+            "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+        },
+        %{name: "let the preview settle", sleep: 1_000},
+        %{
+          name: "create a bone from image (100,50) to (140,70)",
+          dragImage: %{from: [100, 50], to: [140, 70], imgW: 200, imgH: 100, settleMs: 300}
+        },
+        %{
+          name: "bone reaches the editor hierarchy",
+          waitForSelector: "button[phx-click=\"select_bone\"]"
+        },
+        bone_head_error(0, 100, 50),
+        %{
+          name: "enter fullscreen and verify the canvas re-fits the container",
+          evaluate:
+            "async () => { try { await document.documentElement.requestFullscreen(); } catch (e) {} if (!document.fullscreenElement) { document.dispatchEvent(new Event('fullscreenchange')); } await new Promise(r => setTimeout(r, 300)); const c = document.querySelector('#viewport canvas'); const o = document.querySelector('#viewport .framer-viewport-overlay'); const s = document.querySelector('#viewport-surface'); const cr = c.getBoundingClientRect(); const or = o.getBoundingClientRect(); const sr = s.getBoundingClientRect(); const fits = cr.width > 0 && cr.height > 0 && cr.left >= sr.left - 1 && cr.top >= sr.top - 1 && cr.right <= sr.right + 1 && cr.bottom <= sr.bottom + 1; const centered = Math.abs((cr.left - sr.left) - (sr.right - cr.right)) <= 1 && Math.abs((cr.top - sr.top) - (sr.bottom - cr.bottom)) <= 1; const aligned = Math.abs(cr.left - or.left) < 1 && Math.abs(cr.top - or.top) < 1 && Math.abs(cr.width - or.width) < 1 && Math.abs(cr.height - or.height) < 1; return fits && centered && aligned; }",
+          expect: %{eq: true}
+        },
+        %{
+          name: "create a second bone from image (40,80) to (80,80) after fullscreen",
+          dragImage: %{from: [40, 80], to: [80, 80], imgW: 200, imgH: 100, settleMs: 300}
+        },
+        %{
+          name: "second bone reaches the editor hierarchy",
+          waitForFunction:
+            "() => document.querySelectorAll('button[phx-click=\"select_bone\"]').length >= 2"
+        },
+        bone_head_error(1, 40, 80),
+        %{name: "let the bone overlay draw", sleep: 500},
+        %{
+          name: "screenshot the fullscreen viewport",
+          screenshot: %{path: Path.join(shots, "fullscreen_entry.png"), selector: "#viewport"}
+        }
+      ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+
+    # The bone/mesh overlay must still render in fullscreen and the subject
+    # image must survive the fullscreen transition.
+    assert %{width: w, height: h} = assert_png!(Path.join(shots, "fullscreen_entry.png"))
+    assert subject_pixels(Path.join(shots, "fullscreen_entry.png"), w, h) >= @subject_min
+    assert bone_pixels(Path.join(shots, "fullscreen_entry.png"), w, h) >= @bone_min
+  end
+
   test "pose tool: the move handle poses instead of mutating rest geometry", %{root: root} do
     shots = Path.join(root, "handle_pose")
     File.mkdir_p!(shots)
