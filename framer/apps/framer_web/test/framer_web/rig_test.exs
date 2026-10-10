@@ -147,6 +147,13 @@ defmodule FramerWeb.RigTest do
       assert second_bone["falloff"] == "smooth"
     end
 
+    test "auto_radius is max(width, height) / 5 floored at 16 px" do
+      for {width, height} <- [{300, 200}, {333, 200}, {80, 40}, {50, 50}] do
+        rig = Rig.new(width, height)
+        assert Rig.auto_radius(rig) == max(width, height) / 5 |> max(16.0)
+      end
+    end
+
     test "move and translate update the rest segment" do
       {rig, id} = Rig.add_bone(Rig.new(100, 100), [10, 10], [10, 40])
       rig = Rig.move_bone(rig, id, [20, 20], nil)
