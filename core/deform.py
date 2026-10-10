@@ -712,11 +712,123 @@ def apply_lbs(
 # source loading / high level renderer
 # ---------------------------------------------------------------------------
 
+# JPEG EXIF orientation values (the transform to apply to the stored pixels to
+# display them upright). Browsers apply this automatically when they decode a
+# still; OpenCV does not, so the editor's preview and the engine would disagree
+# on phone photographs unless the engine applies the same transform.
+_EXIF_ORIENTATION_UPRIGHT = 1
+
+
+def _read_jpeg_exif_orientation(path: str | os.PathLike[str]) -> int:
+    """Return the EXIF orientation (1..8) of a JPEG, or 1 when absent/unknown."""
+    try:
+        with open(path, "rb") as handle:
+            # The EXIF APP1 segment always precedes the entropy-coded data, so
+            # the first 256 KiB is far more than enough to find it.
+            data = handle.read(1 << 18)
+    except OSError:
+        return _EXIF_ORIENTATION_UPRIGHT
+
+    if not data.startswith(b"\xFF\xD8"):
+        return _EXIF_ORIENTATION_UPRIGHT
+
+    position = 2
+    size = len(data)
+    while position + 4 <= size:
+        if data[position] != 0xFF:
+            break
+        marker = data[position + 1]
+
+        # Fill byte before the real marker.
+        if marker == 0xFF:
+            position += 1
+            continue
+
+        # Standalone markers (no length field): TEM, RSTn, SOI, EOI.
+        if marker in (0x01, 0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            position += 2
+            continue
+
+        # A Start-Of-Frame means the metadata is done; orientation would have
+        # appeared before it.
+        if marker in range(0xC0, 0xD0) and marker not in (0xC4, 0xC8, 0xCC):
+            break
+
+        if position + 2 > size:
+            break
+        segment_length = int.from_bytes(data[position + 2 : position + 4], "big")
+        if segment_length < 2 or position + 2 + segment_length > size:
+            break
+        segment = data[position + 4 : position + 2 + segment_length]
+
+        if marker == 0xE1 and segment.startswith(b"Exif\x00\x00"):
+            orientation = _tiff_exif_orientation(segment[6:])
+            if orientation is not None:
+                return orientation
+
+        position += 2 + segment_length
+
+    return _EXIF_ORIENTATION_UPRIGHT
+
+
+def _tiff_exif_orientation(tiff: bytes) -> int | None:
+    """Read the IFD0 orientation tag from a little/big-endian TIFF blob."""
+    if len(tiff) < 8:
+        return None
+    if tiff[0:2] == b"II":
+        endian = "little"
+    elif tiff[0:2] == b"MM":
+        endian = "big"
+    else:
+        return None
+
+    offset = int.from_bytes(tiff[4:8], endian)
+    if offset + 2 > len(tiff):
+        return None
+
+    count = int.from_bytes(tiff[offset : offset + 2], endian)
+    entries = tiff[offset + 2 :]
+    for _index in range(count):
+        entry = entries[:12]
+        if len(entry) < 12:
+            return None
+        entries = entries[12:]
+        tag = int.from_bytes(entry[0:2], endian)
+        if tag == 0x0112 and int.from_bytes(entry[2:4], endian) == 3:
+            return int.from_bytes(entry[8:10], endian)
+    return None
+
+
+def _apply_exif_orientation(image: np.ndarray, orientation: int) -> np.ndarray:
+    """Apply the EXIF orientation transform to an OpenCV image (in place-safe)."""
+    if orientation == 2:
+        return cv2.flip(image, 1)
+    if orientation == 3:
+        return cv2.rotate(image, cv2.ROTATE_180)
+    if orientation == 4:
+        return cv2.flip(image, 0)
+    if orientation == 5:
+        return cv2.transpose(image)
+    if orientation == 6:
+        return cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+    if orientation == 7:
+        return cv2.rotate(cv2.flip(image, 1), cv2.ROTATE_90_CLOCKWISE)
+    if orientation == 8:
+        return cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    return image
+
+
 def load_source_image(path: str | os.PathLike[str]) -> np.ndarray:
     """Read a still image as BGRA, adding an opaque alpha plane when absent."""
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is None:
         raise RigError(f"could not read source image: {path}")
+
+    # Match the browser's EXIF handling so the engine renders the orientation
+    # the editor previews. Non-JPEG inputs carry no orientation and pass
+    # through unchanged.
+    orientation = _read_jpeg_exif_orientation(str(path))
+    image = _apply_exif_orientation(image, orientation)
 
     if image.ndim == 2:
         image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGRA)

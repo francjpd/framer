@@ -382,3 +382,40 @@ def test_load_source_falls_back_to_a_video_first_frame(tmp_path):
 def test_load_source_rejects_a_missing_image(tmp_path):
     with pytest.raises(RigError, match="could not read"):
         load_source(tmp_path / "missing.png")
+
+
+def test_load_source_applies_jpeg_exif_orientation(tmp_path):
+    # A 400x200 JPEG tagged orientation 6 (rotate 90 CW) must load as a
+    # 200x400 BGRA image, matching what a browser previews and what the
+    # EXIF-aware canvas reports.
+    path = _jpeg_with_orientation(tmp_path / "orient6.jpg", 400, 200, 6)
+    source = load_source(path)
+    assert source.shape == (400, 200, 4)
+
+
+def test_load_source_leaves_upright_jpegs_untouched(tmp_path):
+    path = _jpeg_with_orientation(tmp_path / "upright.jpg", 400, 200, 1)
+    source = load_source(path)
+    assert source.shape == (200, 400, 4)
+
+
+def _jpeg_with_orientation(path: Path, width: int, height: int, orientation: int) -> Path:
+    """Write a decodable JPEG with the given EXIF orientation tag injected."""
+    import struct
+
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    image[:, :, 2] = 255
+    ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    assert ok
+    jpeg = bytes(buf)
+    assert jpeg[:2] == b"\xFF\xD8"
+
+    tiff = b"II" + struct.pack("<H", 0x2A) + struct.pack("<I", 8)
+    ifd = struct.pack("<H", 1)
+    ifd += struct.pack("<HHI", 0x0112, 3, 1) + struct.pack("<HH", orientation, 0)
+    ifd += struct.pack("<I", 0)
+    exif_body = b"Exif\x00\x00" + tiff + ifd
+    app1 = b"\xFF\xE1" + struct.pack(">H", len(exif_body) + 2) + exif_body
+
+    path.write_bytes(jpeg[:2] + app1 + jpeg[2:])
+    return path

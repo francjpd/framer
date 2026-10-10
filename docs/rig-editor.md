@@ -219,10 +219,11 @@ The browser proof suite (`browser_preview_test.exs`, tagged
 asserts preview pixels on saved `#viewport` screenshots - the browser-level
 regressions for the slice-1 blank-preview defect and, since slice 4, for
 viewport resize, WebGL context loss/recovery and fullscreen re-measure. It also
-covers click precision (a bone landing where clicked at non-1 DPR and after a
-resize) and the call-to-action handles (the move handle posing rather than
-mutating rest geometry, the rotate handle dragging the tail without a start
-jump). It excludes itself when
+covers click precision (a bone landing where clicked at non-1 DPR, after a
+resize, and on EXIF-rotated photographs whose displayed dimensions differ from
+their stored pixels) and the call-to-action handles (the move handle posing
+rather than mutating rest geometry, the rotate handle dragging the tail without
+a start jump). It excludes itself when
 Chromium, Node or the built editor assets are missing, so to run it locally,
 install the harness and build the assets first:
 

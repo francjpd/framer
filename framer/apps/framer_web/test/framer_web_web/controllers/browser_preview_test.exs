@@ -616,6 +616,83 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     assert bone_pixels(Path.join(shots, "fullscreen_entry.png"), w, h) >= @bone_min
   end
 
+  test "EXIF orientation: a rotated photograph still places a bone under the pointer", %{
+    root: root
+  } do
+    shots = Path.join(root, "exif")
+    File.mkdir_p!(shots)
+
+    # Each config is a raw landscape still tagged orientation 6 (rotate 90 CW),
+    # so the browser and the editor display it as a portrait. The two raw
+    # aspect ratios (2:1 and 3:1) exercise the size dependence of the
+    # letterboxing without any third-party image content.
+    configs = [
+      %{raw_w: 400, raw_h: 200, w: 200, h: 400, x: 100, y: 200},
+      %{raw_w: 600, raw_h: 200, w: 200, h: 600, x: 100, y: 300}
+    ]
+
+    for {config, index} <- Enum.with_index(configs) do
+      exif_jpeg = Fixtures.jpeg_with_orientation(config.raw_w, config.raw_h, 6)
+
+      spec = %{
+        baseUrl: @base_url,
+        viewport: %{width: 1280, height: 900},
+        deviceScaleFactor: 1.5,
+        failureScreenshot: Path.join(shots, "failure_#{index}.png"),
+        steps: [
+          %{name: "open the editor shell", open: "/editor"},
+          %{name: "shell renders", waitForSelector: "#editor-shell"},
+          %{
+            name: "create a rig from an EXIF-rotated JPEG",
+            fetch: %{
+              url: "/api/rigs",
+              method: "POST",
+              headers: %{"content-type" => "application/json"},
+              body: %{
+                "name" => "browser-exif-#{index}",
+                "filename" => "subject.jpg",
+                "source_base64" => Base.encode64(exif_jpeg)
+              }
+            },
+            saveAs: "create"
+          },
+          %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+          %{name: "viewport renders", waitForSelector: "#viewport"},
+          %{
+            name: "source image drawn",
+            waitForFunction:
+              "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+          },
+          %{name: "let the preview settle", sleep: 1_000},
+          %{
+            name: "the rig canvas reports the oriented dimensions",
+            evaluate:
+              "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; return rig.canvas.width + 'x' + rig.canvas.height; }",
+            expect: %{eq: "#{config.w}x#{config.h}"}
+          },
+          %{
+            name:
+              "create a bone from oriented image (#{config.x},#{config.y}) to (#{config.x + 40},#{config.y})",
+            dragImage: %{
+              from: [config.x, config.y],
+              to: [config.x + 40, config.y],
+              imgW: config.w,
+              imgH: config.h,
+              settleMs: 300
+            }
+          },
+          %{
+            name: "bone reaches the editor hierarchy",
+            waitForSelector: "button[phx-click=\"select_bone\"]"
+          },
+          bone_head_error(0, config.x, config.y)
+        ]
+      }
+
+      assert run_scenario(spec, root) == :ok
+    end
+  end
+
   test "pose tool: the move handle poses instead of mutating rest geometry", %{root: root} do
     shots = Path.join(root, "handle_pose")
     File.mkdir_p!(shots)
@@ -653,7 +730,10 @@ defmodule FramerWebWeb.BrowserPreviewTest do
           name: "create a bone from image (300,300) to (420,300)",
           dragImage: %{from: [300, 300], to: [420, 300], imgW: 600, imgH: 600, settleMs: 300}
         },
-        %{name: "bone reaches the editor hierarchy", waitForSelector: "button[phx-click=\"select_bone\"]"},
+        %{
+          name: "bone reaches the editor hierarchy",
+          waitForSelector: "button[phx-click=\"select_bone\"]"
+        },
         %{
           name: "switch to the pose tool",
           click: %{selector: "button[phx-click=\"select_tool\"][phx-value-tool=\"pose\"]"}
@@ -661,7 +741,14 @@ defmodule FramerWebWeb.BrowserPreviewTest do
         %{name: "let the tool switch settle", sleep: 300},
         %{
           name: "drag the move handle by (30,0) image px",
-          dragHandle: %{handle: "move", head: [300, 300], tail: [420, 300], imgW: 600, delta: [30, 0], settleMs: 300}
+          dragHandle: %{
+            handle: "move",
+            head: [300, 300],
+            tail: [420, 300],
+            imgW: 600,
+            delta: [30, 0],
+            settleMs: 300
+          }
         },
         %{
           name: "a pose becomes pending (not a structural edit)",
@@ -712,10 +799,20 @@ defmodule FramerWebWeb.BrowserPreviewTest do
           name: "create a bone from image (300,300) to (420,300)",
           dragImage: %{from: [300, 300], to: [420, 300], imgW: 600, imgH: 600, settleMs: 300}
         },
-        %{name: "bone reaches the editor hierarchy", waitForSelector: "button[phx-click=\"select_bone\"]"},
+        %{
+          name: "bone reaches the editor hierarchy",
+          waitForSelector: "button[phx-click=\"select_bone\"]"
+        },
         %{
           name: "nudge the rotate handle by (6,0) image px",
-          dragHandle: %{handle: "rotate", head: [300, 300], tail: [420, 300], imgW: 600, delta: [6, 0], settleMs: 300}
+          dragHandle: %{
+            handle: "rotate",
+            head: [300, 300],
+            tail: [420, 300],
+            imgW: 600,
+            delta: [6, 0],
+            settleMs: 300
+          }
         },
         # The tail must move by the nudge (6px), not snap to the handle that sits
         # HANDLE_OFFSET/scale beyond it: assert it landed at rest + delta.

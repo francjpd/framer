@@ -150,7 +150,7 @@ defmodule FramerWeb.RigTest do
     test "auto_radius is max(width, height) / 5 floored at 16 px" do
       for {width, height} <- [{300, 200}, {333, 200}, {80, 40}, {50, 50}] do
         rig = Rig.new(width, height)
-        assert Rig.auto_radius(rig) == max(width, height) / 5 |> max(16.0)
+        assert Rig.auto_radius(rig) == (max(width, height) / 5) |> max(16.0)
       end
     end
 
