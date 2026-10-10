@@ -2,11 +2,13 @@ defmodule FramerWeb.ImageInfo do
   @moduledoc """
   Minimal, dependency-free image header reader.
 
-  The editor needs the intrinsic size of an uploaded still so it can set the
-  rig canvas. Phoenix ships no image library and the engine is not allowed to
-  touch pixels over the Port, so we read the dimensions straight from the file
-  header. PNG, JPEG, WebP, BMP and GIF are supported; anything else returns an
-  error and the caller falls back to a default canvas.
+  The editor needs the size of an uploaded still so it can set the rig canvas.
+  Phoenix ships no image library and the engine is not allowed to touch pixels
+  over the Port, so we read the dimensions straight from the file header. PNG,
+  JPEG, WebP, BMP and GIF are supported; anything else returns an error and the
+  caller falls back to a default canvas. JPEG dimensions are reported as the
+  *displayed* (EXIF-oriented) size, matching what a browser previews, so the
+  rig canvas agrees with the still the user actually sees.
   """
 
   @type info :: %{width: pos_integer(), height: pos_integer(), format: atom()}
