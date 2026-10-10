@@ -107,8 +107,12 @@ One fixed-point linear-blend-skinning implementation, two consumers:
   A WebGL2 fragment shader resamples the backward map; when WebGL2 is
   unavailable - or its context is lost - the hook falls back to a 2D canvas
   (swapping in a fresh element, then re-initialising WebGL2 when the context
-  is restored), and it re-measures on both window resize and fullscreen
-  change. The preview runs at a proxy resolution and is deliberately labelled
+  is restored), and it re-measures the viewport on element resize (a
+  `ResizeObserver` catches element-only resizes a window `resize` never sees,
+  such as a pane growing inside the three-pane shell or a tiled WM narrowing
+  the page), window resize (which re-backs the overlay at a changed
+  `devicePixelRatio`), and fullscreen change. The preview runs at a proxy
+  resolution and is deliberately labelled
   a proxy. A rig with no bones yet
   (a freshly loaded still) previews the source unchanged: `skinningFields`
   falls back to the identity field, whereas the engine rejects an empty bone
