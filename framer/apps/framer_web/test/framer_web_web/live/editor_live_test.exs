@@ -121,6 +121,25 @@ defmodule FramerWebWeb.EditorLiveTest do
            end)
   end
 
+  test "renaming via the form change event (no id param) persists under the selected bone", %{
+    conn: conn
+  } do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    render_hook(view, "select_bone", %{"id" => "b0"})
+
+    # The browser sends only the changed field; the id is never in the params.
+    render_change(view, "set_bone_name", %{"name" => "tentacle 1"})
+
+    assert render(view) =~ "tentacle 1"
+
+    {:ok, loaded} = RigStore.load(id)
+    assert FramerWeb.Rig.bone(loaded, "b0")["name"] == "tentacle 1"
+    assert FramerWeb.Rig.bone(loaded, "b0")["id"] == "b0"
+  end
+
   test "an empty or blank bone name is rejected and leaves the document unchanged", %{
     conn: conn
   } do
