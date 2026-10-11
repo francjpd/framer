@@ -234,6 +234,16 @@ defmodule FramerWebWeb.EditorLive do
     {:noreply, mutate(socket, fn rig -> Rig.set_parent(rig, id, blank_to_nil(parent)) end)}
   end
 
+  def handle_event("set_bone_name", %{"id" => id, "name" => name}, socket) do
+    name = if is_binary(name), do: String.trim(name), else: nil
+
+    if name in [nil, ""] do
+      {:noreply, assign(socket, :error, "Bone name must be a non-empty string")}
+    else
+      {:noreply, mutate(socket, fn rig -> Rig.set_name(rig, id, name) end)}
+    end
+  end
+
   def handle_event("set_radius", %{"id" => id, "radius" => radius}, socket) do
     case to_float(radius) do
       value when is_number(value) and value > 0 ->
@@ -722,6 +732,17 @@ defmodule FramerWebWeb.EditorLive do
         <div :if={@selected}>
           <p class="mb-1 font-mono opacity-70">{@selected["id"]}</p>
           <form id="bone-properties-form">
+            <label class="label-text">Name</label>
+            <input
+              type="text"
+              name="name"
+              value={@selected["name"] || ""}
+              phx-change="set_bone_name"
+              phx-value-id={@selected["id"]}
+              placeholder={@selected["id"]}
+              title="Readable bone name (the id stays the key for parenting and keyframes)"
+              class="input input-xs input-bordered w-full"
+            />
             <label class="label-text">Radius</label>
             <input
               type="range"

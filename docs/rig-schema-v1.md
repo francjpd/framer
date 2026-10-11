@@ -58,6 +58,7 @@ normal Port error; a document that does not validate never renders.
 | `version` | yes | must be `1`; other versions are rejected |
 | `canvas.width` / `canvas.height` | yes | positive integers; the render output size |
 | `bones[]` | yes | non-empty; each bone needs a unique `id` and a `rest.head`/`rest.tail` |
+| `bones[].name` | no | the readable handle for a person or an agent (`FramerWeb.Rig` defaults a fresh bone to `"bone N"`); `bones[].id` remains the key the keyframe map uses |
 | `bones[].parent` | no | `null` or another bone `id`; the hierarchy must be acyclic |
 | `bones[].radius` | no | influence radius in pixels. The engine default is `10` (`core/deform.py` `DEFAULT_RADIUS`); the editor instead auto-assigns `max(canvas.width, canvas.height) / 5`, floored at 16 px, when a bone is created (`FramerWeb.Rig.auto_radius`) |
 | `bones[].falloff` | no | `smooth` (default), `linear`, or `hard` |

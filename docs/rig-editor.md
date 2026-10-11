@@ -38,10 +38,15 @@ path, a frame range and JSON options - exactly the existing Port contract.
     rig currently open resets the editor to its empty state.
   * **Tools** - the two first-slice tools, **Bones** and **Pose**.
   * **Hierarchy** - the bone list as an indented tree (children under their
-    parent), with selection and delete.
-  * **Properties** - the selected bone's **radius**, **falloff** and **parent**.
-    The editor auto-assigns the radius when the bone is created; the slider
-    then adjusts it.
+    parent), with selection and delete. Rows show each bone's readable name
+    (falling back to its `id`), so a renamed skeleton reads as anatomy.
+  * **Properties** - the selected bone's **name**, **radius**, **falloff** and
+    **parent**. The name field is an inline rename: it is validated as a
+    non-empty string, persisted with the rest of the document and shown in the
+    hierarchy, the selected-bone label and behind the viewport **Labels**
+    toggle. The bone `id` is unchanged by a rename - it stays the key for
+    parenting and for the per-bone keyframe pose map. The editor auto-assigns
+    the radius when the bone is created; the slider then adjusts it.
   * **Bind** - the global bind **power** / **radius scale** and `Auto-bind
     mesh`, which rebuilds the control mesh and per-vertex weights.
 * **Centre viewport.** A `phx-hook="LbsPreview"` element with a small toolbar:

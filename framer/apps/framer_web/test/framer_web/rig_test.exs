@@ -191,6 +191,15 @@ defmodule FramerWeb.RigTest do
       assert Rig.bone(detached, b)["parent"] == nil
     end
 
+    test "add_bone defaults the name and set_name renames without touching the id" do
+      {rig, id} = Rig.add_bone(Rig.new(100, 100), [0, 0], [0, 40])
+      assert Rig.bone(rig, id)["name"] == "bone 1"
+
+      renamed = Rig.set_name(rig, id, "head")
+      assert Rig.bone(renamed, id)["name"] == "head"
+      assert Rig.bone(renamed, id)["id"] == id
+    end
+
     test "set_radius, set_falloff and set_bind update the document" do
       {rig, id} = Rig.add_bone(Rig.new(200, 200), [50, 50], [50, 150])
 
