@@ -46,6 +46,7 @@ defmodule FramerWebWeb.EditorLiveTest do
 
     render_hook(view, "select_bone", %{"id" => "b0"})
 
+    assert has_element?(view, "#bone-properties-form input[type='text'][name='name']")
     assert has_element?(view, "#bone-properties-form input[type='range'][name='radius']")
     assert has_element?(view, "#bone-properties-form select[name='falloff']")
     assert has_element?(view, "#bone-properties-form select[name='parent']")
@@ -90,6 +91,70 @@ defmodule FramerWebWeb.EditorLiveTest do
     render_hook(view, "bone_deleted", %{"id" => "b0"})
     {:ok, after_delete} = RigStore.load(id)
     assert length(FramerWeb.Rig.bones(after_delete)) == 1
+  end
+
+  test "renaming a bone updates the editor and persists it under the same id", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    render_hook(view, "select_bone", %{"id" => "b0"})
+    assert has_element?(view, "#bone-properties-form input[name='name']")
+
+    # Record a pose first so we can prove the keyframe map still keys by bone id.
+    render_hook(view, "pose_changed", %{
+      "pose" => %{"b0" => %{"rot" => 0.4, "tx" => 0, "ty" => 0}}
+    })
+
+    render_hook(view, "record_keyframe", %{})
+    render_hook(view, "set_bone_name", %{"id" => "b0", "name" => "tentacle 1"})
+
+    assert render(view) =~ "tentacle 1"
+
+    {:ok, loaded} = RigStore.load(id)
+    renamed = FramerWeb.Rig.bone(loaded, "b0")
+    assert renamed["name"] == "tentacle 1"
+    assert renamed["id"] == "b0"
+
+    assert Enum.any?(FramerWeb.Rig.keyframes(loaded), fn keyframe ->
+             get_in(keyframe, ["pose", "b0"]) != nil
+           end)
+  end
+
+  test "renaming via the form change event (no id param) persists under the selected bone", %{
+    conn: conn
+  } do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    render_hook(view, "select_bone", %{"id" => "b0"})
+
+    # The browser sends only the changed field; the id is never in the params.
+    render_change(view, "set_bone_name", %{"name" => "tentacle 1"})
+
+    assert render(view) =~ "tentacle 1"
+
+    {:ok, loaded} = RigStore.load(id)
+    assert FramerWeb.Rig.bone(loaded, "b0")["name"] == "tentacle 1"
+    assert FramerWeb.Rig.bone(loaded, "b0")["id"] == "b0"
+  end
+
+  test "an empty or blank bone name is rejected and leaves the document unchanged", %{
+    conn: conn
+  } do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(48))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    render_hook(view, "set_bone_name", %{"id" => "b0", "name" => "   "})
+    assert render(view) =~ "Bone name must be a non-empty string"
+
+    render_hook(view, "set_bone_name", %{"id" => "b0", "name" => ""})
+    assert render(view) =~ "Bone name must be a non-empty string"
+
+    {:ok, loaded} = RigStore.load(id)
+    assert FramerWeb.Rig.bone(loaded, "b0")["name"] == "root"
   end
 
   test "the move handle translates a bone (bone_translated)", %{conn: conn} do

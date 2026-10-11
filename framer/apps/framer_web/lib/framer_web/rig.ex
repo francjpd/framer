@@ -473,6 +473,18 @@ defmodule FramerWeb.Rig do
     end
   end
 
+  @doc """
+  Set a bone's readable name (a non-empty string).
+
+  The name is the human/agent handle for the bone - the editor shows it in the
+  hierarchy, the properties panel and behind the Labels toggle. The bone `id`
+  stays the machine key: parenting and the per-bone keyframe pose map still
+  address the bone by `id`, never by name.
+  """
+  def set_name(rig, id, name) when is_binary(name) and name != "" do
+    update_bone(rig, id, &Map.put(&1, "name", name))
+  end
+
   @doc "Set the per-bone influence radius (pixels)."
   def set_radius(rig, id, radius) when is_number(radius) and radius > 0 do
     update_bone(rig, id, &Map.put(&1, "radius", round3(radius)))
