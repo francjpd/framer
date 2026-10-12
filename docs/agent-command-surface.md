@@ -126,6 +126,18 @@ handler for them: listing them would advertise a command that fails. They stay
 where they are - `python cli.py resize ...` - and the moment a worker handler
 exists for one of them, adding a catalog entry is the whole change.
 
+## Worker-internal tunables
+
+Two knobs the worker reads are deliberately not catalogued, because neither is
+a flag an agent can set: the Python CLI never exposed them either, so adding
+them would widen the command surface beyond what the catalog is meant to own.
+They are fixed worker defaults, not options.
+
+| operation | key | default | meaning |
+| --- | --- | --- | --- |
+| `remove-bg` | `motion_threshold` | `15` | motion-detection threshold used when `--method motion` or `--method combined`; the fixed complement to the exposed `--motion-frames` |
+| `deform` | `still` | auto | whether the source is treated as a still image; unset, the worker decides from the input extension (an image path is a still, a video path is read as its first frame) |
+
 ## Keeping it honest
 
 - `FramerCore.CatalogTest` compares the catalog against the operations the

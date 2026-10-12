@@ -4,9 +4,11 @@ defmodule FramerCore.CatalogTest do
   entry must be complete and self-consistent, the JSON forms must agree with
   each other, and the set of catalogued operations must match the operations
   the Python Port worker actually registers. The drift guard also checks option
-  names: a catalogued option sent under a key the worker never reads fails the
-  suite, so a new option in `framer_worker.py` without a catalog entry (or a
-  catalog entry the worker cannot run) is caught.
+  names: a catalogued option mapped to a key the worker does not declare in its
+  `_OPTION_KEYS` registry fails the suite. `_OPTION_KEYS` is the worker's own
+  declaration of the keys each operation accepts, not proof that every op reads
+  exactly those keys at runtime; enforcing that at runtime is a separate
+  follow-up.
   """
 
   use ExUnit.Case, async: true
@@ -103,7 +105,7 @@ defmodule FramerCore.CatalogTest do
     end
 
     @tag :requires_python
-    test "every catalogued option is sent under a key the worker reads" do
+    test "every catalogued option maps to a declared worker option key" do
       keys = worker_option_keys()
 
       for operation <- Catalog.operations() do
@@ -115,7 +117,7 @@ defmodule FramerCore.CatalogTest do
           if key do
             assert key in accepted,
                    "#{operation.name} option #{inspect(option.name)} is sent as #{inspect(key)}, " <>
-                     "which the worker does not read"
+                     "which the worker does not declare"
           end
         end
       end
@@ -208,8 +210,10 @@ defmodule FramerCore.CatalogTest do
     |> String.split(",", trim: true)
   end
 
-  # The option keys each operation reads, straight from the worker's registry,
-  # so a catalogued option name the worker never reads fails the suite.
+  # The option keys each operation declares it accepts, straight from the
+  # worker's `_OPTION_KEYS` registry, so a catalogued option mapped to a key the
+  # worker does not declare fails the suite. Enforcing that each op reads only
+  # these keys at runtime is a separate follow-up.
   defp worker_option_keys do
     worker = Application.get_env(:framer_core, :python_worker)
     root = worker |> to_string() |> Path.dirname()

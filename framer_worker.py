@@ -406,11 +406,12 @@ _OPERATIONS = {
     "merge": op_merge,
 }
 
-# The option keys each operation reads from ``req["options"]``. The Elixir
-# catalog is the single source of truth for the flags an agent passes, but the
-# keys a request must carry are this worker's contract: ``FramerCore.CatalogTest``
-# imports this registry and fails when a catalogued option is sent under a key
-# that is not listed here.
+# The option keys each operation declares it accepts from ``req["options"]``.
+# The Elixir catalog is the single source of truth for the flags an agent
+# passes, but the keys a request may carry are this worker's contract:
+# ``FramerCore.CatalogTest`` imports this registry and fails when a catalogued
+# option is sent under a key that is not listed here. (Enforcing that each op
+# reads only these keys at runtime is a separate follow-up.)
 _OPTION_KEYS: dict[str, set[str]] = {
     "info": set(),
     "remove-bg": {
