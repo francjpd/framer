@@ -76,7 +76,6 @@ The historical invocation still works - `main/1` is unchanged, and
 ```bash
 mix run -e 'FramerCore.CLI.main(["remove-bg", "in.mp4", "out.webm", "--color", "0,255,0"])'
 ```
-```
 
 `framer_web` exposes a JSON status/submit surface over the orchestrator at
 `GET /api/status`, `GET /api/jobs/:id` and `POST /api/jobs`, plus the rig/bones
