@@ -3,9 +3,10 @@ defmodule FramerCore.CatalogTest do
   The catalog is the contract an agent reads, so it is tested as one: every
   entry must be complete and self-consistent, the JSON forms must agree with
   each other, and the set of catalogued operations must match the operations
-  the Python Port worker actually registers. The last assertion is the drift
-  guard: a new operation in `framer_worker.py` without a catalog entry fails
-  this suite, and so does a catalog entry the worker cannot run.
+  the Python Port worker actually registers. The drift guard also checks option
+  names: a catalogued option sent under a key the worker never reads fails the
+  suite, so a new option in `framer_worker.py` without a catalog entry (or a
+  catalog entry the worker cannot run) is caught.
   """
 
   use ExUnit.Case, async: true
@@ -100,6 +101,25 @@ defmodule FramerCore.CatalogTest do
                "#{name} is declared internal but the worker has no #{name}"
       end
     end
+
+    @tag :requires_python
+    test "every catalogued option is sent under a key the worker reads" do
+      keys = worker_option_keys()
+
+      for operation <- Catalog.operations() do
+        accepted = Map.get(keys, operation.name, [])
+
+        for option <- operation.options do
+          key = Catalog.worker_key(option)
+
+          if key do
+            assert key in accepted,
+                   "#{operation.name} option #{inspect(option.name)} is sent as #{inspect(key)}, " <>
+                     "which the worker does not read"
+          end
+        end
+      end
+    end
   end
 
   describe "the JSON catalog" do
@@ -186,5 +206,24 @@ defmodule FramerCore.CatalogTest do
     output
     |> String.trim()
     |> String.split(",", trim: true)
+  end
+
+  # The option keys each operation reads, straight from the worker's registry,
+  # so a catalogued option name the worker never reads fails the suite.
+  defp worker_option_keys do
+    worker = Application.get_env(:framer_core, :python_worker)
+    root = worker |> to_string() |> Path.dirname()
+
+    script = """
+    import sys
+    sys.path.insert(0, #{inspect(root)})
+    import framer_worker
+    import json
+    print(json.dumps({k: sorted(v) for k, v in framer_worker._OPTION_KEYS.items()}))
+    """
+
+    {output, 0} = System.cmd(FramerCore.PortWorker.python_executable(), ["-c", script])
+
+    output |> Jason.decode!()
   end
 end

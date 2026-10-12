@@ -123,7 +123,7 @@ defmodule FramerCore.ArgsTest do
 
   test "numbers are parsed as numbers" do
     parsed = parse(["in.mp4", "out.mp4", "--to", "48"], "fps-boost")
-    assert parsed.options["to"] == 48
+    assert parsed.options["target_fps"] == 48
 
     parsed =
       parse(["still.png", "out.webm", "--rig", "rig.json", "--radius-scale", "1.5"], "deform")

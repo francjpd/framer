@@ -17,8 +17,9 @@ defmodule FramerCore.Catalog do
   Add one entry to `@operations`. The suites then enforce the rest:
 
     * `FramerCore.CatalogTest` fails when an operation in the Python Port
-      worker (`framer_worker.py`'s `_OPERATIONS`) has no catalog entry, and
-      when a catalog entry has no worker handler.
+      worker (`framer_worker.py`'s `_OPERATIONS`) has no catalog entry, when a
+      catalog entry has no worker handler, and when a catalogued option is sent
+      under a key the worker never reads.
     * `FramerCore.Args` rejects an invocation the entry does not describe.
 
   ## Machine-readable contract
@@ -73,7 +74,8 @@ defmodule FramerCore.Catalog do
     required: false,
     choices: nil,
     arg: "N",
-    help: "Parallel players for this job (default: the configured worker count)"
+    help: "Parallel players for this job (default: the configured worker count)",
+    worker_key: nil
   }
 
   @operations [
@@ -257,7 +259,7 @@ defmodule FramerCore.Catalog do
       ],
       options: [
         %{
-          name: "to",
+          name: "target_fps",
           flag: "--to",
           short: nil,
           type: :integer,
@@ -455,7 +457,8 @@ defmodule FramerCore.Catalog do
           required: false,
           choices: nil,
           arg: "N",
-          help: "Frame count (default: rig.duration.frames)"
+          help: "Frame count (default: rig.duration.frames)",
+          worker_key: nil
         },
         %{
           name: "fps",
@@ -466,7 +469,8 @@ defmodule FramerCore.Catalog do
           required: false,
           choices: nil,
           arg: "FPS",
-          help: "Output frame rate (default: rig.duration.fps)"
+          help: "Output frame rate (default: rig.duration.fps)",
+          worker_key: nil
         },
         %{
           name: "iterations",
@@ -534,6 +538,15 @@ defmodule FramerCore.Catalog do
   """
   @spec port_operations() :: [String.t()]
   def port_operations, do: names() ++ @port_internal_ops
+
+  @doc """
+  The key an option is sent to the worker under, or `nil` when the BEAM
+  consumes the option itself (worker-pool sizing, frame resolution) and the
+  Python op never reads it. An option without an explicit `:worker_key` is
+  forwarded under its own name.
+  """
+  @spec worker_key(map()) :: String.t() | nil
+  def worker_key(%{} = option), do: Map.get(option, :worker_key, option.name)
 
   @doc "The invocation line for an operation, without the executable."
   @spec usage(operation()) :: String.t()
