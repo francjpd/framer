@@ -1,221 +1,192 @@
 defmodule FramerCore.CLI do
   @moduledoc """
-  Command line interface for the FramerCore orchestration.
+  The `framer` command surface, and the module the escript starts.
 
-  Every operation runs through the same Python Port contract
-  (see `docs/elixir-python-ports.md`). The CLI only resolves the video's frame
-  count / fps, submits the job to the `FramerCore.Orchestrator` and merges the
-  finished chunks - it never touches pixels.
+  Every operation runs through the `FramerCore.Catalog` and the same Python
+  Port contract (see `docs/elixir-python-ports.md`); the CLI only resolves what
+  the invocation asks for and never touches pixels.
 
   Usage:
 
-      mix run -e "FramerCore.CLI.main([\"info\", \"input.mp4\"])"
-      mix run -e "FramerCore.CLI.main([\"remove-bg\", \"input.mp4\", \"output.webm\", \"--color\", \"0,255,0\"])"
-      mix run -e "FramerCore.CLI.main([\"fps-boost\", \"input.mp4\", \"output.mp4\", \"--to\", \"60\"])"
-      mix run -e "FramerCore.CLI.main([\"loop\", \"input.mp4\", \"output.mp4\", \"--method\", \"pingpong\"])"
-      mix run -e "FramerCore.CLI.main([\"deform\", \"still.png\", \"output.webm\", \"--rig\", \"rig.json\"])"
-      mix run -e "FramerCore.CLI.main([\"connect\", \"--id\", \"<pairing id>\", \"--server\", \"http://host:4000\"])"
+      framer list [--json]
+      framer describe <operation> [--json]
+      framer <operation> <input> <output> [options]
+      framer info <file>
+      framer connect --id <pairing id> --server http://host:4000
+      framer --version | --help
+
+  Agents are the reason this exists: `framer list` / `framer describe` are the
+  machine-discoverable catalog, so nobody has to read prose in a README to find
+  out what framer can do. `FramerCore.CLI.main/1` keeps the same entry point it
+  always had, so `mix run -e 'FramerCore.CLI.main(["deform", ...])'` and the
+  `mix remove_bg` / `mix loop_op` / `mix fps_boost` tasks keep working.
+
+  stdout is the machine contract: `list --json` / `describe --json` print JSON,
+  a successful operation prints its output path, and everything else
+  (progress, diagnostics, human help) goes to stderr. Failures exit 1.
   """
 
-  alias FramerCore.Orchestrator
-  alias FramerCore.PortWorker
+  alias FramerCore.Catalog
+  alias FramerCore.JobRunner
 
-  def main(args \\ []) do
-    case args do
+  @doc """
+  Run one command line and halt with a non-zero status on failure.
+
+  This is the escript entry point (`:main_module`) and the entry point of the
+  `mix remove_bg` / `mix loop_op` / `mix fps_boost` tasks. `run/1` does the same
+  work and returns the result, and is what the suites call.
+  """
+  def main(argv) do
+    case run(argv) do
+      {:ok, _} ->
+        :ok
+
+      {:error, message} ->
+        IO.puts(:stderr, "❌ #{message}")
+        System.halt(1)
+    end
+  end
+
+  @doc "Run one command line and return its result."
+  @spec run([String.t()]) :: {:ok, term()} | {:error, String.t()}
+  def run(argv) do
+    case argv do
+      [] ->
+        {:ok, help()}
+
+      ["--help" | _] ->
+        {:ok, help()}
+
+      ["-h" | _] ->
+        {:ok, help()}
+
+      ["--version" | _] ->
+        {:ok, emit(Catalog.version())}
+
+      ["-v" | _] ->
+        {:ok, emit(Catalog.version())}
+
+      ["list" | rest] ->
+        list(rest)
+
+      ["describe", name | rest] ->
+        describe(name, rest)
+
       ["info", path] ->
         info(path)
-
-      ["fps-boost", input, output | opts] ->
-        fps_boost(input, output, opts)
-
-      ["fps_boost", input, output | opts] ->
-        fps_boost(input, output, opts)
-
-      ["remove-bg", input, output | opts] ->
-        remove_bg(input, output, opts)
-
-      ["remove_bg", input, output | opts] ->
-        remove_bg(input, output, opts)
-
-      ["loop", input, output | opts] ->
-        loop_op(input, output, opts)
-
-      ["deform", input, output | opts] ->
-        deform(input, output, opts)
 
       ["connect" | opts] ->
         connect(opts)
 
-      _ ->
-        help()
+      [name | rest] ->
+        case Catalog.get(name) do
+          nil ->
+            {:error,
+             "unknown command #{inspect(name)}#{unknown_hint(name)}. " <>
+               "Run `framer list` to see the operations."}
+
+          operation ->
+            if command_help?(rest) do
+              {:ok, emit(Catalog.render_entry(operation))}
+            else
+              JobRunner.run(operation, rest)
+            end
+        end
     end
   end
 
-  # --- commands ---
+  # --- catalog commands ---
+
+  defp list(argv) do
+    with :ok <- only_json?(argv) do
+      {:ok, emit(if(argv == [], do: Catalog.render_list(), else: Catalog.list_json()))}
+    end
+  end
+
+  defp describe(name, argv) do
+    case Catalog.get(name) do
+      nil ->
+        {:error, "unknown operation #{inspect(name)}#{unknown_hint(name)}. Run `framer list`."}
+
+      operation ->
+        with :ok <- only_json?(argv) do
+          text = Catalog.render_entry(operation)
+
+          {:ok, emit(if(argv == [], do: text, else: Catalog.entry_json(operation)))}
+        end
+    end
+  end
+
+  defp command_help?(argv), do: argv == ["--help"] or argv == ["-h"]
+
+  # --- utility commands ---
 
   defp info(path) do
-    IO.puts("Getting info for: #{path}")
-
-    case run_info(path) do
+    case JobRunner.probe(path) do
       {:ok, info} ->
-        IO.puts("""
-        Video Info:
-          Resolution: #{info["width"]}x#{info["height"]}
-          FPS: #{info["fps"]}
-          Frames: #{info["total_frames"]}
-        """)
+        {:ok,
+         emit("""
+         Video Info: #{path}
+           Resolution: #{info["width"]}x#{info["height"]}
+           FPS: #{info["fps"]}
+           Frames: #{info["total_frames"]}
+         """)}
 
       {:error, reason} ->
-        IO.puts("Error: #{inspect(reason)}")
-    end
-  end
-
-  defp remove_bg(input, output, opts) do
-    options = %{
-      "color" => parse_opt_or_nil(opts, "--color"),
-      "tolerance" => int_opt(opts, "--tolerance", 30),
-      "edges" => int_opt(opts, "--edges", 5),
-      "auto_ranges" => bool_opt(opts, "--auto-ranges", true),
-      "num_ranges" => int_opt(opts, "--num-ranges", 5),
-      "method" => parse_opt(opts, "--method", "color"),
-      "motion_frames" => int_opt(opts, "--motion-frames", 30),
-      "edge_cleanup" => int_opt(opts, "--edge-cleanup", 3),
-      "adaptive_bg" => bool_opt(opts, "--adaptive-bg", false),
-      "refine" => bool_opt(opts, "--refine", false),
-      "refine_tolerance" => int_opt(opts, "--refine-tolerance", 45),
-      "refine_block_size" => int_opt(opts, "--refine-block-size", 32),
-      "force_cpu" => bool_opt(opts, "--force-cpu", false)
-    }
-
-    IO.puts("🚀 Parallel Remove BG: #{input} -> #{output}")
-    submit_for_video("remove-bg", input, output, options)
-  end
-
-  defp fps_boost(input, output, opts) do
-    target_fps = int_opt(opts, "--to", 60)
-
-    case parse_opt_or_nil(opts, "--workers") do
-      nil -> :ok
-      workers -> FramerCore.Supervisor.set_worker_count(String.to_integer(workers))
-    end
-
-    options = %{"target_fps" => target_fps}
-    IO.puts("🚀 Parallel FPS Boost: #{input} -> #{output} (target: #{target_fps}fps)")
-    submit_for_video("fps-boost", input, output, options)
-  end
-
-  defp loop_op(input, output, opts) do
-    options = %{
-      "method" => parse_opt(opts, "--method", "auto"),
-      "fade_color" => parse_opt(opts, "--fade-color", "transparent"),
-      "fade_frames" => int_opt(opts, "--fade-frames", 10),
-      "fade_type" => parse_opt(opts, "--fade-type", "both"),
-      "morph_steps" => int_opt(opts, "--morph-steps", 10),
-      "hold_frames" => int_opt(opts, "--hold-frames", 2),
-      "blend_mode" => parse_opt(opts, "--blend-mode", "add"),
-      "ramp_factor" => float_opt(opts, "--ramp-factor", 1.0),
-      "analyze_only" => bool_opt(opts, "--analyze-only", false),
-      "until" => parse_opt_or_nil(opts, "--until") |> maybe_float()
-    }
-
-    IO.puts("🚀 Loop: #{input} -> #{output} (method: #{options["method"]})")
-    submit_for_video("loop", input, output, options)
-  end
-
-  defp deform(input, output, opts) do
-    rig_path = parse_opt_or_nil(opts, "--rig")
-
-    cond do
-      is_nil(rig_path) ->
-        IO.puts("❌ deform requires --rig <path-to-rig.json>")
-        {:error, :missing_rig}
-
-      true ->
-        with {:ok, rig} <- read_rig(rig_path) do
-          duration = rig["duration"] || %{}
-          total_frames = int_opt(opts, "--frames", duration["frames"] || 0)
-          fps = float_opt(opts, "--fps", duration["fps"] || 24.0)
-
-          # A still-image source is looped by the op over [0, total_frames); an
-          # image output renders exactly one frame so the merge stays a copy.
-          total_frames =
-            if image_output?(output), do: 1, else: total_frames
-
-          if total_frames <= 0 do
-            IO.puts(
-              "❕ Could not determine a frame count; pass --frames or set rig.duration.frames"
-            )
-
-            {:error, :unknown_frame_count}
-          else
-            options = %{
-              "rig" => rig_path,
-              "iterations" => int_opt(opts, "--iterations", 5),
-              "weights" => parse_opt_or_nil(opts, "--weights"),
-              "radius_scale" => maybe_float(parse_opt_or_nil(opts, "--radius-scale")),
-              "still" => true
-            }
-
-            IO.puts(
-              "🚀 Deform: #{input} -> #{output} " <>
-                "(rig: #{rig_path}, #{total_frames} frames @ #{fps}fps)"
-            )
-
-            submit_and_wait("deform", input, output, options,
-              total_frames: total_frames,
-              fps: fps
-            )
-          end
-        end
+        {:error, "could not read #{path}: #{JobRunner.brief(reason)}"}
     end
   end
 
   defp connect(opts) do
-    pairing_id = parse_opt_or_nil(opts, "--id") || parse_opt_or_nil(opts, "--pairing-id")
-    server = parse_opt(opts, "--server", "http://localhost:4000")
+    FramerCore.ensure_started!()
 
-    cond do
-      is_nil(pairing_id) ->
-        IO.puts("❌ connect requires --id <pairing id> (printed by the host at startup)")
-        {:error, :missing_pairing_id}
+    pairing_id = opt(opts, "--id") || opt(opts, "--pairing-id")
+    server = opt(opts, "--server", "http://localhost:4000")
 
-      true ->
-        IO.puts("🔌 Requesting a connection to #{server}…")
+    if is_nil(pairing_id) do
+      {:error, "connect requires --id <pairing id> (printed by the host at startup)"}
+    else
+      do_connect(server, pairing_id)
+    end
+  end
 
-        with {:ok, request_id} <- connect_request(server, pairing_id),
-             {:ok, token} <- connect_poll(server, request_id) do
-          IO.puts("✅ Connection approved. Session token:\n\n#{token}\n")
-          IO.puts("Send it as `Authorization: Bearer <token>` on the content endpoints.")
-          {:ok, token}
-        end
+  defp do_connect(server, pairing_id) do
+    log("🔌 Requesting a connection to #{server}…")
+
+    with {:ok, request_id} <- connect_request(server, pairing_id),
+         {:ok, token} <- connect_poll(server, request_id) do
+      emit("""
+
+      ✅ Connection approved. Session token:
+
+      #{token}
+      """)
+
+      {:ok, token}
     end
   end
 
   defp connect_request(server, pairing_id) do
     case Req.post("#{server}/api/connect", json: %{"id" => pairing_id}) do
       {:ok, %{status: 202, body: %{"request_id" => request_id}}} ->
-        IO.puts("⏳ Pending host approval (request #{request_id}).")
+        log("⏳ Pending host approval (request #{request_id}).")
         {:ok, request_id}
 
       {:ok, %{status: 403}} ->
-        IO.puts("❌ The host rejected that pairing id.")
-        {:error, :invalid_pairing_id}
+        {:error, "the host rejected that pairing id"}
 
       {:ok, %{status: status}} ->
-        IO.puts("❌ Unexpected response (#{status}).")
-        {:error, :unexpected_status}
+        {:error, "unexpected response (#{status})"}
 
       {:error, reason} ->
-        IO.puts("❌ Could not reach the host: #{inspect(reason)}")
-        {:error, reason}
+        {:error, "could not reach the host: #{inspect(reason)}"}
     end
   end
 
   defp connect_poll(server, request_id), do: connect_poll(server, request_id, 600)
 
   defp connect_poll(_server, _request_id, attempts) when attempts <= 0 do
-    IO.puts("❌ Timed out waiting for host approval.")
-    {:error, :timeout}
+    {:error, "timed out waiting for host approval"}
   end
 
   defp connect_poll(server, request_id, attempts) do
@@ -228,178 +199,75 @@ defmodule FramerCore.CLI do
         {:ok, token}
 
       {:ok, %{status: 403}} ->
-        IO.puts("❌ The host denied the connection request.")
-        {:error, :denied}
+        {:error, "the host denied the connection request"}
 
       {:ok, %{status: status}} ->
-        IO.puts("❌ Unexpected response (#{status}).")
-        {:error, :unexpected_status}
+        {:error, "unexpected response (#{status})"}
 
       {:error, reason} ->
-        IO.puts("❌ Could not reach the host: #{inspect(reason)}")
-        {:error, reason}
+        {:error, "could not reach the host: #{inspect(reason)}"}
     end
   end
 
-  defp read_rig(path) do
-    case File.read(path) do
-      {:ok, body} ->
-        case Jason.decode(body) do
-          {:ok, rig} ->
-            {:ok, rig}
+  # --- helpers ---
 
-          {:error, error} ->
-            IO.puts("❌ rig is not valid JSON: #{inspect(error)}")
-            {:error, :bad_rig}
-        end
+  defp only_json?([]), do: :ok
+  defp only_json?(["--json"]), do: :ok
 
-      {:error, reason} ->
-        IO.puts("❌ could not read rig #{path}: #{inspect(reason)}")
-        {:error, :bad_rig}
+  defp only_json?(argv) do
+    {:error, "unknown argument(s) #{Enum.map_join(argv, " ", &inspect/1)}; expected --json"}
+  end
+
+  defp unknown_hint(name) do
+    case closest(name) do
+      nil -> ""
+      near -> " (did you mean #{near}?)"
     end
   end
 
-  defp image_output?(output) do
-    ext = output |> Path.extname() |> String.downcase()
-    ext in [".png", ".jpg", ".jpeg", ".bmp"]
+  defp closest(name) do
+    Catalog.names()
+    |> Enum.max_by(&String.jaro_distance(&1, name), fn -> nil end)
+    |> then(fn near ->
+      if near && String.jaro_distance(near, name) > 0.75, do: near, else: nil
+    end)
   end
 
-  # --- job plumbing ---
-
-  defp submit_for_video(operation, input, output, options) do
-    case run_info(input) do
-      {:ok, info} ->
-        submit_and_wait(operation, input, output, options,
-          total_frames: info["total_frames"],
-          fps: info["fps"]
-        )
-
-      {:error, reason} ->
-        IO.puts("❌ Could not read video info: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp submit_and_wait(operation, input, output, options, submit_opts) do
-    request = [operation: operation, options: options] ++ submit_opts
-
-    case Orchestrator.submit_job(input, output, request) do
-      {:ok, job_id} ->
-        IO.puts("📝 Job #{job_id} submitted (#{operation}).")
-        wait_for_job(job_id)
-
-      {:error, reason} ->
-        IO.puts("❌ Submit failed: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp wait_for_job(job_id) do
-    state = Orchestrator.get_status()
-
-    cond do
-      state.job && state.job.id == job_id && state.job.status == :completed ->
-        IO.puts("🎉 Job completed successfully!")
-        merge_job(state.job, state.completed_chunks)
-
-      state.job && state.job.id == job_id && state.job.status == :failed ->
-        IO.puts(
-          "❌ Job failed: #{length(state.failed_chunks)} chunk(s) could not be processed; " <>
-            "refusing to merge an incomplete result."
-        )
-
-        {:error, :job_failed}
-
-      true ->
-        Process.sleep(500)
-        wait_for_job(job_id)
-    end
-  end
-
-  defp merge_job(job, chunks) do
-    IO.puts("🔗 Merging #{length(chunks)} chunk(s) into #{job.output_path}")
-
-    case FramerCore.Operations.merge_job(job, chunks) do
-      {:ok, %{"output" => output}} ->
-        IO.puts("✓ Success: #{output}")
-        {:ok, output}
-
-      {:error, reason} ->
-        IO.puts("❌ Merge failed: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp run_info(path) do
-    PortWorker.run_once(%{"op" => "info", "input" => path})
-  end
-
-  # --- option parsing helpers ---
-
-  defp parse_opt(opts, flag, default) do
+  defp opt(opts, flag, default \\ nil) do
     case Enum.find_index(opts, &(&1 == flag)) do
       nil -> default
-      idx -> Enum.at(opts, idx + 1, default)
+      index -> Enum.at(opts, index + 1, default)
     end
   end
 
-  defp parse_opt_or_nil(opts, flag) do
-    case Enum.find_index(opts, &(&1 == flag)) do
-      nil -> nil
-      idx -> Enum.at(opts, idx + 1)
-    end
-  end
+  defp emit(%{} = document), do: IO.puts(Jason.encode!(document, pretty: true))
+  defp emit(text) when is_binary(text), do: IO.puts(text)
 
-  defp int_opt(opts, flag, default),
-    do: opts |> parse_opt(flag, to_string(default)) |> String.to_integer()
-
-  defp float_opt(opts, flag, default) do
-    value = parse_opt(opts, flag, to_string(default))
-
-    case Float.parse(value) do
-      {float, _} -> float
-      :error -> default
-    end
-  end
-
-  defp bool_opt(opts, flag, default) do
-    opts |> parse_opt(flag, to_string(default)) |> parse_bool()
-  end
-
-  defp maybe_float(nil), do: nil
-
-  defp maybe_float(str) do
-    case Float.parse(str) do
-      {float, _} -> float
-      :error -> nil
-    end
-  end
-
-  defp parse_bool(true), do: true
-  defp parse_bool(false), do: false
-  defp parse_bool("true"), do: true
-  defp parse_bool("false"), do: false
-  defp parse_bool("1"), do: true
-  defp parse_bool("0"), do: false
-  defp parse_bool(other) when is_binary(other), do: String.downcase(other) == "true"
+  defp log(message), do: IO.puts(:stderr, message)
 
   defp help do
-    IO.puts("""
-    Framer CLI - video processing through the Python Port operation layer
+    operations =
+      Enum.map_join(Catalog.operations(), "\n", fn op -> "    #{op.name}    #{op.summary}" end)
+
+    log("""
+    framer #{Catalog.version()} - #{length(Catalog.operations())} operations over the FramerCore orchestrator
 
     Usage:
-      FramerCore.CLI.main(["info", "path"])
-      FramerCore.CLI.main(["remove-bg", "input", "output", "--color", "0,255,0"])
-        Options: --color, --tolerance, --edges, --auto-ranges, --num-ranges,
-                 --method, --motion-frames, --edge-cleanup, --adaptive-bg,
-                 --refine, --refine-tolerance, --refine-block-size, --force-cpu
-      FramerCore.CLI.main(["fps-boost", "input", "output", "--to", "60", "--workers", "4"])
-      FramerCore.CLI.main(["loop", "input", "output", "--method", "pingpong"])
-        Methods: auto, pingpong, morph, periodic, hold, fade, blend, reverse, speedramp
-      FramerCore.CLI.main(["deform", "still.png", "output.webm", "--rig", "rig.json"])
-        Options: --rig, --frames, --fps, --iterations, --weights, --radius-scale
-      FramerCore.CLI.main(["connect", "--id", "<pairing id>", "--server", "http://host:4000"])
-        Pairs with a running host; the host must approve before any content is served.
+      framer list [--json]                  every operation and its contract
+      framer describe <operation> [--json]  one operation's full contract
+      framer <operation> <input> <output> [options]
+      framer <operation> --help             one operation's contract
+      framer info <file>                   resolution, FPS and frame count
+      framer connect --id <pairing id> [--server http://host:4000]
+      framer --version | --help
+
+    Operations:
+    #{operations}
+
+    `framer list --json` and `framer describe <operation> --json` emit the same
+    catalog as JSON, so an agent can enumerate what framer does without reading
+    any prose. A successful operation prints its output path on stdout and its
+    progress on stderr.
     """)
   end
 end

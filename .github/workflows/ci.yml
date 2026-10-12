@@ -98,6 +98,29 @@ jobs:
           MIX_ENV=dev mix assets.setup
           MIX_ENV=dev mix assets.build
 
+      # Builds the standalone `framer` command over the BEAM orchestrator and
+      # the Python Port, then proves its catalog is reachable and coherent. This
+      # step needs no media work, so a broken build path or a drifted catalog
+      # fails CI even before the suites that exercise real operations.
+      - name: Build the framer escript
+        working-directory: framer/apps/framer_core
+        run: mix escript.build
+
+      - name: framer list and describe are discoverable
+        working-directory: framer/apps/framer_core
+        run: |
+          set -euo pipefail
+          for op in $(./framer list --json \
+              | python3 -c 'import json,sys; print(" ".join(o["name"] for o in json.load(sys.stdin)["operations"]))'); do
+            ./framer describe "$op" --json | python3 -c '
+          import json, sys
+          entry = json.load(sys.stdin)
+          assert entry["name"] == sys.argv[1], entry["name"]
+          assert entry["summary"] and entry["args"] and entry["options"], entry
+          assert entry["usage"].startswith("framer %s " % sys.argv[1]), entry["usage"]
+          print("described", entry["name"])' "$op"
+          done
+
       - name: Test
         run: |
           uv run python -m pytest tests/ -q

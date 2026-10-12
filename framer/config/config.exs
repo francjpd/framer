@@ -75,6 +75,11 @@ config :tailwind,
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
+# A command's stdout is its machine contract - `framer list --json`, a JSON job
+# reply, the output path of a successful operation - so application logging goes
+# to stderr instead, where it keeps reporting the chunk progress it always has.
+config :logger, :default_handler,
+  config: [type: {:device, :standard_error}]
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
