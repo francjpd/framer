@@ -12,6 +12,8 @@
 
 import {
   applyMatrix,
+  backgroundLayer,
+  compositeLayers,
   computeBackwardMap,
   computeDenseWeights,
   computeVertexWeights,
@@ -95,7 +97,9 @@ export const LbsPreview = {
   mounted() {
     this.rig = null;
     this.sourceImage = null;
+    this.characterImage = null;
     this.sourceUrl = this.el.dataset.sourceUrl;
+    this.characterUrl = null;
     this.frame = Number(this.el.dataset.frame || 0);
     this.tool = this.el.dataset.tool || "bones";
     this.selected = this.el.dataset.selected || null;
@@ -121,6 +125,7 @@ export const LbsPreview = {
     this.buildDom();
     this.bindPointer();
     this.loadSource();
+    this.loadCharacterLayer(this.el.dataset.characterUrl || null);
     this.setCursor(this.tool === "bones" ? "crosshair" : "default");
 
     this.handleEvent("rig", ({ rig }) => this.setRig(rig));
@@ -186,6 +191,14 @@ export const LbsPreview = {
       return;
     }
 
+    // A split rig's character layer appears (and changes) as the editor
+    // extracts it, so the preview has to follow the URL rather than cache it.
+    const characterUrl = this.el.dataset.characterUrl || null;
+    if (characterUrl !== this.characterUrl) {
+      this.loadCharacterLayer(characterUrl);
+      return;
+    }
+
     this.draw();
   },
 
@@ -245,6 +258,33 @@ export const LbsPreview = {
       this.draw();
     };
     image.onerror = () => this.setStatus("Could not load the source image");
+    image.src = url;
+  },
+
+  // The character layer of a split rig: the cut-out whose alpha is the
+  // character mask. Without it the preview renders the whole still, which is
+  // exactly the unsplit behaviour - so a rig that is not layered, or whose
+  // layer has not been materialised yet, simply shows the source.
+  loadCharacterLayer(url) {
+    this.characterUrl = url || null;
+
+    if (!url) {
+      this.characterImage = null;
+      this.invalidate();
+      this.draw();
+      return;
+    }
+
+    const image = new Image();
+    image.onload = () => {
+      this.characterImage = image;
+      this.invalidate();
+      this.draw();
+    };
+    image.onerror = () => {
+      this.characterImage = null;
+      this.setStatus("Could not load the character layer");
+    };
     image.src = url;
   },
 
@@ -437,15 +477,30 @@ export const LbsPreview = {
       bind: rig.bind,
     });
 
-    if (bindKey === this.cache.bindKey) return true;
+    // The character layer is part of what the proxy cache is built from: a
+    // different cut-out (or none at all) means the proxy has to be rebuilt.
+    const layerKey = this.characterUrl || "";
+    if (bindKey === this.cache.bindKey && layerKey === (this.cache.layerKey || "")) return true;
 
     const baseScale = Math.min(1, PROXY_MAX / Math.max(rig.canvas.width, rig.canvas.height));
     const proxyRig = scaleRig(rig, baseScale);
     const proxy = { width: proxyRig.canvas.width, height: proxyRig.canvas.height, scale: baseScale };
     proxy.source = this.downscale(proxy.width, proxy.height);
 
+    // A split rig deforms only the character layer, so both layers are proxied
+    // at the same size and the background is derived from them exactly as the
+    // engine derives it.
+    const layered = Boolean(rig.layers && rig.layers.split && this.characterImage);
+    proxy.character = layered
+      ? this.downscaleImage(this.characterImage, proxy.width, proxy.height)
+      : null;
+    proxy.background = layered
+      ? backgroundLayer(proxy.source.data, proxy.width, proxy.height, proxy.character.data)
+      : null;
+
     this.cache = {
       bindKey,
+      layerKey,
       scale: baseScale,
       proxy,
       weights: computeDenseWeights(proxyRig, proxy.width, proxy.height),
@@ -458,13 +513,17 @@ export const LbsPreview = {
   },
 
   downscale(width, height) {
+    return this.downscaleImage(this.sourceImage, width, height);
+  },
+
+  downscaleImage(image, width, height) {
     const scratch = document.createElement("canvas");
     scratch.width = width;
     scratch.height = height;
     const context = scratch.getContext("2d");
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = "high";
-    context.drawImage(this.sourceImage, 0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
     return context.getImageData(0, 0, width, height);
   },
 
@@ -494,10 +553,10 @@ export const LbsPreview = {
 
     this.ensureViewportCanvas();
     const iterations = 5;
+    const { mapX, mapY } = computeBackwardMap(A, T, proxy.width, proxy.height, iterations);
 
     if (this.gl) {
       try {
-        const { mapX, mapY } = computeBackwardMap(A, T, proxy.width, proxy.height, iterations);
         this.drawWebgl(proxy, mapX, mapY);
         return;
       } catch (error) {
@@ -506,7 +565,14 @@ export const LbsPreview = {
       }
     }
 
-    const { mapX, mapY } = computeBackwardMap(A, T, proxy.width, proxy.height, iterations);
+    // A split rig deforms only the character layer and composites the untouched
+    // background underneath - the same two steps the engine runs.
+    if (proxy.character) {
+      const warped = remapBilinear(proxy.character.data, proxy.width, proxy.height, mapX, mapY);
+      this.drawCanvas(compositeLayers(warped, proxy.background));
+      return;
+    }
+
     const rgba = remapBilinear(proxy.source.data, proxy.width, proxy.height, mapX, mapY);
     this.drawCanvas(rgba);
   },
@@ -549,13 +615,20 @@ export const LbsPreview = {
       if (!gl) throw new Error("WebGL2 unavailable");
 
       const program = createProgram(gl);
+      const passthrough = createPassthroughProgram(gl);
       this.gl = gl;
       this.glProgram = program;
+      this.glPassthroughProgram = passthrough;
       this.glLocations = {
         pos: gl.getAttribLocation(program, "a_pos"),
         source: gl.getUniformLocation(program, "u_source"),
         map: gl.getUniformLocation(program, "u_map"),
         size: gl.getUniformLocation(program, "u_size"),
+        passthrough: gl.getUniformLocation(passthrough, "u_source"),
+        passthroughSize: gl.getUniformLocation(passthrough, "u_size"),
+      };
+      this.glPassthroughLocations = {
+        pos: gl.getAttribLocation(passthrough, "a_pos"),
       };
 
       this.glBuffer = gl.createBuffer();
@@ -589,33 +662,92 @@ export const LbsPreview = {
   drawWebgl(proxy, mapX, mapY) {
     const gl = this.gl;
     gl.viewport(0, 0, proxy.width, proxy.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // A split rig is two passes over the same backward map: the background
+    // layer is blitted untouched, then the warped character layer is composited
+    // over it with a straight-alpha "over" so the result matches the engine's
+    // `core.layers.composite`.
+    if (proxy.character) {
+      gl.disable(gl.BLEND);
+      this.drawTexturedQuad(proxy.background, proxy.width, proxy.height);
+
+      gl.enable(gl.BLEND);
+      gl.blendFuncSeparate(
+        gl.SRC_ALPHA,
+        gl.ONE_MINUS_SRC_ALPHA,
+        gl.ONE,
+        gl.ONE_MINUS_SRC_ALPHA
+      );
+      this.drawSampledQuad(proxy.character, proxy.width, proxy.height, mapX, mapY);
+      gl.disable(gl.BLEND);
+      return;
+    }
+
+    gl.disable(gl.BLEND);
+    this.drawSampledQuad(proxy.source, proxy.width, proxy.height, mapX, mapY);
+  },
+
+  // Blit a layer straight through: no remap, which is what keeps the background
+  // unwarped.
+  drawTexturedQuad(layer, width, height) {
+    const gl = this.gl;
 
     gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
     gl.texImage2D(
       gl.TEXTURE_2D,
       0,
       gl.RGBA,
-      proxy.width,
-      proxy.height,
+      width,
+      height,
       0,
       gl.RGBA,
       gl.UNSIGNED_BYTE,
-      new Uint8Array(proxy.source.data.buffer)
+      new Uint8Array(layer.data.buffer)
+    );
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
+
+    gl.useProgram(this.glPassthroughProgram);
+    gl.uniform1i(this.glLocations.passthrough, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.glBuffer);
+    gl.enableVertexAttribArray(this.glPassthroughLocations.pos);
+    gl.vertexAttribPointer(this.glPassthroughLocations.pos, 2, gl.FLOAT, false, 0, 0);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  },
+
+  drawSampledQuad(layer, width, height, mapX, mapY) {
+    const gl = this.gl;
+
+    gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array(layer.data.buffer)
     );
 
-    const map = new Float32Array(proxy.width * proxy.height * 2);
+    const map = new Float32Array(width * height * 2);
     for (let i = 0; i < mapX.length; i++) {
       map[i * 2] = mapX[i];
       map[i * 2 + 1] = mapY[i];
     }
 
     gl.bindTexture(gl.TEXTURE_2D, this.glMapTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, proxy.width, proxy.height, 0, gl.RG, gl.FLOAT, map);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, width, height, 0, gl.RG, gl.FLOAT, map);
 
     gl.useProgram(this.glProgram);
     gl.uniform1i(this.glLocations.source, 0);
     gl.uniform1i(this.glLocations.map, 1);
-    gl.uniform2f(this.glLocations.size, proxy.width, proxy.height);
+    gl.uniform2f(this.glLocations.size, width, height);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
@@ -636,6 +768,7 @@ export const LbsPreview = {
       if (this.glSourceTex) gl.deleteTexture(this.glSourceTex);
       if (this.glMapTex) gl.deleteTexture(this.glMapTex);
       if (this.glProgram) gl.deleteProgram(this.glProgram);
+      if (this.glPassthroughProgram) gl.deleteProgram(this.glPassthroughProgram);
     }
     this.gl = null;
     this.glBuffer = null;
@@ -1399,6 +1532,22 @@ in vec2 a_pos;
 void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
 `;
 
+// Blits a layer straight through, with no remap: the background layer of a
+// split rig is drawn with this so it is never warped. The y flip matches the
+// remap shader - WebGL's fragment origin is the bottom-left of the canvas,
+// while the layer data's first row is the top.
+const PASSTHROUGH_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D u_source;
+uniform vec2 u_size;
+out vec4 outColor;
+void main() {
+  int x = int(floor(gl_FragCoord.x));
+  int y = int(u_size.y) - 1 - int(floor(gl_FragCoord.y));
+  outColor = texelFetch(u_source, ivec2(x, y), 0);
+}
+`;
+
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D u_source;
@@ -1457,6 +1606,23 @@ function createProgram(gl) {
     const log = gl.getProgramInfoLog(program);
     gl.deleteProgram(program);
     throw new Error(`program link failed: ${log}`);
+  }
+  return program;
+}
+
+function createPassthroughProgram(gl) {
+  const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
+  const fragment = compile(gl, gl.FRAGMENT_SHADER, PASSTHROUGH_FRAGMENT_SHADER);
+  const program = gl.createProgram();
+  gl.attachShader(program, vertex);
+  gl.attachShader(program, fragment);
+  gl.linkProgram(program);
+  gl.deleteShader(vertex);
+  gl.deleteShader(fragment);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    const log = gl.getProgramInfoLog(program);
+    gl.deleteProgram(program);
+    throw new Error(`passthrough program link failed: ${log}`);
   }
   return program;
 }

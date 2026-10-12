@@ -389,6 +389,60 @@ def _process_frame_gpu(
     return foreground_mask
 
 
+def character_alpha(
+    frame: np.ndarray,
+    color: list | None = None,
+    tolerance: int = 30,
+    auto_ranges: bool = True,
+    num_ranges: int = 5,
+    adaptive_bg: bool = False,
+    edge_cleanup: int = 3,
+    soft_edges: int = 5,
+) -> np.ndarray:
+    """
+    Character (foreground) alpha for a single still frame.
+
+    This is the background-removal operation's own segmentation applied to one
+    still instead of a frame range: it resolves the background colour from the
+    frame's own border (there is no neighbouring frame to compare against),
+    builds the same auto colour ranges and runs the same ``_process_frame``
+    mask. No second segmenter or model is involved - the returned alpha is
+    exactly the mask the ``remove-bg`` operation would write as the alpha
+    channel, which is what makes it usable as a character mask by a layer split.
+
+    Args:
+        frame: BGR or BGRA still frame.
+        color: Explicit background colour (BGR). Detected from the frame border
+            when omitted.
+        tolerance: Colour tolerance for the generated ranges.
+        auto_ranges: Generate several ranges around the background colour.
+        num_ranges: Number of ranges to generate when ``auto_ranges`` is set.
+        adaptive_bg: Re-detect the background colour from this frame's border.
+        edge_cleanup: Pixels of speckle cleanup to apply to the mask.
+        soft_edges: Pixels of soft edge feathering to apply to the mask.
+
+    Returns:
+        A ``(H, W)`` uint8 mask: ``255`` is character, ``0`` is background.
+    """
+    bgr = frame[:, :, :3] if frame.ndim == 3 and frame.shape[2] == 4 else frame
+
+    if color is None:
+        color = detect_background_color_from_frame_border(bgr)
+
+    if auto_ranges:
+        color_ranges = generate_color_ranges(color, num_ranges, tolerance)
+    else:
+        color_ranges = [{"color": list(color), "tolerance": tolerance}]
+
+    return _process_frame(
+        bgr,
+        color_ranges,
+        soft_edges,
+        edge_cleanup,
+        adaptive_bg,
+    )
+
+
 def _remove_bg_frame_processor(frame: np.ndarray, **kwargs) -> np.ndarray:
     """Frame processor function for parallel background removal."""
     color_ranges = kwargs.get("color_ranges")

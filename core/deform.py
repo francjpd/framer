@@ -47,6 +47,38 @@ from typing import Any
 import cv2
 import numpy as np
 
+from core.errors import RigError
+from core.layers import background_layer, composite
+
+# Re-exported so `from core.deform import RigError` keeps working for callers
+# that have no reason to know the error now lives in its own module.
+__all__ = [
+    "DEFAULT_POWER",
+    "DEFAULT_RADIUS",
+    "IMAGE_EXTENSIONS",
+    "SCHEMA",
+    "SCHEMA_VERSION",
+    "DeformRenderer",
+    "RigError",
+    "apply_lbs",
+    "bone_local_matrix",
+    "build_grid_mesh",
+    "compute_backward_map",
+    "compute_dense_weights",
+    "compute_vertex_weights",
+    "evaluate_bones",
+    "interpolate_keyframes",
+    "is_image_path",
+    "load_or_build_weights",
+    "load_rig",
+    "load_source",
+    "load_source_image",
+    "read_first_video_frame",
+    "rig_fingerprint",
+    "skinning_fields",
+    "validate_rig",
+]
+
 # ---------------------------------------------------------------------------
 # rig schema
 # ---------------------------------------------------------------------------
@@ -61,10 +93,6 @@ DEFAULT_RADIUS = 10.0
 DEFAULT_POWER = 2.0
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
-
-
-class RigError(ValueError):
-    """Raised when a rig document does not satisfy the schema."""
 
 
 def _require(condition: bool, message: str) -> None:
@@ -192,7 +220,60 @@ def validate_rig(rig: Any) -> dict[str, Any]:
             "rig.duration.fps must be > 0",
         )
 
+    _validate_layers(rig)
+
     return rig
+
+
+def _validate_layers(rig: dict[str, Any]) -> None:
+    """
+    Validate the optional ``layers`` field of a rig document.
+
+    Absent means the legacy single-picture render, which is exactly how a rig
+    saved before layers existed keeps loading and rendering unchanged. A
+    document that declares a split must name it as a boolean and may record the
+    character-layer path plus the background-removal settings used to build the
+    mask; the layer files themselves are resolved and materialised by
+    ``core.layers.resolve_character_layer``, so a missing file is a missing
+    asset rather than a schema error.
+    """
+    if "layers" not in rig:
+        return
+
+    layers = rig["layers"]
+    _require(isinstance(layers, dict), "rig.layers must be an object")
+
+    split = layers.get("split", False)
+    _require(isinstance(split, bool), "rig.layers.split must be a boolean")
+
+    character = layers.get("character")
+    if character is not None:
+        _require(
+            isinstance(character, str) and character,
+            "rig.layers.character must be a non-empty string",
+        )
+
+    for key in ("tolerance", "num_ranges", "edge_cleanup", "soft_edges"):
+        value = layers.get(key)
+        if value is not None:
+            _require(
+                isinstance(value, int) and not isinstance(value, bool),
+                f"rig.layers.{key} must be an integer",
+            )
+
+    for key in ("auto_ranges", "adaptive_bg"):
+        value = layers.get(key)
+        if value is not None:
+            _require(isinstance(value, bool), f"rig.layers.{key} must be a boolean")
+
+    color = layers.get("color")
+    if color is not None:
+        _require(
+            isinstance(color, (list, tuple))
+            and len(color) == 3
+            and all(_is_number(part) for part in color),
+            "rig.layers.color must be a [B, G, R] triple",
+        )
 
 
 def _assert_acyclic(bones: Sequence[dict[str, Any]]) -> None:
@@ -888,6 +969,12 @@ class DeformRenderer:
     The renderer owns the source image and the (cached) dense weights; calling
     :meth:`render` only re-evaluates bones and runs the skinning, which is what
     makes chunked export cheap.
+
+    When a character layer is supplied the rig only ever warps that layer: the
+    background layer is derived from the still and the character's alpha and is
+    composited after the deformation without ever being resampled, so the
+    background is identical in every frame. Without one the renderer behaves
+    exactly as before and deforms the whole still.
     """
 
     def __init__(
@@ -898,6 +985,7 @@ class DeformRenderer:
         weights: np.ndarray | None = None,
         weights_cache: str | os.PathLike[str] | None = None,
         still: bool | None = None,
+        character: np.ndarray | None = None,
     ):
         self.rig = validate_rig(rig)
 
@@ -911,6 +999,19 @@ class DeformRenderer:
         self.width = canvas_width
         self.height = canvas_height
         self.iterations = max(1, int(iterations))
+
+        self.character = None
+        self.background = None
+        if character is not None:
+            # Resize the character layer with the same call as the still so the
+            # two stay pixel-aligned at the canvas size, then punch the
+            # character out of the still to build the untouched background.
+            if character.shape[1] != canvas_width or character.shape[0] != canvas_height:
+                character = cv2.resize(
+                    character, (canvas_width, canvas_height), interpolation=cv2.INTER_LINEAR
+                )
+            self.character = np.ascontiguousarray(character)
+            self.background = background_layer(self.source, self.character)
 
         if weights is None:
             weights = load_or_build_weights(
@@ -934,7 +1035,14 @@ class DeformRenderer:
     def render(self, frame: int) -> np.ndarray:
         """Render one frame index to a BGRA image."""
         world = evaluate_bones(self.rig, int(frame))
-        return apply_lbs(self.source, self.weights, world, self.bind, self.iterations)
+
+        if self.character is None:
+            return apply_lbs(self.source, self.weights, world, self.bind, self.iterations)
+
+        # Only the character layer is resampled; the background layer is passed
+        # through untouched and composited underneath it.
+        warped = apply_lbs(self.character, self.weights, world, self.bind, self.iterations)
+        return composite(warped, self.background)
 
     def render_to_png(
         self,

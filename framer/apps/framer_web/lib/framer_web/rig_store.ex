@@ -37,6 +37,33 @@ defmodule FramerWeb.RigStore do
   @doc "Absolute path of a project's `rig.json`."
   def rig_path(id), do: Path.join(project_dir(id), "rig.json")
 
+  @doc """
+  Absolute path of a project's materialised character layer, if it exists.
+
+  The engine writes this when a split rig first renders; it is the cut-out the
+  rig deforms, and the only layer file a project keeps (the background layer is
+  derived from the still and the character's alpha).
+  """
+  def character_layer_path(id) do
+    with :ok <- validate_id(id) do
+      path = Path.join(project_dir(id), Rig.layer_filename())
+      if File.exists?(path), do: path
+    else
+      _ -> nil
+    end
+  end
+
+  @doc "Remove a project's character layer, returning the rig to a single picture."
+  def remove_character_layer(id) do
+    with :ok <- validate_id(id) do
+      path = Path.join(project_dir(id), Rig.layer_filename())
+      File.rm(path)
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
   @doc "Absolute path of a project's exported result, if it exists."
   def result_path(id) do
     with :ok <- validate_id(id) do
@@ -188,7 +215,8 @@ defmodule FramerWeb.RigStore do
       frames: Rig.frame_count(rig),
       fps: Rig.fps(rig),
       has_source: source_path(id) != nil,
-      has_result: result_path(id) != nil
+      has_result: result_path(id) != nil,
+      layered: Rig.split?(rig)
     }
   end
 

@@ -375,6 +375,112 @@ defmodule FramerWeb.RigTest do
     result
   end
 
+  describe "layers" do
+    test "a document without layers is a single-picture rig and stays valid" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      assert Rig.layers(rig) == %{}
+      refute Rig.split?(rig)
+      assert Rig.character_layer(rig) == nil
+      assert {:ok, _} = Rig.validate(rig, project_dir: "/tmp/project")
+    end
+
+    test "enable_split records the layer, its path and the mask settings" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      split = Rig.enable_split(rig, tolerance: 45)
+      assert Rig.split?(split)
+
+      assert Rig.layers(split) == %{
+               "split" => true,
+               "character" => "character.png",
+               "tolerance" => 45,
+               "soft_edges" => 5,
+               "edge_cleanup" => 3,
+               "auto_ranges" => true
+             }
+
+      assert {:ok, _} = Rig.validate(split, project_dir: "/tmp/project")
+      assert Jason.decode!(Jason.encode!(split)) == split
+    end
+
+    test "clear_layers returns the rig to a single-picture document" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      cleared = rig |> Rig.enable_split() |> Rig.clear_layers()
+      refute Map.has_key?(cleared, "layers")
+      refute Rig.split?(cleared)
+      assert {:ok, _} = Rig.validate(cleared, project_dir: "/tmp/project")
+    end
+
+    test "set_character_layer records the materialised path" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+      split = Rig.enable_split(rig)
+
+      assert Rig.character_layer(Rig.set_character_layer(split, "hero.png")) == "hero.png"
+      # A rig that is not split ignores the call rather than half-splitting.
+      assert Rig.character_layer(Rig.set_character_layer(rig, "hero.png")) == nil
+    end
+
+    test "changing a mask setting drops the recorded layer so it is recomputed" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      split =
+        rig
+        |> Rig.enable_split()
+        |> Rig.set_character_layer("hero.png")
+        |> Rig.set_layer_settings(tolerance: 70)
+
+      assert get_in(split, ["layers", "tolerance"]) == 70
+      assert Rig.character_layer(split) == nil
+    end
+
+    test "rejects a malformed layers field" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      assert {:error, message} =
+               Rig.validate(Map.put(rig, "layers", "yes"), project_dir: "/tmp/project")
+
+      assert message =~ "rig.layers must be an object"
+
+      assert {:error, message} =
+               Rig.validate(Map.put(rig, "layers", %{"split" => "yes"}),
+                 project_dir: "/tmp/project"
+               )
+
+      assert message =~ "rig.layers.split must be a boolean"
+
+      assert {:error, message} =
+               Rig.validate(
+                 Map.put(rig, "layers", %{"split" => true, "character" => ""}),
+                 project_dir: "/tmp/project"
+               )
+
+      assert message =~ "rig.layers.character must be a non-empty string"
+
+      assert {:error, message} =
+               Rig.validate(
+                 Map.put(rig, "layers", %{"split" => true, "tolerance" => "wide"}),
+                 project_dir: "/tmp/project"
+               )
+
+      assert message =~ "rig.layers settings must be a plain JSON value"
+    end
+
+    test "rejects a character layer path that escapes the project directory" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      for path <- ["/etc/character.png", "../character.png", "nested/../../character.png"] do
+        escaping = put_in(rig, ["layers"], %{"split" => true, "character" => path})
+
+        assert {:error, message} =
+                 Rig.validate(escaping, project_dir: "/tmp/project")
+
+        assert message =~ "rig.layers.character must stay within the project directory"
+      end
+    end
+  end
+
   describe "geometry helpers" do
     test "distance_to_segment handles the perpendicular, clamped and degenerate cases" do
       assert_in_delta Rig.distance_to_segment(5, 5, 0, 0, 10, 0), 5.0, 1.0e-9

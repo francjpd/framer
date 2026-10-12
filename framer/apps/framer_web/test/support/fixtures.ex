@@ -9,6 +9,15 @@ defmodule FramerWebWeb.Fixtures do
 
   alias FramerWeb.Rig
 
+  defp png_from_raw(raw, width, height) do
+    idat = :zlib.compress(raw)
+
+    signature = <<0x89, "PNG\r\n", 0x1A, "\n">>
+    ihdr = <<width::32, height::32, 8, 6, 0, 0, 0>>
+
+    signature <> chunk("IHDR", ihdr) <> chunk("IDAT", idat) <> chunk("IEND", "")
+  end
+
   @doc "Build a solid-colour RGBA PNG of the given size."
   def png(width, height, color \\ {40, 120, 200, 255}) do
     {r, g, b, a} = color
@@ -56,6 +65,39 @@ defmodule FramerWebWeb.Fixtures do
     ihdr = <<width::32, height::32, 8, 6, 0, 0, 0>>
 
     signature <> chunk("IHDR", ihdr) <> chunk("IDAT", idat) <> chunk("IEND", "")
+  end
+
+  @doc """
+  A keyable still: a near-flat green background with a solid red character block.
+
+  The background carries a tight three-step band so a *resample* would show up
+  as an interpolated green value, which a perfectly flat colour could hide,
+  while staying inside the background-removal key's tolerance so the character
+  mask comes out exact. Built 64x64 with the character at rows 32..47 and
+  columns 8..24, far from every edge.
+
+  This is the Elixir mirror of `tests/layer_scene.py`, so the engine proof and
+  the end-to-end proof exercise the same picture. PNG scanlines are RGBA, so a
+  red block is `<<255, 0, 0, 255>>`.
+  """
+  def keyable_still(width \\ 64, height \\ 64) do
+    raw =
+      for y <- 0..(height - 1), into: <<>> do
+        pixels =
+          for x <- 0..(width - 1), into: <<>> do
+            cond do
+              y >= 32 and y < 48 and x >= 8 and x < 24 -> <<255, 0, 0, 255>>
+              rem(x, 3) == 1 -> <<0, 191, 0, 255>>
+              rem(x, 3) == 2 -> <<0, 192, 0, 255>>
+              true -> <<0, 190, 0, 255>>
+            end
+          end
+
+        # Each scanline starts with its PNG filter byte (0 = no filtering).
+        <<0>> <> pixels
+      end
+
+    png_from_raw(raw, width, height)
   end
 
   @doc "A rig with one horizontal bone through the middle of a `size` canvas."

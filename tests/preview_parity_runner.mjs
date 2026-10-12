@@ -20,9 +20,12 @@ const spec = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 if (spec.source) {
   const source = new Uint8Array(fs.readFileSync(spec.source));
 
-  const output = renderFrameRGBA(source, spec.width, spec.height, spec.rig, spec.frame, {
-    iterations: spec.iterations,
-  });
+  const options = { iterations: spec.iterations };
+  if (spec.character) {
+    options.character = new Uint8Array(fs.readFileSync(spec.character));
+  }
+
+  const output = renderFrameRGBA(source, spec.width, spec.height, spec.rig, spec.frame, options);
 
   fs.writeFileSync(spec.output, Buffer.from(output));
 }

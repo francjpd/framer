@@ -49,6 +49,11 @@ path, a frame range and JSON options - exactly the existing Port contract.
     the radius when the bone is created; the slider then adjusts it.
   * **Bind** - the global bind **power** / **radius scale** and `Auto-bind
     mesh`, which rebuilds the control mesh and per-vertex weights.
+  * **Layers** - the character/background split: **Extract the character**
+    keys the background out of the still and from then on only the character
+    layer is deformed, plus a **Background tolerance** slider for the key and a
+    **Remove the character layer** button to go back to one still. See
+    [Character and background layers](#character-and-background-layers).
 * **Centre viewport.** A `phx-hook="LbsPreview"` element with a small toolbar:
   **Mesh** (toggle the wireframe), **Labels** (toggle bone names), a **zoom**
   group (**−** / **+** zoom out and in, **Fit** back to the contain-fit) and a
@@ -153,11 +158,63 @@ The two are kept honest by a golden-frame parity test,
 `tests/deform_scene.py` with the Python renderer and with `lbs.mjs` under Node
 and compares the dense weights, the rendered pixels and the interpolated poses.
 It skips when Node is absent; the Python golden test (`tests/test_golden_deform.py`)
-still covers the authoritative render. The server-side timeline value/velocity
+still covers the authoritative render. The same file proves the layering agrees:
+it renders the split scene from `tests/layer_scene.py` through the preview with
+the character layer and compares against the engine's layered render. The
+server-side timeline value/velocity
 graph interpolates poses with `FramerWeb.Rig.interpolate_pose/3`, which mirrors
 `core.deform.interpolate_keyframes` and `lbs.mjs` `interpolatePoses`; an Elixir
 test (`framer/apps/framer_web/test/framer_web/rig_test.exs`) keeps it tied to
 `lbs.mjs` so it cannot drift from the browser preview.
+
+## Character and background layers
+
+A still holds the character and the background in one picture, so a bone whose
+influence reaches both deforms both. That is the documented behaviour of the
+influence weighting, not a defect - a wide radius over a small character simply
+reaches the background. The Layers panel adds the editing capability that
+separates them: **Extract the character** splits the still into a character
+layer and a background layer, and from then on the rig deforms the character
+layer only. The background stays put while the character moves, in the preview
+and in the final render alike.
+
+The split is produced with the engine's existing background-removal
+segmentation (the `remove-bg` operation's own colour key, run over the single
+still); there is no second segmenter or model. Its alpha is the character mask:
+
+* **character layer** - the still's colour with the mask as its alpha, so the
+  cut-out is exactly the pixels the background removal kept. It is written to
+  `character.png` beside the still and is the only layer the rig resamples.
+* **background layer** - the still's colour with the inverse mask as its
+  alpha, i.e. the same picture with the character punched out. It is derived
+  from the still and the mask, never resampled, so it is identical in every
+  frame.
+
+### Fill of a vacated region
+
+Where the character moves away from, neither layer covers the pixel any more,
+so the composite is **transparent**: the vacated region shows none of the
+character's original pixels and no reconstructed background either. That is
+the chosen fill, and its limit is deliberate - there is no inpainting, so the
+hole stays see-through until the character animates back over it (at which
+point the frame is again exactly the original still). On export the video
+carries alpha in that region (WebM/VP9), and a single-frame PNG render is
+transparent there too; anything that flattens the alpha (for example an MP4
+encode, or viewing the PNG on an opaque background) shows whatever is behind
+it instead.
+
+### Limits of the split
+
+* The key is colour-based. It separates whatever differs from the background
+  colour, which is detected from the still's own border. A character that
+  shares colours with the background, a background that is not close to a flat
+  colour, or a background that touches the frame edges unevenly, produces a
+  rougher cut-out; the **Background tolerance** slider (10-90) trades catching
+  more of the background against biting into the character, and changing it
+  re-extracts the cut-out.
+* The split state is per rig document (`layers` in `framer.rig` v1), so a rig
+  saved before this capability existed has no `layers` field and renders as
+  one still exactly as before. Turning the split off drops the field again.
 
 ## Persistence
 
@@ -168,6 +225,7 @@ default `apps/framer_web/priv/projects`):
 ```
 <root>/<rig-id>/
   source.png      # uploaded still
+  character.png   # the materialised character layer, once the rig is split
   rig.json        # framer.rig v1 - the engine-facing contract
   output.webm     # merged export, once rendered
 ```
@@ -189,6 +247,7 @@ Extends the existing `/api` surface (`FramerWebWeb.RigController`):
 | `POST` | `/api/rigs/:id/render` | render one full-quality frame (PNG) |
 | `POST` | `/api/rigs/:id/export` | submit a chunked `deform` export |
 | `GET` | `/api/rigs/:id/source` | the source still |
+| `GET` | `/api/rigs/:id/character` | the materialised character layer of a split rig |
 | `GET` | `/api/rigs/:id/result` | the merged export (download) |
 
 Export progress is polled from the existing `GET /api/jobs/:id`; the server-side
@@ -237,7 +296,13 @@ uv run python -m pytest tests/ -q          # engine + preview parity
 The editor end-to-end path (`framer_web/test/.../rig_e2e_test.exs`) uploads a
 still, binds a rig, renders a frame and exports a video through the JSON
 surface, then decodes the merged WebM and asserts the deformation on pixels -
-the same shape as the engine's `port_integration_test.exs`.
+the same shape as the engine's `port_integration_test.exs`. It also carries the
+layer proofs end to end: a split rig's background pixels are byte-identical
+between the rest frame and the posed frame, the character layer moves, and the
+vacated region is transparent. The engine-side proof lives in
+`tests/test_layered_deform.py` over the same scene (`tests/layer_scene.py`),
+including a video export whose background stays put while the unsplit export of
+the same scene drifts.
 
 The browser proof suite (`browser_preview_test.exs`, tagged
 `:requires_chromium`) drives the real Chromium through

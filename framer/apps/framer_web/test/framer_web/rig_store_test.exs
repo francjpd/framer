@@ -113,4 +113,49 @@ defmodule FramerWeb.RigStoreTest do
     assert {:error, reason} = RigStore.save(rig)
     assert inspect(reason) =~ "version"
   end
+
+  test "the character layer is stored, read and removed beside the still" do
+    rig = Fixtures.simple_rig(32)
+    {:ok, saved} = RigStore.save(rig)
+    id = saved["id"]
+
+    assert RigStore.character_layer_path(id) == nil
+
+    layer = Path.join(RigStore.project_dir(id), Rig.layer_filename())
+    File.write!(layer, "cutout")
+    assert RigStore.character_layer_path(id) == layer
+
+    assert :ok = RigStore.remove_character_layer(id)
+    assert RigStore.character_layer_path(id) == nil
+
+    # Removing an absent layer is harmless, and an unsafe id never escapes.
+    assert :ok = RigStore.remove_character_layer(id)
+    assert :ok = RigStore.remove_character_layer("../escape")
+  end
+
+  test "a split rig saves and loads with its layered state round-tripped" do
+    {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+
+    split =
+      rig
+      |> Rig.enable_split(tolerance: 55)
+      |> Rig.set_character_layer("hero.png")
+
+    assert {:ok, saved} = RigStore.save(split)
+    assert RigStore.load(saved["id"]) == {:ok, saved}
+
+    loaded = elem(RigStore.load(saved["id"]), 1)
+    assert Rig.split?(loaded)
+    assert get_in(loaded, ["layers", "tolerance"]) == 55
+    assert Rig.character_layer(loaded) == "hero.png"
+
+    # The project list reports the layered state so the palette can show it.
+    summary = Enum.find(RigStore.list(), &(&1.id == saved["id"]))
+    assert summary.layered
+
+    # Turning it back off round-trips as the single-picture document it was.
+    assert {:ok, cleared} = RigStore.save(Rig.clear_layers(loaded))
+    assert RigStore.load(cleared["id"]) == {:ok, cleared}
+    refute Rig.split?(elem(RigStore.load(cleared["id"]), 1))
+  end
 end

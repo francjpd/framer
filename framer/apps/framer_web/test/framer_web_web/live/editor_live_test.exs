@@ -609,4 +609,117 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert render(view) =~ "Load a still image to start rigging."
     refute has_element?(view, "button[phx-value-id='#{id}']")
   end
+
+  describe "the layer split" do
+    test "offers the extraction control and explains the single-picture default", %{conn: conn} do
+      rig = saved_rig("Layers off")
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      assert has_element?(view, "#toggle-background-layer", "Extract the character")
+      # HEEx escapes the apostrophe to an entity, so the assertion window is the
+      # apostrophe-free part of the sentence.
+      assert render(view) =~ "reach also moves the background. Extract the character to"
+      assert render(view) =~ "give it its own layer"
+      refute has_element?(view, "#layer-tolerance-form")
+      refute has_element?(view, "#viewport[data-layers='true']")
+      refute has_element?(view, "#viewport[data-character-url]")
+    end
+
+    test "asks for a rig first when none is loaded", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/editor")
+
+      render_click(view, "toggle_background_layer", %{})
+      assert render(view) =~ "Load a rig first"
+    end
+
+    test "extracting the character persists the layered state and points the viewport at it", %{
+      conn: conn
+    } do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _bones = Fixtures.simple_rig(32) |> Map.put("id", rig["id"]) |> then(&RigStore.save/1)
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.split?(saved)
+      assert get_in(saved, ["layers", "tolerance"]) == 30
+      assert FramerWeb.Rig.character_layer(saved) == FramerWeb.Rig.layer_filename()
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+
+      assert has_element?(view, "#viewport[data-layers='true']")
+
+      assert has_element?(
+               view,
+               "#viewport[data-character-url='/api/rigs/#{rig["id"]}/character']"
+             )
+
+      assert has_element?(view, "span.badge", "layered")
+      assert has_element?(view, "#toggle-background-layer", "Remove the character layer")
+      assert render(view) =~ "the background now stays put"
+    end
+
+    test "turning the split off returns the rig to one layer and drops the file", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+
+      render_click(view, "toggle_background_layer", %{})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      refute FramerWeb.Rig.split?(saved)
+      refute Map.has_key?(saved, "layers")
+      assert RigStore.character_layer_path(rig["id"]) == nil
+
+      refute File.exists?(
+               Path.join(RigStore.project_dir(rig["id"]), FramerWeb.Rig.layer_filename())
+             )
+
+      assert has_element?(view, "#toggle-background-layer", "Extract the character")
+      refute has_element?(view, "#layer-tolerance-form")
+    end
+
+    test "changing the tolerance re-extracts with the new setting", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_change(view, "set_layer_tolerance", %{"tolerance" => "65"})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.split?(saved)
+      assert get_in(saved, ["layers", "tolerance"]) == 65
+      assert has_element?(view, "#layer-tolerance-form input[value='65']")
+    end
+
+    test "a non-positive tolerance is rejected without touching the document", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_change(view, "set_layer_tolerance", %{"tolerance" => "0"})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      refute FramerWeb.Rig.split?(saved)
+      assert render(view) =~ "Tolerance must be a positive number"
+    end
+
+    test "undo restores the unsplit document", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      assert FramerWeb.Rig.split?(elem(RigStore.load(rig["id"]), 1))
+
+      render_click(view, "undo", %{})
+
+      {:ok, restored} = RigStore.load(rig["id"])
+      refute FramerWeb.Rig.split?(restored)
+      refute has_element?(view, "#viewport[data-layers='true']")
+    end
+  end
 end

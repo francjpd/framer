@@ -13,8 +13,14 @@ defmodule FramerWeb.Renderer do
       chunks into the project's `output.*`. Progress is broadcast on the
       project's PubSub topic.
 
-  The final render is authoritative: the interactive preview is only a proxy
-  of the same fixed-point linear-blend-skinning math.
+  `split_character/2` is the bridge's third entry point and shares the same
+  contract: it materialises the character layer of a split rig with the engine's
+  existing background-removal segmentation.
+
+  A split rig (`rig.layers.split`) renders through the same `deform` operation
+  as ever - the rig document tells the engine which character layer to deform -
+  so the final render is authoritative for the layering exactly as it is for the
+  math. The interactive preview is only a proxy of the same layering.
   """
 
   require Logger
@@ -57,7 +63,8 @@ defmodule FramerWeb.Renderer do
         "options" => %{
           "rig" => rig_path,
           "still" => true,
-          "iterations" => opts[:iterations] || 6
+          "iterations" => opts[:iterations] || 6,
+          "character" => opts[:character]
         }
       }
 
@@ -68,6 +75,60 @@ defmodule FramerWeb.Renderer do
               {:ok, binary} -> {:ok, binary}
               {:error, reason} -> {:error, reason}
             end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      after
+        File.rm(output)
+      end
+    end
+  end
+
+  @doc """
+  Materialise the character layer of a split rig and return `{:ok, path}`.
+
+  This is the editor's "extract the character" action. It runs the engine's
+  existing background-removal segmentation over the still through the same Port
+  contract every other render uses - the BEAM still only ever sends paths, a
+  frame range and JSON options - and writes `<project>/character.png`, the
+  cut-out whose alpha is the character mask.
+
+  The render that produces it is frame 0 of the very rig being split, so the
+  composited still the editor shows afterwards is exactly what the first render
+  will produce. The response carries the materialised path, which is what the
+  editor records in `rig.layers.character` and persists.
+  """
+  def split_character(rig, opts \\ []) do
+    with {:ok, source} <- source_path(rig) do
+      workspace = workspace_dir(rig)
+      rig_path = Path.join(workspace, "split_rig.json")
+      output = Path.join(workspace, "split_#{System.unique_integer([:positive])}.png")
+
+      File.mkdir_p!(workspace)
+      File.write!(rig_path, Jason.encode!(rig))
+
+      request = %{
+        "op" => "deform",
+        "input" => source,
+        "output" => output,
+        "start_frame" => 0,
+        "end_frame" => 0,
+        "fps" => Rig.fps(rig),
+        "options" => %{
+          "rig" => rig_path,
+          "still" => true,
+          "iterations" => opts[:iterations] || 6
+        }
+      }
+
+      try do
+        case PortWorker.run_once(request, Keyword.get(opts, :timeout, @default_timeout)) do
+          {:ok, %{"character" => path}} when is_binary(path) ->
+            {:ok, path}
+
+          {:ok, _response} ->
+            {:error, :layer_not_materialised}
 
           {:error, reason} ->
             {:error, reason}
@@ -99,6 +160,7 @@ defmodule FramerWeb.Renderer do
           "iterations" => opts[:iterations] || 5
         }
         |> maybe_put("weights", opts[:weights])
+        |> maybe_put("character", opts[:character])
 
       case Orchestrator.submit_job(source, output,
              operation: "deform",
