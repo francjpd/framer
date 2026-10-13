@@ -604,39 +604,19 @@ defmodule FramerWebWeb.BrowserPreviewTest do
       ]
   end
 
-  # Asserts the drawn bone lands on the image point the pointer pressed. The red
-  # subject block is the only saturated red in the viewport, so its box centre is
-  # the on-screen position of the clicked image point; the selected bone's joint
-  # disc (`#fbbf24`, the light amber the hook fills its joints with, lighter than
-  # the `#f59e0b` stroke) must be centred on that same screen position. Tolerances
-  # are device pixels: 1 CSS px is 1.5 device px at DPR 1.5, and the centring
-  # error is dominated by Playwright's rounded element-screenshot origin.
-  defp assert_overlay_aligned(shot) do
-    assert %{width: width, height: height} = assert_png!(shot)
-    assert subject_pixels(shot, width, height) >= @subject_min
-
-    {image_x, image_y, joint_count, joint_x, joint_y} =
-      alignment_scan(shot, width, height, @alignment_window)
-
-    assert image_x, "the portrait still's red subject block must be visible in the viewport"
-    assert joint_count >= @joint_min
-
-    drift = :math.sqrt((joint_x - image_x) ** 2 + (joint_y - image_y) ** 2)
-
-    assert drift <= @alignment_tolerance,
-           "the bone's joint drifted #{Float.round(drift, 1)} device px from the image point " <>
-             "it was created on (image point at #{image_x},#{image_y}, joint at " <>
-             "#{Float.round(joint_x, 1)},#{Float.round(joint_y, 1)})"
-  end
-
-  # Asserts the drawn bone sits under the pointer while the drag is still in
-  # progress. The red subject block is the only saturated red on screen, so its
-  # box centre is the on-screen position of the image point the live-drag proof
-  # moved the pointer to; the selected bone's joint disc must already be drawn
-  # there. Before live drag rendering the overlay kept drawing the bone at its
-  # pre-drag rest, so the joint pixels near the pointer were absent (or the
-  # disc sat tens of pixels away) and this assertion failed.
-  defp assert_drawn_joint_under_pointer(shot) do
+  # Asserts the drawn bone sits under the image point the pointer is over - the
+  # *drawn* overlay compared against the rendered image. The red subject block is
+  # the only saturated red in the viewport, so its box centre in the screenshot
+  # is the on-screen position of the image point the pointer is over; the
+  # selected bone's joint disc (`#fbbf24`, the light amber the hook fills its
+  # joints with, lighter than the `#f59e0b` stroke) must be centred on that same
+  # screen position. Comparing stored image coordinates (what the
+  # click-precision tests do) cannot see these defects, because the stored data
+  # was already right. `stage` is `:placed` for a bone drawn where it was
+  # created and `:dragging` for a joint following a pointer that is still down.
+  # Tolerances are device pixels: 1 CSS px is 1.5 device px at DPR 1.5, and the
+  # centring error is dominated by Playwright's rounded element-screenshot origin.
+  defp assert_overlay_aligned(shot, stage \\ :placed) do
     assert %{width: width, height: height} = assert_png!(shot)
     assert subject_pixels(shot, width, height) >= @subject_min
 
@@ -644,17 +624,33 @@ defmodule FramerWebWeb.BrowserPreviewTest do
       alignment_scan(shot, width, height, @alignment_window)
 
     assert image_x, "the still's red subject block must be visible in the viewport"
-
-    assert joint_count >= @joint_min,
-           "no joint disc was drawn at the pointer mid-drag: the bone did not follow the pointer " <>
-             "(the still's centre is at #{image_x},#{image_y} in device px)"
+    assert joint_count >= @joint_min, joint_missing_message(stage, image_x, image_y)
 
     drift = :math.sqrt((joint_x - image_x) ** 2 + (joint_y - image_y) ** 2)
 
     assert drift <= @alignment_tolerance,
-           "the drawn joint drifted #{Float.round(drift, 1)} device px from the pointer while the " <>
-             "drag was still in progress (pointer image point at #{image_x},#{image_y}, joint at " <>
-             "#{Float.round(joint_x, 1)},#{Float.round(joint_y, 1)})"
+           joint_drift_message(stage, drift, image_x, image_y, joint_x, joint_y)
+  end
+
+  defp joint_missing_message(:placed, _image_x, _image_y) do
+    "the selected bone's joint disc is not drawn where the pointer placed the bone"
+  end
+
+  defp joint_missing_message(:dragging, image_x, image_y) do
+    "no joint disc was drawn at the pointer mid-drag: the bone did not follow the pointer " <>
+      "(the still's centre is at #{image_x},#{image_y} in device px)"
+  end
+
+  defp joint_drift_message(:placed, drift, image_x, image_y, joint_x, joint_y) do
+    "the bone's joint drifted #{Float.round(drift, 1)} device px from the image point " <>
+      "it was created on (image point at #{image_x},#{image_y}, joint at " <>
+      "#{Float.round(joint_x, 1)},#{Float.round(joint_y, 1)})"
+  end
+
+  defp joint_drift_message(:dragging, drift, image_x, image_y, joint_x, joint_y) do
+    "the drawn joint drifted #{Float.round(drift, 1)} device px from the pointer while the " <>
+      "drag was still in progress (pointer image point at #{image_x},#{image_y}, joint at " <>
+      "#{Float.round(joint_x, 1)},#{Float.round(joint_y, 1)})"
   end
 
   test "element resize without a window resize: a click still lands where placed", %{
@@ -1067,7 +1063,7 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     }
 
     assert run_scenario(spec, root) == :ok
-    assert_drawn_joint_under_pointer(mid)
+    assert_overlay_aligned(mid, :dragging)
   end
 
   # The same proof for the whole-bone translate drag: pressing the bone body
@@ -1097,7 +1093,7 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     }
 
     assert run_scenario(spec, root) == :ok
-    assert_drawn_joint_under_pointer(mid)
+    assert_overlay_aligned(mid, :dragging)
   end
 
   # Zoom proof: the viewport zooms via Ctrl/Cmd+wheel and the in/out/fit
