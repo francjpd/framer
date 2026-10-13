@@ -10,7 +10,7 @@ operation for the final render and export.
 │ header: title · shortcut hint · undo · save                    │
 ├──────────────┬────────────────────────────────────────────────┤
 │ Workflow     │ centre viewport                                 │
-│  step guide  │  toolbar: Mesh · Labels · proxy badge           │
+│  step guide  │  toolbar: Mesh · Labels · Reticle · proxy badge            │
 │ Media        │  source still + control mesh + bones            │
 │  upload      │  client-side WebGL2 / canvas LBS preview        │
 │  projects    │                                                 │
@@ -50,15 +50,24 @@ path, a frame range and JSON options - exactly the existing Port contract.
   * **Bind** - the global bind **power** / **radius scale** and `Auto-bind
     mesh`, which rebuilds the control mesh and per-vertex weights.
 * **Centre viewport.** A `phx-hook="LbsPreview"` element with a small toolbar:
-  **Mesh** (toggle the wireframe) and **Labels** (toggle bone names), plus a
-  `proxy preview` badge. It renders the source still, the control mesh and the
-  bones, and handles all pointer interaction locally. The selected bone also
+  **Mesh** (toggle the wireframe), **Labels** (toggle bone names), **Reticle**
+  (toggle the aim marker) and a `proxy preview` badge. It renders the source
+  still, the control mesh and the bones, and handles all pointer interaction
+  locally. The selected bone also
   carries two call-to-action handles: a **move** disc beside its midpoint
   (translate) and a **rotate** ring just beyond its tail (rotate about the
   head), so posing no longer needs a precise grab of a thin joint. The cursor
   reflects what is under the pointer - a grab cursor over a handle or the bone
   body, a select cursor over a joint, and a crosshair (Bones) or default (Pose)
   cursor over empty canvas:
+  * **Aim reticle.** While the pointer is inside the viewport, a green ring and
+    cross mark the image coordinate the editor maps that pointer to - the exact
+    point a newly placed bone would land on a click. It is drawn from the same
+    pointer-to-image mapping every other interaction uses (`LbsPreview.toImage`),
+    so it reports the editor's own aim rather than a second guess at it. It is a
+    view setting, not rig data: it lives in the LiveView assigns and the
+    viewport's client state, never in `rig.json`, and the toolbar's **Reticle**
+    toggle switches it off. It is on by default.
   * **Bones tool** - drag empty canvas to create a bone (`head → tail`); drag a
     joint to move it; drag the body to translate it; dropping near another
     bone's tip parents to it (chains). The move handle translates the bone and
@@ -223,14 +232,17 @@ The browser proof suite (`browser_preview_test.exs`, tagged
 `tests/browser/editor_runner.mjs` (playwright-core, no browser download) and
 asserts preview pixels on saved `#viewport` screenshots - the browser-level
 regressions for the slice-1 blank-preview defect and, since slice 4, for
-viewport resize, WebGL context loss/recovery and fullscreen re-measure. It also
-covers click precision (a bone landing where clicked at non-1 DPR, after a
-resize, and on EXIF-rotated photographs whose displayed dimensions differ from
-their stored pixels) and the call-to-action handles (the move handle posing
-rather than mutating rest geometry, the rotate handle dragging the tail without
-a start jump). It excludes itself when
-Chromium, Node or the built editor assets are missing, so to run it locally,
-install the harness and build the assets first:
+  viewport resize, WebGL context loss/recovery and fullscreen re-measure. It also
+  covers click precision (a bone landing where clicked at non-1 DPR, after a
+  resize, and on EXIF-rotated photographs whose displayed dimensions differ from
+  their stored pixels), the aim reticle (the marker sitting on the image point
+  the editor maps a known pointer position to, following the pointer, going away
+  when its view toggle is off, and marking the same point a bone then lands on),
+  and the call-to-action handles (the move handle posing
+  rather than mutating rest geometry, the rotate handle dragging the tail without
+  a start jump). It excludes itself when
+  Chromium, Node or the built editor assets are missing, so to run it locally,
+  install the harness and build the assets first:
 
 ```bash
 (cd tests/browser && npm ci)

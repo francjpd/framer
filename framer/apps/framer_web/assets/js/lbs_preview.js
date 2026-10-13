@@ -86,6 +86,7 @@ export const LbsPreview = {
     this.selected = this.el.dataset.selected || null;
     this.meshVisible = this.el.dataset.mesh !== "false";
     this.labelsVisible = this.el.dataset.labels === "true";
+    this.reticleVisible = this.el.dataset.reticle !== "false";
     this.overrides = {};
     this.drag = null;
     this.hover = null;
@@ -152,6 +153,8 @@ export const LbsPreview = {
     this.selected = this.el.dataset.selected || null;
     this.meshVisible = this.el.dataset.mesh !== "false";
     this.labelsVisible = this.el.dataset.labels === "true";
+    this.reticleVisible = this.el.dataset.reticle !== "false";
+    if (!this.reticleVisible) this.hideReticle();
 
     const url = this.el.dataset.sourceUrl;
     if (url !== this.sourceUrl) {
@@ -174,6 +177,7 @@ export const LbsPreview = {
     this.el.removeEventListener("pointerdown", this.onPointerDown);
     window.removeEventListener("pointermove", this.onPointerMove);
     window.removeEventListener("pointerup", this.onPointerUp);
+    this.el.removeEventListener("pointerleave", this.onPointerLeave);
     this.releaseGl();
   },
 
@@ -188,8 +192,9 @@ export const LbsPreview = {
     this.overlay.className = "framer-viewport-overlay";
     this.status = document.createElement("div");
     this.status.className = "framer-viewport-status";
+    this.reticle = this.buildReticle();
 
-    this.surface.append(this.canvas, this.overlay, this.status);
+    this.surface.append(this.canvas, this.overlay, this.status, this.reticle);
     this.ctx = this.overlay.getContext("2d");
     this.bindCanvasEvents();
   },
@@ -198,9 +203,28 @@ export const LbsPreview = {
     this.onPointerDown = (event) => this.pointerDown(event);
     this.onPointerMove = (event) => this.pointerMove(event);
     this.onPointerUp = (event) => this.pointerUp(event);
+    this.onPointerLeave = () => this.hideReticle();
     this.el.addEventListener("pointerdown", this.onPointerDown);
     window.addEventListener("pointermove", this.onPointerMove);
     window.addEventListener("pointerup", this.onPointerUp);
+    this.el.addEventListener("pointerleave", this.onPointerLeave);
+  },
+
+  // The aim reticle: a marker drawn at the image coordinate the editor maps the
+  // pointer to - the exact point a newly placed bone would land on a click. It
+  // is a view setting (the viewport toolbar turns it off), never rig data, so
+  // it is built and positioned entirely here from the pointer's own image point
+  // rather than from anything persisted.
+  buildReticle() {
+    const reticle = document.createElement("div");
+    reticle.id = "viewport-reticle";
+    reticle.className = "framer-viewport-reticle";
+    reticle.innerHTML =
+      '<span class="framer-viewport-reticle-ring"></span>' +
+      '<span class="framer-viewport-reticle-x"></span>' +
+      '<span class="framer-viewport-reticle-y"></span>';
+    reticle.style.display = "none";
+    return reticle;
   },
 
   loadSource() {
@@ -289,6 +313,56 @@ export const LbsPreview = {
     const x = (event.clientX - rect.left - this.view.offsetX) / this.view.scale;
     const y = (event.clientY - rect.top - this.view.offsetY) / this.view.scale;
     return [x, y];
+  },
+
+  // The one pointer-to-image mapping the viewport has: the image point under the
+  // pointer, or `null` when the pointer is outside the viewport or the view has
+  // not been measured yet. Every consumer - the hover cursor, the aim reticle -
+  // goes through this, so the reticle marks the point the rest of the editor
+  // would act on, not a second, independently derived guess.
+  pointerPoint(event) {
+    if (!this.rig || !this.view) return null;
+
+    const rect = this.el.getBoundingClientRect();
+    const inside =
+      event.clientX >= rect.left &&
+      event.clientX <= rect.right &&
+      event.clientY >= rect.top &&
+      event.clientY <= rect.bottom;
+    if (!inside) return null;
+
+    return this.toImage(event);
+  },
+
+  // The aim reticle, driven from the pointer's own image point. It is shown only
+  // while the toggle is on and the pointer is inside the viewport; its position
+  // is recomputed from the live view by `positionReticle`, so a re-measure
+  // (resize, DPR change, fullscreen) keeps it on the same image point.
+  updateReticle(point) {
+    this.reticlePoint = point || null;
+    this.positionReticle();
+  },
+
+  positionReticle() {
+    if (!this.reticle) return;
+
+    if (!this.reticleVisible || !this.reticlePoint || !this.view) {
+      this.reticle.style.display = "none";
+      return;
+    }
+
+    // The reticle element shares the canvases' coordinate frame: an untranslated
+    // origin at the viewport's top-left corner, so `project` places it directly
+    // over the overlay point for the same image coordinate.
+    const [x, y] = this.project(this.reticlePoint);
+    this.reticle.style.display = "block";
+    this.reticle.style.transform = `translate(${x}px, ${y}px)`;
+    this.reticle.dataset.imageX = this.reticlePoint[0].toFixed(3);
+    this.reticle.dataset.imageY = this.reticlePoint[1].toFixed(3);
+  },
+
+  hideReticle() {
+    this.updateReticle(null);
   },
 
   poses() {
@@ -585,6 +659,10 @@ export const LbsPreview = {
     const dpr = window.devicePixelRatio || 1;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+    // The reticle is a DOM element rather than overlay pixels, but it is placed
+    // from the same freshly measured view, so it stays aligned with the canvas
+    // through every resize, DPR change and fullscreen transition.
+    this.positionReticle();
 
     if (!this.rig || !this.view || !this.cache.vertexWeights) return;
 
@@ -817,19 +895,12 @@ export const LbsPreview = {
 
   // Reflect what is under the cursor: a grab cursor over a handle or the bone
   // body (both drag to translate/rotate), a select cursor over a joint, and a
-  // crosshair / default cursor over empty canvas depending on the tool.
-  updateHover(event) {
-    if (!this.rig || !this.view) return;
+  // crosshair / default cursor over empty canvas depending on the tool. The
+  // hover affordances and the aim reticle share the one pointer-to-image
+  // mapping below, so the cursor and the reticle can never disagree.
+  updateHover(point) {
+    if (!point || !this.rig) return;
 
-    const rect = this.el.getBoundingClientRect();
-    const inside =
-      event.clientX >= rect.left &&
-      event.clientX <= rect.right &&
-      event.clientY >= rect.top &&
-      event.clientY <= rect.bottom;
-    if (!inside) return;
-
-    const point = this.toImage(event);
     const world = evaluateBones(this.rig, this.frame, this.poses());
 
     if (this.handleHit(point, world)) {
@@ -938,8 +1009,14 @@ export const LbsPreview = {
   },
 
   pointerMove(event) {
+    // The reticle and the hover cursor both read the pointer through the one
+    // mapping; a drag keeps the raw mapping (the pointer may legitimately leave
+    // the viewport mid-drag) and simply moves the reticle with it.
+    const hoverPoint = this.pointerPoint(event);
+    this.updateReticle(hoverPoint);
+
     if (!this.drag) {
-      this.updateHover(event);
+      this.updateHover(hoverPoint);
       return;
     }
     const point = this.toImage(event);

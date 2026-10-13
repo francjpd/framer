@@ -42,6 +42,11 @@ defmodule FramerWebWeb.BrowserPreviewTest do
   @subject_min 5_000
   # Bone stroke (selected #f59e0b, width 4) and joint (#fbbf24): amber pixels.
   @bone_min 200
+  # The aim reticle's ring and cross hairs, painted in the create-bone green
+  # (#22c55e) the viewport already uses. The measured paint is roughly 200
+  # device pixels at DPR 1.5 once anti-aliased edges that blend into the red
+  # subject are excluded, so the floor sits well below that and far above zero.
+  @reticle_min 100
 
   setup_all do
     # Isolate the editor's projects dir exactly like rig_e2e_test.exs, so the
@@ -445,6 +450,138 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     }
 
     assert run_scenario(spec, root) == :ok
+  end
+
+  test "aim reticle: the marker sits on the image point the editor maps the pointer to", %{
+    root: root
+  } do
+    shots = Path.join(root, "reticle")
+    File.mkdir_p!(shots)
+
+    on = Path.join(shots, "reticle_on.png")
+    off = Path.join(shots, "reticle_off.png")
+
+    # The POC the captain asked for: the viewport marks the image point the
+    # editor computes for the pointer - the exact point a new bone's head would
+    # land on. The scenario moves the real pointer to two known image points and
+    # asserts, each time, that the marker is on screen at that image point, then
+    # switches the view setting off and asserts it stays hidden, and finally
+    # closes the loop by creating a bone from the marked point and reading it
+    # back over the API. deviceScaleFactor 1.5 matches the captain's display
+    # scaling.
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      deviceScaleFactor: 1.5,
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps: [
+        %{name: "open the editor shell", open: "/editor"},
+        %{name: "shell renders", waitForSelector: "#editor-shell"},
+        %{
+          name: "create a non-square rig",
+          fetch: %{
+            url: "/api/rigs",
+            method: "POST",
+            headers: %{"content-type" => "application/json"},
+            body: %{
+              "name" => "browser-reticle",
+              "filename" => "subject.png",
+              "source_base64" => Base.encode64(Fixtures.png_with_subject(200, 100, @subject))
+            }
+          },
+          saveAs: "create"
+        },
+        %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+        %{name: "viewport renders", waitForSelector: "#viewport"},
+        %{
+          name: "source image drawn",
+          waitForFunction:
+            "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+        },
+        %{name: "let the preview settle", sleep: 1_000},
+        %{
+          name: "the reticle is a view setting that defaults to on",
+          evaluate: "() => document.querySelector('#viewport').dataset.reticle",
+          expect: %{eq: "true"}
+        },
+        %{
+          name: "move the pointer to image (100,50)",
+          pointerImage: %{image: [100, 50], imgW: 200, imgH: 100, settleMs: 200}
+        },
+        %{
+          name: "the reticle marks the pointer's image point",
+          waitForFunction: reticle_at(100, 50)
+        },
+        reticle_on_screen(100, 50, 200, 100),
+        %{name: "screenshot the visible reticle", screenshot: %{path: on, selector: "#viewport"}},
+        %{
+          name: "move the pointer to image (40,80)",
+          pointerImage: %{image: [40, 80], imgW: 200, imgH: 100, settleMs: 200}
+        },
+        %{name: "the reticle follows the pointer", waitForFunction: reticle_at(40, 80)},
+        reticle_on_screen(40, 80, 200, 100),
+        %{name: "resize the browser window", resize: %{width: 1600, height: 1000}},
+        %{name: "let the preview re-fit", sleep: 500},
+        %{
+          name: "the reticle still marks the same image point",
+          waitForFunction: reticle_at(40, 80)
+        },
+        reticle_on_screen(40, 80, 200, 100),
+        %{
+          name: "switch the reticle off",
+          click: %{selector: "button[phx-click=\"toggle_reticle\"]"}
+        },
+        %{
+          name: "the viewport records the toggle off",
+          waitForFunction: "() => document.querySelector('#viewport').dataset.reticle === 'false'"
+        },
+        %{
+          name: "move the pointer back into the viewport",
+          pointerImage: %{image: [100, 50], imgW: 200, imgH: 100, settleMs: 200}
+        },
+        %{
+          name: "the reticle stays hidden while the view setting is off",
+          waitForFunction:
+            "() => { const el = document.querySelector('#viewport .framer-viewport-reticle'); return !!el && el.style.display === 'none'; }"
+        },
+        %{name: "screenshot the hidden reticle", screenshot: %{path: off, selector: "#viewport"}},
+        %{
+          name: "switch the reticle back on",
+          click: %{selector: "button[phx-click=\"toggle_reticle\"]"}
+        },
+        %{
+          name: "the viewport records the toggle back on",
+          waitForFunction: "() => document.querySelector('#viewport').dataset.reticle === 'true'"
+        },
+        %{
+          name: "move the pointer back into the viewport",
+          pointerImage: %{image: [100, 50], imgW: 200, imgH: 100, settleMs: 200}
+        },
+        %{name: "the reticle is visible again", waitForFunction: reticle_at(100, 50)},
+        %{name: "let the reticle draw", sleep: 300},
+        %{
+          name: "create a bone from image (100,50) to (140,70)",
+          dragImage: %{from: [100, 50], to: [140, 70], imgW: 200, imgH: 100, settleMs: 300}
+        },
+        %{
+          name: "bone reaches the editor hierarchy",
+          waitForSelector: "button[phx-click=\"select_bone\"]"
+        },
+        bone_head_error(0, 100, 50)
+      ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+
+    # The marker really renders: green reticle pixels are painted while the
+    # pointer is in the viewport and none once the toggle is off. Nothing else in
+    # the viewport paints green (the subject is red, bones and handles amber), so
+    # the pair is a clean before/after.
+    assert %{width: won, height: hon} = assert_png!(on)
+    assert reticle_pixels(on, won, hon) >= @reticle_min
+
+    assert %{width: woff, height: hoff} = assert_png!(off)
+    assert reticle_pixels(off, woff, hoff) == 0
   end
 
   test "element resize without a window resize: a click still lands where placed", %{
@@ -898,6 +1035,41 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     }
   end
 
+  # The reticle records the image point it is marking on itself, so a scenario
+  # can wait until the editor's own reading of the pointer reaches a known image
+  # point before checking where the marker ended up on screen.
+  defp reticle_at(x, y) do
+    "() => {
+      const el = document.querySelector('#viewport .framer-viewport-reticle');
+      if (!el || el.style.display !== 'block') return false;
+      return Math.abs(Number(el.dataset.imageX) - #{x}) < 0.5 && Math.abs(Number(el.dataset.imageY) - #{y}) < 0.5;
+    }"
+  end
+
+  # Asserts the visible reticle is centred on the expected image point: it reads
+  # the marker's own bounding box and compares it with the image point projected
+  # through the viewport's letterbox geometry, so a marker drawn anywhere else on
+  # the canvas fails.
+  defp reticle_on_screen(x, y, img_w, img_h) do
+    %{
+      name: "the reticle is drawn at image (#{x}, #{y})",
+      evaluate: "() => {
+          const viewport = document.querySelector('#viewport');
+          const el = viewport.querySelector('.framer-viewport-reticle');
+          if (!el || el.style.display !== 'block') return 99;
+          const r = viewport.getBoundingClientRect();
+          const scale = Math.min(r.width / #{img_w}, r.height / #{img_h});
+          const offsetX = (r.width - #{img_w} * scale) / 2;
+          const offsetY = (r.height - #{img_h} * scale) / 2;
+          const box = el.getBoundingClientRect();
+          const cx = box.left + box.width / 2;
+          const cy = box.top + box.height / 2;
+          return Math.hypot(cx - (r.left + offsetX + #{x} * scale), cy - (r.top + offsetY + #{y} * scale));
+        }",
+      expect: %{lt: 2}
+    }
+  end
+
   defp run_scenario(spec, root) do
     spec_path = Path.join(root, "scenario_#{System.unique_integer([:positive])}.json")
     File.write!(spec_path, Jason.encode!(spec))
@@ -972,6 +1144,15 @@ defmodule FramerWebWeb.BrowserPreviewTest do
   defp bone_pixels(path, width, height) do
     count_pixels(path, width, height, fn r, g, b, a ->
       r >= 200 and g >= 100 and b <= 120 and a >= 200
+    end)
+  end
+
+  # Aim-reticle pixels: the ring and cross hairs in the create-bone green. The
+  # subject red (r == 255) and the amber bone/handle overlay (r >= 200) are both
+  # excluded by the red ceiling, so only the reticle counts.
+  defp reticle_pixels(path, width, height) do
+    count_pixels(path, width, height, fn r, g, b, a ->
+      r <= 120 and g >= 140 and b <= 170 and a >= 200
     end)
   end
 

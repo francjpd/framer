@@ -77,6 +77,11 @@ defmodule FramerWebWeb.EditorLive do
      |> assign(:pending_pose, %{})
      |> assign(:mesh_visible, true)
      |> assign(:labels_visible, false)
+     # The aim reticle is a *view* setting, not rig data: it lives here and in
+     # the viewport's client state only, so it never reaches the saved rig
+     # document. It starts on so the first look at a rig shows where the editor
+     # believes the pointer is.
+     |> assign(:reticle_visible, true)
      |> assign(:graph_channel, "rot")
      |> assign(:undo, [])
      |> assign(:status, nil)
@@ -181,6 +186,10 @@ defmodule FramerWebWeb.EditorLive do
 
   def handle_event("toggle_labels", _params, socket) do
     {:noreply, assign(socket, :labels_visible, !socket.assigns.labels_visible)}
+  end
+
+  def handle_event("toggle_reticle", _params, socket) do
+    {:noreply, assign(socket, :reticle_visible, !socket.assigns.reticle_visible)}
   end
 
   def handle_event("set_graph_channel", %{"channel" => channel}, socket)
@@ -514,6 +523,7 @@ defmodule FramerWebWeb.EditorLive do
           selected={@selected_bone}
           mesh_visible={@mesh_visible}
           labels_visible={@labels_visible}
+          reticle_visible={@reticle_visible}
         />
       </div>
 
@@ -855,6 +865,7 @@ defmodule FramerWebWeb.EditorLive do
   attr :selected, :string, default: nil
   attr :mesh_visible, :boolean, default: true
   attr :labels_visible, :boolean, default: false
+  attr :reticle_visible, :boolean, default: true
 
   defp viewport(assigns) do
     ~H"""
@@ -874,6 +885,13 @@ defmodule FramerWebWeb.EditorLive do
         >
           Labels
         </button>
+        <button
+          phx-click="toggle_reticle"
+          class={["btn btn-xs", @reticle_visible && "btn-active"]}
+          title="Show or hide the aim reticle (the image point under the pointer)"
+        >
+          Reticle
+        </button>
         <span class="badge badge-ghost badge-xs">proxy preview</span>
       </div>
       <div
@@ -886,6 +904,7 @@ defmodule FramerWebWeb.EditorLive do
         data-selected={@selected || ""}
         data-mesh={to_string(@mesh_visible)}
         data-labels={to_string(@labels_visible)}
+        data-reticle={to_string(@reticle_visible)}
         class="absolute inset-0"
       >
         <div id="viewport-surface" phx-update="ignore" class="absolute inset-0"></div>

@@ -132,3 +132,54 @@
   font-size: 0.75rem;
   pointer-events: none;
 }
+
+/* Aim reticle: the marker the LbsPreview hook places at the image point under
+   the pointer. A zero-sized, pointer-events-free anchor translated onto that
+   point, with a ring and cross hairs drawn around it in the same green as the
+   create-bone drag, so it reads as "a new bone would land here". It is drawn in
+   CSS pixels rather than on the overlay canvas so it stays a fixed visual size
+   at every devicePixelRatio and needs no overlay redraw to move. */
+.framer-viewport-reticle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  contain: layout;
+}
+
+.framer-viewport-reticle-ring,
+.framer-viewport-reticle-x,
+.framer-viewport-reticle-y {
+  position: absolute;
+  background: none;
+}
+
+.framer-viewport-reticle-ring {
+  top: -8px;
+  left: -8px;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid rgb(34 197 94 / 0.95);
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45);
+}
+
+.framer-viewport-reticle-x {
+  top: -0.75px;
+  left: -14px;
+  width: 28px;
+  height: 1.5px;
+  background: rgb(34 197 94 / 0.95);
+  box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.45);
+}
+
+.framer-viewport-reticle-y {
+  top: -14px;
+  left: -0.75px;
+  width: 1.5px;
+  height: 28px;
+  background: rgb(34 197 94 / 0.95);
+  box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.45);
+}

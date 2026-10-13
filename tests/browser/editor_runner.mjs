@@ -47,6 +47,9 @@
 //        "from": [100, 50], "to": [140, 70],          // [ix, iy] in the image
 //        "imgW": 200, "imgH": 100,                     // image dimensions
 //        "steps": 8, "settleMs": 300}},
+//     {"name": "...", "pointerImage": {                            // pointer only
+//        "image": [100, 50], "imgW": 200, "imgH": 100}, // move (no button) to an
+//                                                      // image point
 //     {"name": "...", "resize": {"width": 1600, "height": 1000}},
 //     {"name": "...", "screenshot": {"path": "/abs/out.png", "selector": "#viewport"}}
 //   ]
@@ -138,6 +141,26 @@ const saves = {};
 
 function stepTimeout(step) {
   return step.timeoutMs || spec.stepTimeoutMs || 30_000;
+}
+
+// Client (page) coordinates of an image point, computed in-page from the
+// viewport element's own letterboxed geometry. The runner deliberately measures
+// the geometry the way the editor does, so a scenario can aim the real pointer at
+// a known image coordinate and the assertion stays an independent reading of the
+// same mapping.
+async function imageToClient(page, selector, image, imgW, imgH) {
+  return page.evaluate(
+    ({ selector, image, imgW, imgH }) => {
+      const el = document.querySelector(selector);
+      const r = el.getBoundingClientRect();
+      const scale = Math.min(r.width / imgW, r.height / imgH);
+      const offsetX = (r.width - imgW * scale) / 2;
+      const offsetY = (r.height - imgH * scale) / 2;
+      const [ix, iy] = image;
+      return [r.left + offsetX + ix * scale, r.top + offsetY + iy * scale];
+    },
+    { selector, image, imgW, imgH }
+  );
 }
 
 function substitute(value) {
@@ -308,6 +331,15 @@ async function runStep(step, index, total) {
     }
     await page.mouse.up();
     if (drag.settleMs) await page.waitForTimeout(drag.settleMs);
+  } else if (step.pointerImage) {
+    // Move the pointer (no button, no click) to an image coordinate, so a
+    // scenario can drive the editor's hover state - the aim reticle - at a known
+    // image point and assert where the editor believes the pointer is.
+    const pointer = step.pointerImage;
+    const selector = pointer.selector || "#viewport";
+    const client = await imageToClient(page, selector, pointer.image, pointer.imgW, pointer.imgH);
+    await page.mouse.move(client[0], client[1]);
+    if (pointer.settleMs) await page.waitForTimeout(pointer.settleMs);
   } else if (step.dragHandle) {
     // Drag one of the CTA handles (move / rotate) beside the selected bone.
     // The step computes the handle's on-screen centre from the bone's image

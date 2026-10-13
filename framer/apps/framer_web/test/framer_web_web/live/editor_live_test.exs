@@ -299,6 +299,12 @@ defmodule FramerWebWeb.EditorLiveTest do
     render_click(view, "toggle_labels")
     assert has_element?(view, "#viewport[data-labels='true']")
 
+    render_click(view, "toggle_reticle")
+    assert has_element?(view, "#viewport[data-reticle='false']")
+
+    render_click(view, "toggle_reticle")
+    assert has_element?(view, "#viewport[data-reticle='true']")
+
     render_hook(view, "step_frame", %{"delta" => 3})
     assert has_element?(view, "#viewport[data-frame='3']")
 
@@ -308,6 +314,29 @@ defmodule FramerWebWeb.EditorLiveTest do
     render_hook(view, "set_graph_channel", %{"channel" => "tx"})
     assert has_element?(view, "#timeline-track")
     assert render(view) =~ "tx"
+  end
+
+  # The aim reticle is a view setting, not rig data: it lives in the LiveView
+  # assigns and the viewport's client state, so toggling it never reaches the
+  # persisted document the engine would later read.
+  test "the aim reticle defaults to on, toggles off, and never enters the saved rig", %{
+    conn: conn
+  } do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(48))
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    assert has_element?(view, "#viewport[data-reticle='true']")
+    assert has_element?(view, "button[phx-click=\"toggle_reticle\"]")
+
+    render_click(view, "toggle_reticle")
+    assert has_element?(view, "#viewport[data-reticle='false']")
+
+    render_click(view, "toggle_reticle")
+    assert has_element?(view, "#viewport[data-reticle='true']")
+
+    {:ok, saved} = RigStore.load(rig["id"])
+    refute Map.has_key?(saved, "reticle")
+    refute Map.has_key?(saved, "view")
   end
 
   test "renders a value and velocity graph for the selected bone", %{conn: conn} do
