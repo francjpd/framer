@@ -27,6 +27,13 @@ FramerCore.Supervisor
 - `FramerCore.Dispatch` — where a chunk runs: `:local` today, `:remote` is the
   documented seam.
 - `FramerCore.Operations` — one-off `merge`/`info` calls through the same Port.
+- `FramerCore.Catalog` — the single definition of every operation the `framer`
+  command exposes: arguments, options, defaults, what each one produces.
+- `FramerCore.Args` — the generic parser that turns a command line into an
+  invocation of a catalog entry.
+- `FramerCore.JobRunner` — resolves the frame count, submits to the orchestrator,
+  reports progress and merges the finished chunks.
+- `FramerCore.CLI` — the `framer` surface itself (and the escript's `:main_module`).
 
 ## Setup
 
@@ -40,13 +47,34 @@ mix deps.get
 mix test
 ```
 
-## Usage
+## The `framer` command
+
+```bash
+# Build the escript (the binary lands in this app's directory)
+mix escript.build
+
+# Describe yourself
+./framer list [--json]
+./framer describe remove-bg [--json]
+
+# Run
+./framer remove-bg in.mp4 out.webm --color 0,255,0
+./framer fps-boost in.mp4 out.mp4 --to 60 --workers 4
+./framer loop in.mp4 out.mp4 --method pingpong
+./framer deform still.png out.webm --rig rig.json
+./framer info in.mp4
+```
+
+`FramerCore.Catalog` is the single definition those commands render from and the
+runner drives from, so the help and the JSON catalog cannot drift. See
+[`docs/agent-command-surface.md`](../../../docs/agent-command-surface.md) for the
+JSON contract, the build path and why there is no MCP surface on top of it.
+
+The historical invocation still works - `main/1` is unchanged, and
+`mix remove_bg` / `mix loop_op` / `mix fps_boost` are front-ends over it:
 
 ```bash
 mix run -e 'FramerCore.CLI.main(["remove-bg", "in.mp4", "out.webm", "--color", "0,255,0"])'
-mix run -e 'FramerCore.CLI.main(["fps-boost", "in.mp4", "out.mp4", "--to", "60", "--workers", "4"])'
-mix run -e 'FramerCore.CLI.main(["loop", "in.mp4", "out.mp4", "--method", "pingpong"])'
-mix run -e 'FramerCore.CLI.main(["info", "in.mp4"])'
 ```
 
 `framer_web` exposes a JSON status/submit surface over the orchestrator at

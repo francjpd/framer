@@ -18,6 +18,10 @@ framer is a set of small, composable video-editing operations. Each one is deter
 ## Built to scale
 - **Composable operations**: Chain multiple video transformations
 - **Simple CLI**: `python cli.py remove-bg input.mp4 output.webm --color "0,255,0"`
+- **One discoverable command**: `framer` describes itself - `framer list --json`
+  enumerates the operations and `framer describe <operation>` the contract of one
+  of them, so an agent never reads prose to find out what it can do. See
+  [`docs/agent-command-surface.md`](docs/agent-command-surface.md)
 - **Config support**: Use JSON configs for complex operations
 - **Modular**: Each operation is independent and extensible
 - **Video looping**: Create seamless infinite loops with optical flow matching
@@ -81,6 +85,13 @@ not dispatched by the orchestrator.
 | `merge` | finishing step | FFmpeg concat of the finished chunks into the requested output. |
 | `info` | one-off | `ffprobe` resolution, FPS and frame count. |
 | `export` | Python CLI | Web-optimized `.webm` / `.mp4` / `.gif` output, alongside the other standalone Python CLI operations (`resize`, `trim`, `recolor`, `glow`, `outline`). |
+
+The `framer` command runs the orchestrator operations above (`remove-bg`,
+`fps-boost`, `loop`, `deform`) plus the one-off `info`, and its catalog
+(`FramerCore.Catalog`) is what `framer list` prints. `merge` is the finishing
+step it runs for you. The standalone Python CLI operations are not in the
+catalog yet - the Port worker has no handler for them, so `framer` cannot run
+them; use `python cli.py <operation>`.
 
 ### `deform`
 Rig/bones puppet-warp of a still image over a timeline, rendered frame by frame
@@ -264,15 +275,26 @@ mix deps.get
 mix test
 ```
 
-**3. Process a video through the orchestrator** (from `framer/`):
+**3. Build the `framer` command and process a video** (from `framer/`):
 
 ```bash
-mix run -e 'FramerCore.CLI.main(["info", "input.mp4"])'
-mix run -e 'FramerCore.CLI.main(["remove-bg", "input.mp4", "output.webm", "--color", "0,255,0"])'
-mix run -e 'FramerCore.CLI.main(["fps-boost", "input.mp4", "output.mp4", "--to", "60", "--workers", "4"])'
-mix run -e 'FramerCore.CLI.main(["loop", "input.mp4", "output.mp4", "--method", "pingpong"])'
-mix run -e 'FramerCore.CLI.main(["deform", "still.png", "output.webm", "--rig", "rig.json"])'
+cd apps/framer_core && mix escript.build   # builds ./framer
+cd ../../..
+
+./framer list                    # what framer can do, and how to call it
+./framer info input.mp4
+./framer describe remove-bg      # one operation's full contract
+./framer remove-bg input.mp4 output.webm --color "0,255,0"
+./framer fps-boost input.mp4 output.mp4 --to 60 --workers 4
+./framer loop input.mp4 output.mp4 --method pingpong
+./framer deform still.png output.webm --rig rig.json
 ```
+
+Add `--json` to `list` and `describe` for the machine-readable catalog; a
+successful operation prints its output path on stdout and its progress on
+stderr. See [`docs/agent-command-surface.md`](docs/agent-command-surface.md)
+for the catalog contract, the build path and why there is no MCP server on top
+of it.
 
 The same operations are also available directly through the standalone Python
 CLI:

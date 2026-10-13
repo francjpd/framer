@@ -13,24 +13,14 @@ defmodule FramerCore.PortIntegrationTest do
 
   alias FramerCore.Orchestrator
   alias FramerCore.PortWorker
+  alias FramerCore.TestMedia
 
-  @clip_frames 15
-  @width 160
-  @height 120
+  @clip_frames TestMedia.geometry().frames
 
   setup_all do
     tmp = Path.join(System.tmp_dir!(), "framer_it_#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
-
-    ffmpeg = System.find_executable("ffmpeg")
-
-    if ffmpeg do
-      clip = Path.join(tmp, "clip.mp4")
-      generate_clip!(ffmpeg, clip)
-      {:ok, tmp: tmp, clip: clip}
-    else
-      {:ok, tmp: tmp, clip: nil}
-    end
+    {:ok, tmp: tmp, clip: TestMedia.write_clip!(tmp)}
   end
 
   setup %{clip: clip} do
@@ -117,36 +107,6 @@ defmodule FramerCore.PortIntegrationTest do
 
   # --- helpers ---
 
-  defp generate_clip!(ffmpeg, path) do
-    filter = "drawbox=x=50:y=40:w=60:h=40:color=red@1:t=fill"
-
-    {output, status} =
-      System.cmd(
-        ffmpeg,
-        [
-          "-y",
-          "-f",
-          "lavfi",
-          "-i",
-          "color=c=0x00FF00:s=#{@width}x#{@height}:d=1:r=#{@clip_frames}",
-          "-vf",
-          filter,
-          "-c:v",
-          "libx264",
-          "-pix_fmt",
-          "yuv420p",
-          path
-        ],
-        stderr_to_stdout: true
-      )
-
-    if status != 0 do
-      flunk("could not generate test clip: #{output}")
-    end
-
-    :ok
-  end
-
   defp await_job(job_id, attempts \\ 120) do
     state = Orchestrator.get_status()
 
@@ -163,44 +123,7 @@ defmodule FramerCore.PortIntegrationTest do
     end
   end
 
-  defp decode_alpha(path) do
-    ffmpeg = System.find_executable("ffmpeg") || flunk("ffmpeg missing")
-    frame_size = @width * @height * 4
-
-    # Force the libvpx decoder: FFmpeg's native VP9 decoder drops the alpha
-    # plane, so a naive decode would report alpha on every pixel.
-    {raw, status} =
-      System.cmd(
-        ffmpeg,
-        [
-          "-v",
-          "error",
-          "-c:v",
-          "libvpx-vp9",
-          "-i",
-          path,
-          "-frames:v",
-          "1",
-          "-pix_fmt",
-          "bgra",
-          "-f",
-          "rawvideo",
-          "-"
-        ],
-        stderr_to_stdout: false
-      )
-
-    if status != 0 or byte_size(raw) < frame_size do
-      {:error, :decode_failed}
-    else
-      {:ok, binary_part(raw, 0, frame_size)}
-    end
-  end
-
-  defp alpha_corner(frame), do: :binary.at(frame, 3)
-
-  defp alpha_center(frame) do
-    index = (div(@height, 2) * @width + div(@width, 2)) * 4 + 3
-    :binary.at(frame, index)
-  end
+  defp decode_alpha(path), do: TestMedia.decode_alpha(path)
+  defp alpha_corner(frame), do: TestMedia.corner_alpha(frame)
+  defp alpha_center(frame), do: TestMedia.center_alpha(frame)
 end

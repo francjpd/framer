@@ -15,7 +15,7 @@ approved by the host operator before any content is served.
 * A client presents that id with the framer CLI:
 
   ```bash
-  FramerCore.CLI.main(["connect", "--id", "<pairing id>", "--server", "http://host:4000"])
+  framer connect --id <pairing id> --server http://host:4000
   ```
 
   which calls `POST /api/connect`. Presenting the id does **not** grant access:

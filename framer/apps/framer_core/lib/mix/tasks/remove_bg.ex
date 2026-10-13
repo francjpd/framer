@@ -5,32 +5,12 @@ defmodule Mix.Tasks.RemoveBg do
   @moduledoc """
   Removes the background from a video file.
 
+  A thin front-end over `FramerCore.CLI.main/1`; the options and their defaults
+  are described by `framer describe remove-bg` (see `FramerCore.Catalog`).
+
   ## Usage
 
       mix remove_bg input_path output_path [options]
-
-  ## Options
-
-    * `--color <b,g,r>` - Target color (default: "0,255,0" = green)
-    * `--tolerance <n>` - Color tolerance 0-255 (default: 30)
-    * `--edges <n>` - Soft edge blur radius (default: 5)
-    * `--method <string>` - Removal method: color, chromakey (default: color)
-    * `--auto-ranges <bool>` - Auto-generate color ranges (default: true)
-    * `--num-ranges <n>` - Number of color ranges (default: 5)
-    * `--edge-cleanup <n>` - Edge cleanup iterations (default: 3)
-    * `--refine <bool>` - Enable refinement pass (default: false)
-    * `--refine-tolerance <n>` - Refinement tolerance (default: 45)
-
-  ## Color Format
-
-    * BGR comma-separated: "0,255,0" (blue=0, green=255, red=0)
-    * Hex: "#00FF00" (RGB format, auto-converted)
-
-  ## Examples
-
-      mix remove_bg input.mp4 output.webm --color "0,255,0" --tolerance 30
-      mix remove_bg input.mp4 output.webm --color "#00FF00" --auto-ranges true --num-ranges 5
-      mix remove_bg input.mp4 output.webm --refine true --edge-cleanup 5
   """
 
   def run(args) do

@@ -155,11 +155,16 @@ cd framer
 mix deps.get
 mix test                      # includes the real end-to-end Port integration test
 
-# CLI
-mix run -e 'FramerCore.CLI.main(["remove-bg", "in.mp4", "out.webm", "--color", "0,255,0"])'
-mix run -e 'FramerCore.CLI.main(["fps-boost", "in.mp4", "out.mp4", "--to", "60", "--workers", "4"])'
-mix run -e 'FramerCore.CLI.main(["loop", "in.mp4", "out.mp4", "--method", "pingpong"])'
-mix run -e 'FramerCore.CLI.main(["deform", "still.png", "out.webm", "--rig", "rig.json"])'
+# The framer command: build the escript once, then run it
+(cd framer/apps/framer_core && mix escript.build)   # -> framer/apps/framer_core/framer
+framer/apps/framer_core/framer list --json          # the catalog of what it can run
+framer/apps/framer_core/framer remove-bg in.mp4 out.webm --color 0,255,0
+framer/apps/framer_core/framer fps-boost in.mp4 out.mp4 --to 60 --workers 4
+framer/apps/framer_core/framer loop in.mp4 out.mp4 --method pingpong
+framer/apps/framer_core/framer deform still.png out.webm --rig rig.json
+
+# The historical invocation still works
+(cd framer && mix run -e 'FramerCore.CLI.main(["remove-bg", "in.mp4", "out.webm", "--color", "0,255,0"])')
 ```
 
 `framer/apps/framer_core/test/port_integration_test.exs` generates a small clip

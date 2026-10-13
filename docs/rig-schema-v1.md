@@ -136,7 +136,7 @@ The operation travels through the normal Port contract
 .venv/bin/python cli.py deform still.png out.webm --rig rig.json
 
 # Through the Elixir orchestrator (chunked, then merged)
-mix run -e 'FramerCore.CLI.main(["deform", "still.png", "out.webm", "--rig", "rig.json"])'
+framer deform still.png out.webm --rig rig.json
 ```
 
 ## Editing a rig

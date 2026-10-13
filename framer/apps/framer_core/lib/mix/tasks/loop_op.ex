@@ -5,17 +5,11 @@ defmodule Mix.Tasks.LoopOp do
   @moduledoc """
   Creates a looping version of a video.
 
+  A thin front-end over `FramerCore.CLI.main/1`; the options and their defaults
+  are described by `framer describe loop` (see `FramerCore.Catalog`).
+
   ## Usage
     mix loop_op input_path output_path [options]
-
-  ## Options
-    --method <string>    Looping method: pingpong, fade, morph (default: pingpong)
-    --fade-frames <n>    Number of frames for fade transition
-    --fade-color <r,g,b> Color for fade transition
-    --morph-steps <n>    Number of steps for morph transition
-    --hold-frames <n>    Number of frames to hold at the end
-    --blend-mode <string> Blend mode for transitions
-    --ramp-factor <f>    Ramp factor for speed adjustments
   """
 
   def run(args) do

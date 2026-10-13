@@ -319,11 +319,7 @@ def op_loop(req: dict[str, Any]) -> dict[str, Any]:
     opts = dict(req.get("options") or {})
     opts.pop("config", None)
     # Only pass parameters the operation understands.
-    allowed = {
-        "method", "fade_color", "fade_frames", "fade_type", "morph_steps",
-        "cycle_frames", "hold_frames", "blend_mode", "ramp_factor",
-        "analyze_only", "progress", "until", "workers",
-    }
+    allowed = _OPTION_KEYS["loop"]
     kwargs = {k: v for k, v in opts.items() if k in allowed and v is not None}
     kwargs.setdefault("progress", False)
     result = create_loop(input_path=req["input"], output_path=req["output"], **kwargs)
@@ -408,6 +404,29 @@ _OPERATIONS = {
     "loop": op_loop,
     "deform": op_deform,
     "merge": op_merge,
+}
+
+# The option keys each operation declares it accepts from ``req["options"]``.
+# The Elixir catalog is the single source of truth for the flags an agent
+# passes, but the keys a request may carry are this worker's contract:
+# ``FramerCore.CatalogTest`` imports this registry and fails when a catalogued
+# option is sent under a key that is not listed here. (Enforcing that each op
+# reads only these keys at runtime is a separate follow-up.)
+_OPTION_KEYS: dict[str, set[str]] = {
+    "info": set(),
+    "remove-bg": {
+        "tolerance", "color", "auto_ranges", "num_ranges", "method",
+        "motion_frames", "motion_threshold", "refine", "refine_tolerance",
+        "refine_block_size", "edge_cleanup", "edges", "adaptive_bg", "force_cpu",
+    },
+    "fps-boost": {"target_fps"},
+    "loop": {
+        "method", "fade_color", "fade_frames", "fade_type", "morph_steps",
+        "cycle_frames", "hold_frames", "blend_mode", "ramp_factor",
+        "analyze_only", "progress", "until", "workers",
+    },
+    "deform": {"rig", "rig_path", "iterations", "weights", "still", "radius_scale"},
+    "merge": {"chunks"},
 }
 
 

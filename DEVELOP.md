@@ -17,6 +17,10 @@ uv run python -m pytest tests/
 
 # Try the CLI
 uv run python cli.py input.mp4 output.webm -c "0,255,0" -p
+
+# Build the Elixir-level command and ask it what it can do
+cd framer/apps/framer_core && mix escript.build
+./framer list --json
 ```
 
 ## Architecture Overview
