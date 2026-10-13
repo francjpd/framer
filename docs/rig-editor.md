@@ -10,7 +10,7 @@ operation for the final render and export.
 │ header: title · shortcut hint · undo · save                    │
 ├──────────────┬────────────────────────────────────────────────┤
 │ Workflow     │ centre viewport                                 │
-│  step guide  │  toolbar: Mesh · Labels · proxy badge           │
+│  step guide  │  toolbar: Mesh · Labels · zoom -/+ · Fit · badge│
 │ Media        │  source still + control mesh + bones            │
 │  upload      │  client-side WebGL2 / canvas LBS preview        │
 │  projects    │                                                 │
@@ -56,7 +56,9 @@ path, a frame range and JSON options - exactly the existing Port contract.
   bones, and handles all pointer interaction locally. The view starts as a
   contain-fit of the whole still and **zooms** with the controls or a
   `Ctrl`/`Cmd` + mouse-wheel that zooms toward the pointer; the zoom is bounded
-  below by the fit and above by the still's own pixels (1:1). The container
+  below by the fit and above by the still's own pixels (1:1), except that a
+  still the viewport already shows at 1:1 or larger pins the zoom at the fit.
+  The container
   keeps the one pointer-to-image mapping exact at every zoom, so a click still
   places a bone under the pointer with the overlay aligned - panning is not
   implemented (zooming toward the pointer reaches any region) and is left as a
