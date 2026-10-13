@@ -100,12 +100,15 @@ def character_block(frame: np.ndarray) -> np.ndarray:
 
 def vacated_mask(source: np.ndarray, posed: np.ndarray) -> np.ndarray:
     """
-    Pixels the character occupied at rest that are transparent once it moved.
+    Pixels the character occupied at rest that it no longer covers once posed.
 
-    These must carry no character colour at all: the cut-out left with the bone.
+    The character's old footprint minus what the posed cut-out still fills is
+    exactly the region the background plate has to cover: it must show the
+    reconstructed background, opaque, and none of the character's own pixels.
     """
     was_character = source[CHARACTER_ROWS, CHARACTER_COLUMNS, 2] > 200
-    return was_character & (posed[CHARACTER_ROWS, CHARACTER_COLUMNS, 3] == 0)
+    still_character = posed[CHARACTER_ROWS, CHARACTER_COLUMNS, 2] > 200
+    return was_character & ~still_character
 
 
 def write_scene(directory: Path) -> tuple[Path, Path]:

@@ -319,9 +319,10 @@ defmodule FramerWebWeb.EditorLive do
     rig = socket.assigns.rig
 
     if Rig.split?(rig) do
-      id = rig["id"]
-      RigStore.remove_character_layer(id)
-
+      # The materialised layers stay on disk: the document no longer references
+      # them, and Undo - which restores the split document pushed just above -
+      # must not bring back a rig pointing at a deleted asset. The next
+      # extraction removes them before re-keying.
       {:noreply,
        socket
        |> finalize_mutation(Rig.clear_layers(rig), undo: false, status: "Back to one layer")}
@@ -488,10 +489,10 @@ defmodule FramerWebWeb.EditorLive do
       |> Rig.enable_split(tolerance: tolerance)
       |> Rig.set_layer_settings(tolerance: tolerance)
 
-    # Changing the settings drops the recorded character path, but the file it
-    # materialised is still on disk and the engine falls back to the default
+    # Changing the settings drops the recorded character path, but the files it
+    # materialised are still on disk and the engine falls back to the default
     # name, so it would reuse the stale cut-out instead of re-keying it. Remove
-    # it first so the engine recomputes the cut-out with the new settings.
+    # both layers first so the engine recomputes them with the new settings.
     RigStore.remove_character_layer(rig["id"])
 
     socket =
@@ -1072,12 +1073,12 @@ defmodule FramerWebWeb.EditorLive do
         phx-hook="LbsPreview"
         data-source-url={~p"/api/rigs/#{@rig["id"]}/source"}
         data-character-url={character_layer_url(@rig)}
+        data-background-url={background_layer_url(@rig)}
         data-frame={@playhead}
         data-tool={@tool}
         data-selected={@selected || ""}
         data-mesh={to_string(@mesh_visible)}
         data-labels={to_string(@labels_visible)}
-        data-layers={to_string(Rig.split?(@rig))}
         class="absolute inset-0"
       >
         <div id="viewport-surface" phx-update="ignore" class="absolute inset-0"></div>
@@ -1646,10 +1647,17 @@ defmodule FramerWebWeb.EditorLive do
 
   # The character-layer URL the preview fetches. It is only meaningful once the
   # engine has materialised the cut-out, so an un-materialised split rig
-  # deliberately yields no URL and the preview shows the still unchanged.
+  # deliberately yields no URL and the preview shows the still unchanged. Same
+  # for the opaque background plate it composites the character over.
   defp character_layer_url(rig) do
     if Rig.split?(rig) and is_binary(Rig.character_layer(rig)) do
       ~p"/api/rigs/#{rig["id"]}/character"
+    end
+  end
+
+  defp background_layer_url(rig) do
+    if Rig.split?(rig) and is_binary(Rig.character_layer(rig)) do
+      ~p"/api/rigs/#{rig["id"]}/background"
     end
   end
 

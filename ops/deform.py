@@ -50,8 +50,7 @@ def _resolve_frame_range(
         frames = duration.get("frames")
         if not frames:
             raise RigError(
-                "end_frame was not supplied and the rig has no duration.frames "
-                "to loop a still over"
+                "end_frame was not supplied and the rig has no duration.frames to loop a still over"
             )
         end = int(frames) - 1
 
@@ -71,7 +70,6 @@ def deform_video(
     weights: str | None = None,
     still: bool | None = None,
     radius_scale: float | None = None,
-    character: str | None = None,
     progress: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
@@ -88,9 +86,8 @@ def deform_video(
     path and the golden-image test path.
 
     A rig document that declares ``layers.split`` renders split: the character
-    layer is deformed and the untouched background layer is composited under it,
-    so the background is identical in every frame.  ``character`` overrides the
-    declared character-layer path.
+    layer is deformed and the untouched background plate is composited under it,
+    so the background is identical in every frame.
     """
     try:
         rig_document = _resolve_rig(rig)
@@ -114,7 +111,7 @@ def deform_video(
         materialised = None
         if is_split(rig_document):
             character_layer, materialised = resolve_character_layer(
-                rig_document, source, input_path, character
+                rig_document, source, input_path
             )
 
         renderer = DeformRenderer(
@@ -143,7 +140,11 @@ def deform_video(
                 result["character"] = str(materialised)
             return result
 
-        if output.suffix.lower() == ".mp4" and _has_transparency(renderer.source):
+        # MP4 drops alpha on encode, so the *rendered* frame is what decides
+        # whether the format can carry the output: a split rig composites over
+        # an opaque plate and never needs alpha, but a deformation that pulls
+        # transparency in from outside the canvas still cannot be encoded.
+        if output.suffix.lower() == ".mp4" and _has_transparency(renderer.render(start)):
             return {
                 "success": False,
                 "output_path": None,
@@ -216,14 +217,6 @@ register_operation(
             "type": "float",
             "default": None,
             "description": "Scale every bone influence radius (overrides rig.bind.radius_scale)",
-        },
-        "character": {
-            "type": "string",
-            "default": None,
-            "description": (
-                "Path to the character layer for a split rig, overriding "
-                "rig.layers.character"
-            ),
         },
     },
     description="Deform a still image with a rig/bones puppet warp",

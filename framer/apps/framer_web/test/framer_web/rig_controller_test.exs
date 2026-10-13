@@ -196,6 +196,36 @@ defmodule FramerWebWeb.RigControllerTest do
     end
   end
 
+  describe "GET /api/rigs/:id/background" do
+    test "serves the materialised background plate", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png(8, 8), "s.png")
+      plate = Path.join(RigStore.project_dir(rig["id"]), FramerWeb.Rig.plate_filename())
+      File.write!(plate, "plate")
+
+      assert conn |> get(~p"/api/rigs/#{rig["id"]}/background") |> response(200) == "plate"
+    end
+
+    test "404s when the plate has not been materialised", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png(8, 8), "s.png")
+
+      assert %{"error" => message} =
+               conn |> get(~p"/api/rigs/#{rig["id"]}/background") |> json_response(404)
+
+      assert message =~ "no background layer"
+    end
+
+    test "does not serve a plate outside the projects root", %{conn: conn, root: root} do
+      secret_dir = Path.join(Path.dirname(root), Path.basename(root) <> "_plate_secret")
+      File.mkdir_p!(secret_dir)
+      File.write!(Path.join(secret_dir, "background.png"), "top secret")
+      on_exit(fn -> File.rm_rf(secret_dir) end)
+
+      traversal = "..%2F" <> Path.basename(secret_dir)
+      body = conn |> get("/api/rigs/#{traversal}/background") |> response(404)
+      refute String.contains?(body, "top secret")
+    end
+  end
+
   describe "GET /api/rigs/:id/result" do
     test "404s until an export exists", %{conn: conn} do
       {:ok, rig} = RigStore.save(Fixtures.simple_rig(8))

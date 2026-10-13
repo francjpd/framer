@@ -621,8 +621,8 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert render(view) =~ "reach also moves the background. Extract the character to"
       assert render(view) =~ "give it its own layer"
       refute has_element?(view, "#layer-tolerance-form")
-      refute has_element?(view, "#viewport[data-layers='true']")
       refute has_element?(view, "#viewport[data-character-url]")
+      refute has_element?(view, "#viewport[data-background-url]")
     end
 
     test "asks for a rig first when none is loaded", %{conn: conn} do
@@ -644,14 +644,23 @@ defmodule FramerWebWeb.EditorLiveTest do
       {:ok, saved} = RigStore.load(rig["id"])
       assert FramerWeb.Rig.split?(saved)
       assert get_in(saved, ["layers", "tolerance"]) == 30
+      assert get_in(saved, ["layers", "soft_edges"]) == 0
+      assert get_in(saved, ["layers", "edge_cleanup"]) == 0
       assert FramerWeb.Rig.character_layer(saved) == FramerWeb.Rig.layer_filename()
       assert File.exists?(RigStore.character_layer_path(rig["id"]))
 
-      assert has_element?(view, "#viewport[data-layers='true']")
+      # The engine materialises the opaque plate beside the cut-out, and the
+      # preview points at both layers so it composites what the export renders.
+      assert File.exists?(RigStore.plate_path(rig["id"]))
 
       assert has_element?(
                view,
                "#viewport[data-character-url='/api/rigs/#{rig["id"]}/character']"
+             )
+
+      assert has_element?(
+               view,
+               "#viewport[data-background-url='/api/rigs/#{rig["id"]}/background']"
              )
 
       assert has_element?(view, "span.badge", "layered")
@@ -659,7 +668,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert render(view) =~ "the background now stays put"
     end
 
-    test "turning the split off returns the rig to one layer and drops the file", %{conn: conn} do
+    test "turning the split off keeps the layers so undo can restore them", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
       _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
       {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
@@ -672,14 +681,26 @@ defmodule FramerWebWeb.EditorLiveTest do
       {:ok, saved} = RigStore.load(rig["id"])
       refute FramerWeb.Rig.split?(saved)
       refute Map.has_key?(saved, "layers")
-      assert RigStore.character_layer_path(rig["id"]) == nil
 
-      refute File.exists?(
-               Path.join(RigStore.project_dir(rig["id"]), FramerWeb.Rig.layer_filename())
-             )
+      # The materialised layers stay on disk: undo restores the split document
+      # pushed just before the toggle, and it must not point at a missing asset.
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+      assert File.exists?(RigStore.plate_path(rig["id"]))
 
       assert has_element?(view, "#toggle-background-layer", "Extract the character")
-      refute has_element?(view, "#layer-tolerance-form")
+      refute has_element?(view, "#viewport[data-character-url]")
+      refute has_element?(view, "#viewport[data-background-url]")
+
+      render_click(view, "undo", %{})
+
+      {:ok, restored} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.split?(restored)
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+
+      assert has_element?(
+               view,
+               "#viewport[data-character-url='/api/rigs/#{rig["id"]}/character']"
+             )
     end
 
     test "changing the tolerance re-extracts with the new setting", %{conn: conn} do
@@ -691,6 +712,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       # must then re-key the existing layer rather than extract a fresh one.
       render_click(view, "toggle_background_layer", %{})
       assert File.exists?(RigStore.character_layer_path(rig["id"]))
+      assert File.exists?(RigStore.plate_path(rig["id"]))
 
       render_change(view, "set_layer_tolerance", %{"tolerance" => "65"})
 
@@ -699,6 +721,11 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert get_in(saved, ["layers", "tolerance"]) == 65
       assert has_element?(view, "#layer-tolerance-form input[value='65']")
       refute render(view) =~ "layer_not_materialised"
+
+      # Both layers were re-materialised with the new key, so the preview picks
+      # them up again through the same URLs.
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+      assert File.exists?(RigStore.plate_path(rig["id"]))
     end
 
     test "a non-positive tolerance is rejected without touching the document", %{conn: conn} do
@@ -725,7 +752,7 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       {:ok, restored} = RigStore.load(rig["id"])
       refute FramerWeb.Rig.split?(restored)
-      refute has_element?(view, "#viewport[data-layers='true']")
+      refute has_element?(view, "#viewport[data-character-url]")
     end
   end
 end

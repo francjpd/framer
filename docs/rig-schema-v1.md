@@ -112,19 +112,22 @@ the engine.
 
 A document with `layers.split` true is rendered split: the still is separated
 into a **character layer** (the still's colour with the background-removal
-mask as its alpha) and a **background layer** (the still's colour with the
-inverse mask as its alpha).  Only the character layer is resampled; the
-background layer is composited underneath it untouched, so the background is
-identical in every frame.  The character layer file (`layers.character`,
-default `character.png` beside the still) is materialised once with the
-engine's existing background-removal segmentation and reused by later renders,
-exports and the editor's preview.
+mask as its alpha) and a **background layer** - an opaque *plate*, a full copy
+of the still whose character area is reconstructed from the surrounding
+background, so no pixel is left uncovered.  Only the character layer is
+resampled; the plate is composited underneath it untouched, so the background is
+identical in every frame.  The two files (`layers.character`, default
+`character.png` beside the still, and `background.png`) are materialised once
+with the engine's existing background-removal segmentation and reused by later
+renders, exports and the editor's preview.
 
-Where the character moves away from, neither layer covers the pixel, so the
-composited result is transparent: the vacated region carries none of the
-character's original pixels (and no inpainted background).  The preview
-(`assets/js/lbs.mjs`) mirrors the split and the composite exactly, and
-`tests/test_preview_parity.py` keeps the two in agreement.
+The composite is a plain source-over, so an opaque character pixel wins
+outright wherever it moves - including over background it did not occupy at
+rest.  Where the character moves away from, the plate shows through: the
+vacated region carries the reconstructed background, never the character's
+original pixels, and because the plate is opaque the composited frame is opaque
+too.  The preview (`assets/js/lbs.mjs`) mirrors the split and the composite
+exactly, and `tests/test_preview_parity.py` keeps the two in agreement.
 
 ## Request options
 
@@ -142,8 +145,7 @@ The operation travels through the normal Port contract
     "weights": null,
     "iterations": 5,
     "radius_scale": 1.0,
-    "still": true,
-    "character": null
+    "still": true
   }
 }
 ```
@@ -155,9 +157,8 @@ The operation travels through the normal Port contract
 * `output` keeps the chunk extension.  An image extension (`.png`, `.jpg`, ...)
   renders a single frame instead of a video.
 * `options.weights` is an optional dense-weight `.npz` cache path.
-* `options.character` overrides the character-layer path of a split rig
-  (`rig.layers.character`); the response reports the path when the engine
-  materialised the layer.
+* The response reports the materialised character-layer path when the engine
+  wrote it (the plate is written beside it under its own fixed name).
 * The renderer is stateless per chunk: it reloads the rig/weights from disk, so
   a failed chunk can be retried on any worker.
 

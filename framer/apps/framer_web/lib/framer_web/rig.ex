@@ -25,13 +25,15 @@ defmodule FramerWeb.Rig do
   @falloffs ~w(smooth linear hard)
 
   # The rig document field holding the layered state, the default character-layer
-  # file name and the background-removal settings recorded with it. These mirror
-  # `core/layers.py` and `core/deform.py`'s `layers` validation.
+  # and background-plate file names and the background-removal settings recorded
+  # with them. These mirror `core/layers.py` and `core/deform.py`'s `layers`
+  # validation.
   @layers_key "layers"
   @layer_filename "character.png"
+  @plate_filename "background.png"
   @default_tolerance 30
-  @default_soft_edges 5
-  @default_edge_cleanup 3
+  @default_soft_edges 0
+  @default_edge_cleanup 0
   @layer_settings ~w(color tolerance auto_ranges num_ranges adaptive_bg edge_cleanup soft_edges)
 
   # The editor-facing option name for each mask setting, so a caller never has
@@ -53,6 +55,7 @@ defmodule FramerWeb.Rig do
   def version, do: @version
   def falloffs, do: @falloffs
   def layer_filename, do: @layer_filename
+  def plate_filename, do: @plate_filename
   def layers_key, do: @layers_key
 
   # ---------------------------------------------------------------------------

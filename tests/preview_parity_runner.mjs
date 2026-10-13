@@ -25,6 +25,9 @@ if (spec.source) {
   if (spec.character) {
     options.character = new Uint8Array(fs.readFileSync(spec.character));
   }
+  if (spec.background) {
+    options.background = new Uint8Array(fs.readFileSync(spec.background));
+  }
 
   const output = renderFrameRGBA(source, spec.width, spec.height, spec.rig, spec.frame, options);
 

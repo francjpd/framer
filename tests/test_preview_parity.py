@@ -100,21 +100,25 @@ def _render_layered_preview(
     rig: dict,
     source: np.ndarray,
     character: np.ndarray,
+    plate: np.ndarray,
     frame: int,
     iterations: int,
 ):
-    """Render the split scene through the preview, passing the character layer."""
+    """Render the split scene through the preview, passing the two layers."""
     height, width = source.shape[:2]
     source_path = tmp_path / "source.rgba"
     source_path.write_bytes(source.tobytes())
     character_path = tmp_path / "character.rgba"
     character_path.write_bytes(character.tobytes())
+    plate_path = tmp_path / "background.rgba"
+    plate_path.write_bytes(plate.tobytes())
 
     output_path = tmp_path / "preview.rgba"
 
     spec = {
         "source": str(source_path),
         "character": str(character_path),
+        "background": str(plate_path),
         "output": str(output_path),
         "width": int(width),
         "height": int(height),
@@ -256,28 +260,26 @@ def test_interpolated_poses_match_the_engine(tmp_path):
 # --- layered preview --------------------------------------------------------
 #
 # A split rig deforms the character layer only. `lbs.mjs` mirrors
-# `core/layers.py` (background derivation + additive composite), so the
-# preview and the export agree on the layering by construction - these tests
-# hold both halves of that claim: the preview keeps the background put, and the
-# preview's layered render matches the engine's.
+# `core/layers.py` (the cut-out, the opaque background plate and the
+# source-over composite), so the preview and the export agree on the layering by
+# construction - these tests hold both halves of that claim: the preview keeps
+# the background put, and the preview's layered render matches the engine's.
 
 
-def _layered_character(source: np.ndarray) -> np.ndarray:
+def _layered_layers(source: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The engine's own character cut-out and background plate for a still."""
     from core.bg_removal import character_alpha
     from core.layers import split_layers
 
-    character, _background = split_layers(
-        source, character_alpha(source, tolerance=40, soft_edges=0, edge_cleanup=0)
-    )
-    return character
+    return split_layers(source, character_alpha(source, tolerance=40, soft_edges=0, edge_cleanup=0))
 
 
 def test_layered_preview_keeps_the_background_put(tmp_path):
     rig, source = build_layered_scene()
-    character = _layered_character(source)
+    character, plate = _layered_layers(source)
 
-    rest = _render_layered_preview(tmp_path, rig, source, character, 0, 8)
-    posed = _render_layered_preview(tmp_path, rig, source, character, FRAMES - 1, 8)
+    rest = _render_layered_preview(tmp_path, rig, source, character, plate, 0, 8)
+    posed = _render_layered_preview(tmp_path, rig, source, character, plate, FRAMES - 1, 8)
 
     # The background rows are byte-identical between the rest frame and the
     # posed frame in the browser preview too.
@@ -288,9 +290,9 @@ def test_layered_preview_keeps_the_background_put(tmp_path):
 
 def test_layered_preview_matches_the_engine(tmp_path):
     rig, source = build_layered_scene()
-    character = _layered_character(source)
+    character, plate = _layered_layers(source)
 
-    preview = _render_layered_preview(tmp_path, rig, source, character, FRAMES - 1, 8)
+    preview = _render_layered_preview(tmp_path, rig, source, character, plate, FRAMES - 1, 8)
     engine = DeformRenderer(rig, source, iterations=8, character=character).render(FRAMES - 1)
 
     assert preview.shape == engine.shape
@@ -305,25 +307,26 @@ def test_layered_preview_matches_the_engine(tmp_path):
     )
 
 
-def test_js_composite_keeps_a_soft_edge_opaque(tmp_path):
-    # A partition at a feathered edge: the character half-covers the pixel and
-    # the background covers the other half, both carrying the still's colour.
+def test_js_composite_puts_an_opaque_character_over_an_opaque_plate(tmp_path):
+    # The core scenario in one pixel: the character has warped over background
+    # it did not occupy at rest, so both layers are opaque there. The composite
+    # must hand the character through solid rather than blend it 50/50.
     character = np.zeros((2, 2, 4), dtype=np.uint8)
-    background = np.zeros((2, 2, 4), dtype=np.uint8)
+    plate = np.zeros((2, 2, 4), dtype=np.uint8)
     character[:, :, :3] = (255, 0, 0)
-    background[:, :, :3] = (255, 0, 0)
-    character[:, :, 3] = 128
-    background[:, :, 3] = 127
+    character[:, :, 3] = 255
+    plate[:, :, :3] = (0, 190, 0)
+    plate[:, :, 3] = 255
 
     character_path = tmp_path / "character.rgba"
-    background_path = tmp_path / "background.rgba"
+    plate_path = tmp_path / "background.rgba"
     character_path.write_bytes(character.tobytes())
-    background_path.write_bytes(background.tobytes())
+    plate_path.write_bytes(plate.tobytes())
 
     output_path = tmp_path / "composite.rgba"
 
     spec = {
-        "composite": {"character": str(character_path), "background": str(background_path)},
+        "composite": {"character": str(character_path), "background": str(plate_path)},
         "output": str(output_path),
     }
     spec_path = tmp_path / "spec_composite.json"

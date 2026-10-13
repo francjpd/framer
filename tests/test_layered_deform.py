@@ -12,7 +12,7 @@ the editor's "Render frame" action runs through the Port contract) over the
 deterministic scene from `tests/layer_scene.py`, so what it asserts is what an
 end user sees.
 
-Four things are pinned:
+Five things are pinned:
 
 1. **The background is unchanged.** The background pixels are byte-identical
    between the rest frame and the frame with the bone moved, and identical to
@@ -22,8 +22,12 @@ Four things are pinned:
    still. That is the behaviour the capability exists to opt out of.
 3. **The character still animates.** The character layer really moved, so the
    rig did not simply stop deforming anything.
-4. **The vacated region is transparent.** Where the character used to be, the
-   render shows none of the character's original pixels.
+4. **The vacated region shows the reconstructed plate.** Where the character
+   used to be, the render is opaque and carries the reconstructed background -
+   never a see-through hole and never the character's original pixels.
+5. **The character wins over the background.** Where the character moves onto
+   background it did not occupy at rest, both layers are opaque, and the
+   character is rendered solid rather than blended with the background.
 """
 
 from __future__ import annotations
@@ -40,8 +44,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.bg_removal import character_alpha
 from core.deform import DeformRenderer
-from core.layers import LAYER_FILENAME
+from core.layers import LAYER_FILENAME, PLATE_FILENAME, layer_settings, split_layers
 from ops.deform import deform_video
 from tests.layer_scene import (
     FRAMES,
@@ -123,10 +128,12 @@ def test_the_character_layer_still_warps(scene):
     assert not np.array_equal(character_block(rest), character_block(moved))
     # The cut-out moved right by exactly the keyframed shift, so the character's
     # leading edge now sits where the background used to be.
-    assert character_block(moved)[:, SHIFT:, 2].max() == 255
+    leading = moved[CHARACTER_ROWS, CHARACTER_COLUMNS.stop : CHARACTER_COLUMNS.stop + SHIFT]
+    assert (leading[:, :, 2] == 255).all()
+    assert not leading[:, :, 1].any()
 
 
-def test_the_vacated_region_shows_no_character_pixels(scene):
+def test_the_vacated_region_shows_the_reconstructed_plate(scene):
     directory = scene["dir"]
     source = cv2.imread(str(scene["source_path"]), cv2.IMREAD_UNCHANGED)
 
@@ -137,23 +144,48 @@ def test_the_vacated_region_shows_no_character_pixels(scene):
     assert vacated.any(), "the scene must produce a region the character left"
 
     vacated_block = moved[CHARACTER_ROWS, CHARACTER_COLUMNS][vacated]
-    assert (vacated_block[:, 3] == 0).all()
-    assert not vacated_block[:, :3].any()
+    # Opaque: the vacated region is the plate, never a see-through hole.
+    assert (vacated_block[:, 3] == 255).all()
+    # No character colour survives where it moved away...
+    assert not vacated_block[:, 2].any()
+    # ...and the reconstruction is the still's own background, which the scene's
+    # three-step green band pins to a couple of levels.
+    green = vacated_block[:, 1]
+    assert (green >= 185).all() and (green <= 198).all()
+
+
+def test_the_character_wins_over_background_it_did_not_occupy(scene):
+    directory = scene["dir"]
+
+    render(directory, "rig.json", 0, "split")
+    moved, _ = render(directory, "rig.json", FRAMES - 1, "split")
+
+    # The columns the character moves onto were pure background at rest, so both
+    # layers are opaque there: the character must render solid, not as a blend
+    # with the background behind it.
+    occupied = moved[CHARACTER_ROWS, CHARACTER_COLUMNS.stop : CHARACTER_COLUMNS.stop + SHIFT]
+    assert (occupied[:, :, 2] == 255).all()
+    assert not occupied[:, :, 1].any()
+    assert (occupied[:, :, 3] == 255).all()
 
 
 def test_the_character_layer_is_materialised_once_beside_the_still(scene):
     directory = scene["dir"]
     layer = directory / LAYER_FILENAME
+    plate = directory / PLATE_FILENAME
 
     _rest, first = render(directory, "rig.json", 0, "split")
     assert layer.exists()
     assert first["character"] == str(layer)
+    assert plate.exists()
 
-    # A later render reads the file rather than recomputing and rewriting it.
-    mtime = layer.stat().st_mtime_ns
+    # A later render reads the files rather than recomputing and rewriting them.
+    layer_mtime = layer.stat().st_mtime_ns
+    plate_mtime = plate.stat().st_mtime_ns
     _moved, last = render(directory, "rig.json", FRAMES - 1, "split")
     assert "character" not in last
-    assert layer.stat().st_mtime_ns == mtime
+    assert layer.stat().st_mtime_ns == layer_mtime
+    assert plate.stat().st_mtime_ns == plate_mtime
 
 
 def test_the_materialised_layer_is_the_source_with_the_mask_as_alpha(scene):
@@ -168,6 +200,38 @@ def test_the_materialised_layer_is_the_source_with_the_mask_as_alpha(scene):
     assert np.array_equal(layer[:, :, :3], source[:, :, :3])
     expected_mask = (source[:, :, 2] > 200).astype(np.uint8) * 255
     assert np.array_equal(layer[:, :, 3], expected_mask)
+
+
+def test_the_recorded_split_mask_is_exact():
+    """
+    The editor records an exact mask, so no background is warped with the
+    character and no character rim is left behind in the plate.
+
+    `layer_settings` over a bare split document is what `Rig.enable_split`
+    writes, feathering and cleanup included - or rather, does not.
+    """
+    _rig, source = build_scene()
+
+    settings = layer_settings({"layers": {"split": True}})
+    assert settings["edge_cleanup"] == 0
+    assert settings["soft_edges"] == 0
+
+    alpha = character_alpha(source, **settings)
+    assert set(np.unique(alpha)) <= {0, 255}
+
+    # Exactly the character's rectangle: no eroded rim inside it, no dilated
+    # ring of background around it for the bone to resample.
+    assert (alpha[: CHARACTER_ROWS.start] == 0).all()
+    assert (alpha[CHARACTER_ROWS.stop :] == 0).all()
+    assert (alpha[:, : CHARACTER_COLUMNS.start] == 0).all()
+    assert (alpha[:, CHARACTER_COLUMNS.stop :] == 0).all()
+
+    character, plate = split_layers(source, alpha)
+    # The character layer carries no background pixel...
+    assert (character[:, :, 3][alpha == 0] == 0).all()
+    # ...and the plate keeps none of the character's own pixels.
+    footprint = plate[CHARACTER_ROWS, CHARACTER_COLUMNS]
+    assert not footprint[:, :, 2].any()
 
 
 def test_a_single_layer_rig_deforms_the_whole_still():
@@ -186,17 +250,17 @@ def test_a_single_layer_rig_deforms_the_whole_still():
 
 def test_the_renderer_deforms_only_the_character_layer(scene):
     rig, source = scene["rig"], scene["source"]
-    from core.bg_removal import character_alpha
-    from core.layers import split_layers
 
-    character, _background = split_layers(
+    character, _plate = split_layers(
         source, character_alpha(source, tolerance=40, soft_edges=0, edge_cleanup=0)
     )
     renderer = DeformRenderer(rig, source, iterations=6, character=character)
 
+    # The background layer is an opaque plate: every pixel is covered, including
+    # the character's rest footprint.
     assert renderer.background is not None
-    assert (renderer.background[0:30, :, 3] == 255).all()  # background stays opaque
-    assert (renderer.background[32:48, 8:24, 3] == 0).all()  # character punched out
+    assert (renderer.background[:, :, 3] == 255).all()
+    assert not renderer.background[32:48, 8:24, 2].any()
 
     posed = renderer.render(FRAMES - 1)
     # The background region of the output is the still's own, unwarped.
@@ -204,6 +268,8 @@ def test_the_renderer_deforms_only_the_character_layer(scene):
     # ...and it differs from the unsplit render of the same document.
     unsplit = DeformRenderer(splitless_scene()[0], source, iterations=6).render(FRAMES - 1)
     assert not np.array_equal(posed, unsplit)
+    # Every frame is opaque, so the vacated region never encodes as a hole.
+    assert (posed[:, :, 3] == 255).all()
 
 
 def test_a_video_export_keeps_the_background_stable(tmp_path):
@@ -250,6 +316,66 @@ def test_a_video_export_keeps_the_background_stable(tmp_path):
     # is visibly warped by the bone.
     assert split_drift <= 1.0, f"split export background drifted by {split_drift:.2f}"
     assert legacy_drift > 10.0, f"unsplit export background drifted by only {legacy_drift:.2f}"
+
+
+def test_a_split_rig_exports_to_mp4_with_the_plate_in_the_vacated_region(tmp_path):
+    """
+    MP4 drops alpha, so the guard has to look at what is actually encoded.
+
+    A split rig composites over an opaque plate, so its frames are opaque and
+    the export succeeds - and the region the character vacated encodes as the
+    reconstructed background rather than as a flattened black hole.
+    """
+    ffmpeg = shutil.which("ffmpeg") or pytest.fail("ffmpeg is required for the export proof")
+    write_scene(tmp_path)
+
+    result = deform_video(
+        input_path=str(tmp_path / "source.png"),
+        output_path=str(tmp_path / "split.mp4"),
+        rig=str(tmp_path / "rig.json"),
+        fps=12.0,
+        iterations=6,
+        still=True,
+    )
+    assert result["success"], result.get("error")
+
+    source = cv2.imread(str(tmp_path / "source.png"), cv2.IMREAD_UNCHANGED)
+    last = _yuv420p_frame(ffmpeg, tmp_path / "split.mp4", FRAMES - 1)
+
+    vacated = vacated_mask(source, last)
+    assert vacated.any(), "the scene must produce a region the character left"
+
+    vacated_block = last[CHARACTER_ROWS, CHARACTER_COLUMNS][vacated]
+    # Opaque green background, not the black an uncovered hole would encode to.
+    assert (vacated_block[:, 1] > vacated_block[:, 0]).all()
+    assert (vacated_block[:, 1] > vacated_block[:, 2]).all()
+    assert (vacated_block[:, 1] > 100).all()
+
+
+def _yuv420p_frame(ffmpeg: str, path: Path, frame: int) -> np.ndarray:
+    """Decode one frame of an alpha-dropping (yuv420p) encode back to BGRA."""
+    raw = subprocess.run(
+        [
+            ffmpeg,
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-vf",
+            f"select=eq(n\\,{frame})",
+            "-frames:v",
+            "1",
+            "-pix_fmt",
+            "bgra",
+            "-f",
+            "rawvideo",
+            "-",
+        ],
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert len(raw) == SIZE * SIZE * 4
+    return np.frombuffer(raw, dtype=np.uint8).reshape(SIZE, SIZE, 4)
 
 
 def _frame_decoder(ffmpeg: str, path: Path):

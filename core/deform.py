@@ -48,7 +48,7 @@ import cv2
 import numpy as np
 
 from core.errors import RigError
-from core.layers import background_layer, composite
+from core.layers import background_plate, composite
 
 # Re-exported so `from core.deform import RigError` keeps working for callers
 # that have no reason to know the error now lives in its own module.
@@ -1004,14 +1004,14 @@ class DeformRenderer:
         self.background = None
         if character is not None:
             # Resize the character layer with the same call as the still so the
-            # two stay pixel-aligned at the canvas size, then punch the
-            # character out of the still to build the untouched background.
+            # two stay pixel-aligned at the canvas size, then build the opaque
+            # background plate from the still and the cut-out's own alpha.
             if character.shape[1] != canvas_width or character.shape[0] != canvas_height:
                 character = cv2.resize(
                     character, (canvas_width, canvas_height), interpolation=cv2.INTER_LINEAR
                 )
             self.character = np.ascontiguousarray(character)
-            self.background = background_layer(self.source, self.character)
+            self.background = background_plate(self.source, self.character[:, :, 3])
 
         if weights is None:
             weights = load_or_build_weights(

@@ -41,9 +41,8 @@ defmodule FramerWeb.RigStore do
   Absolute path of a project's materialised character layer, if it exists.
 
   The engine writes this when a split rig first renders; it is the cut-out the
-  rig deforms, and the only layer file a project keeps (the background layer is
-  derived from the still and the character's alpha). The path is the one the
-  rig document declares, falling back to the default name.
+  rig deforms. The path is the one the rig document declares, falling back to
+  the default name.
   """
   def character_layer_path(id) do
     with :ok <- validate_id(id),
@@ -55,11 +54,41 @@ defmodule FramerWeb.RigStore do
     end
   end
 
-  @doc "Remove a project's character layer, returning the rig to a single picture."
+  @doc """
+  Absolute path of a project's background plate, if it exists.
+
+  The engine materialises it beside the cut-out at split time: an opaque copy of
+  the still whose character area is reconstructed from the surrounding
+  background, so the layer the rig never warps covers every pixel. The character
+  layer is composited over it with a plain source-over, which is what the
+  editor's preview fetches to agree with the export.
+  """
+  def plate_path(id) do
+    with :ok <- validate_id(id) do
+      path = Path.join(project_dir(id), Rig.plate_filename())
+      if File.exists?(path), do: path
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Remove a split rig's materialised layers, so the engine recomputes them.
+
+  A re-extraction has to drop every file the engine could resolve for the rig:
+  the declared character path and the default name it falls back to once the
+  document stops declaring one, plus the plate that was built from them.
+  """
   def remove_character_layer(id) do
     with :ok <- validate_id(id),
          {:ok, rig} <- load(id) do
-      File.rm(character_layer_for(rig, id))
+      [
+        character_layer_for(rig, id),
+        Path.join(project_dir(id), Rig.layer_filename()),
+        Path.join(project_dir(id), Rig.plate_filename())
+      ]
+      |> Enum.each(&File.rm/1)
+
       :ok
     else
       _ -> :ok

@@ -462,30 +462,12 @@ export function remapBilinear(source, w, h, mapX, mapY) {
 // ---------------------------------------------------------------------------
 
 /**
- * The background layer for a still and its character cut-out: the still's own
- * colour with the character's alpha inverted, so the character is punched out of
- * the picture the rig never touches. Mirrors `core.layers.background_layer`.
- */
-export function backgroundLayer(source, w, h, character) {
-  const out = new Uint8ClampedArray(w * h * 4);
-  const plane = w * h;
-
-  for (let i = 0; i < plane; i++) {
-    out[i * 4] = source[i * 4];
-    out[i * 4 + 1] = source[i * 4 + 1];
-    out[i * 4 + 2] = source[i * 4 + 2];
-    out[i * 4 + 3] = 255 - character[i * 4 + 3];
-  }
-
-  return out;
-}
-
-/**
- * Additive composite of a character layer onto a background layer. The two
- * layers partition the still (the background's alpha is the inverse of the
- * character's mask), so out_alpha = fg + bg with colour weighted by coverage -
- * which keeps a feathered edge opaque. Mirrors `core.layers.composite`, so the
- * preview's layering matches the engine's export by construction.
+ * Source-over composite of a (already deformed) character layer onto the
+ * background plate the engine materialises: out_alpha = fg.a + bg.a *
+ * (1 - fg.a), colour weighted by coverage. An opaque character pixel wins
+ * outright wherever it moves, and a pixel it vacates shows the plate behind
+ * it. Mirrors `core.layers.composite`, so the preview's layering matches the
+ * engine's export by construction.
  */
 export function compositeLayers(character, background) {
   const plane = character.length / 4;
@@ -494,11 +476,12 @@ export function compositeLayers(character, background) {
   for (let i = 0; i < plane; i++) {
     const fgAlpha = character[i * 4 + 3] / 255;
     const bgAlpha = background[i * 4 + 3] / 255;
-    const outAlpha = fgAlpha + bgAlpha;
+    const outAlpha = fgAlpha + bgAlpha * (1 - fgAlpha);
     const safe = outAlpha > 0 ? outAlpha : 1;
 
     for (let c = 0; c < 3; c++) {
-      const value = character[i * 4 + c] * fgAlpha + background[i * 4 + c] * bgAlpha;
+      const value =
+        character[i * 4 + c] * fgAlpha + background[i * 4 + c] * bgAlpha * (1 - fgAlpha);
       out[i * 4 + c] = value / safe;
     }
 
@@ -517,12 +500,11 @@ export function renderFrameRGBA(source, w, h, rig, frame, options = {}) {
   const { A, T } = skinningFields(weights, world, count, w, h);
   const { mapX, mapY } = computeBackwardMap(A, T, w, h, iterations);
 
-  // A split rig deforms only its character layer; the background layer is
-  // passed through and composited underneath, exactly as the engine does.
-  if (options.character) {
+  // A split rig deforms only its character layer; the opaque background plate
+  // is passed through and composited underneath, exactly as the engine does.
+  if (options.character && options.background) {
     const warped = remapBilinear(options.character, w, h, mapX, mapY);
-    const background = backgroundLayer(source, w, h, options.character);
-    return compositeLayers(warped, background);
+    return compositeLayers(warped, options.background);
   }
 
   return remapBilinear(source, w, h, mapX, mapY);

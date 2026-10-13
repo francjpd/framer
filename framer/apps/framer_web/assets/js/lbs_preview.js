@@ -12,7 +12,6 @@
 
 import {
   applyMatrix,
-  backgroundLayer,
   compositeLayers,
   computeBackwardMap,
   computeDenseWeights,
@@ -44,6 +43,12 @@ const LINK_STROKE = "#6d28d9"; // violet-700 outline
 // resolution, and the fit floor means we never shrink below the contain-fit.
 const ZOOM_STEP = 1.2;
 const NATIVE_SCALE = 1;
+
+// A forced reload re-requests a layer file behind an unchanged URL, so the
+// cache-busting query it appends is not part of the URL's identity.
+function layerName(url) {
+  return url ? url.split("?")[0] : null;
+}
 
 function parsePoint(value) {
   if (!Array.isArray(value)) return [0, 0];
@@ -98,8 +103,11 @@ export const LbsPreview = {
     this.rig = null;
     this.sourceImage = null;
     this.characterImage = null;
+    this.backgroundImage = null;
     this.sourceUrl = this.el.dataset.sourceUrl;
     this.characterUrl = null;
+    this.backgroundUrl = null;
+    this.layerSettingsKey = null;
     this.frame = Number(this.el.dataset.frame || 0);
     this.tool = this.el.dataset.tool || "bones";
     this.selected = this.el.dataset.selected || null;
@@ -126,6 +134,7 @@ export const LbsPreview = {
     this.bindPointer();
     this.loadSource();
     this.loadCharacterLayer(this.el.dataset.characterUrl || null);
+    this.loadBackgroundLayer(this.el.dataset.backgroundUrl || null);
     this.setCursor(this.tool === "bones" ? "crosshair" : "default");
 
     this.handleEvent("rig", ({ rig }) => this.setRig(rig));
@@ -191,11 +200,16 @@ export const LbsPreview = {
       return;
     }
 
-    // A split rig's character layer appears (and changes) as the editor
-    // extracts it, so the preview has to follow the URL rather than cache it.
+    // A split rig's layers appear (and change) as the editor extracts them, so
+    // the preview follows the URLs rather than caching them.
     const characterUrl = this.el.dataset.characterUrl || null;
-    if (characterUrl !== this.characterUrl) {
+    const backgroundUrl = this.el.dataset.backgroundUrl || null;
+    if (
+      characterUrl !== layerName(this.characterUrl) ||
+      backgroundUrl !== layerName(this.backgroundUrl)
+    ) {
       this.loadCharacterLayer(characterUrl);
+      this.loadBackgroundLayer(backgroundUrl);
       return;
     }
 
@@ -288,6 +302,34 @@ export const LbsPreview = {
     image.src = url;
   },
 
+  // The opaque background plate a split rig composites the character over: a
+  // full copy of the still whose character area the engine reconstructed, so
+  // the background the rig never touches is covered everywhere. The engine
+  // materialises it beside the cut-out at split time, so the preview only ever
+  // reads the same bytes the export is composited with.
+  loadBackgroundLayer(url) {
+    this.backgroundUrl = url || null;
+
+    if (!url) {
+      this.backgroundImage = null;
+      this.invalidate();
+      this.draw();
+      return;
+    }
+
+    const image = new Image();
+    image.onload = () => {
+      this.backgroundImage = image;
+      this.invalidate();
+      this.draw();
+    };
+    image.onerror = () => {
+      this.backgroundImage = null;
+      this.setStatus("Could not load the background layer");
+    };
+    image.src = url;
+  },
+
   setRig(rig) {
     const previous = this.rig;
     this.rig = rig;
@@ -296,6 +338,26 @@ export const LbsPreview = {
       this.resetZoom();
     }
     this.selected = this.el.dataset.selected || null;
+
+    // A re-extraction rewrites the layer files behind the same URLs, so the
+    // settings recorded on the rig document are what tells the preview to drop
+    // the decoded bitmaps it holds and re-request them.
+    const settingsKey = JSON.stringify(rig.layers || null);
+    if (this.layerSettingsKey !== null && settingsKey !== this.layerSettingsKey) {
+      const query = `?key=${encodeURIComponent(settingsKey)}`;
+      const characterUrl = this.el.dataset.characterUrl || null;
+      const backgroundUrl = this.el.dataset.backgroundUrl || null;
+
+      // A layer that only just appeared was already fetched by `updated()`.
+      if (characterUrl && layerName(this.characterUrl) === characterUrl) {
+        this.loadCharacterLayer(characterUrl + query);
+      }
+      if (backgroundUrl && layerName(this.backgroundUrl) === backgroundUrl) {
+        this.loadBackgroundLayer(backgroundUrl + query);
+      }
+    }
+    this.layerSettingsKey = settingsKey;
+
     this.invalidate();
     this.draw();
   },
@@ -477,9 +539,10 @@ export const LbsPreview = {
       bind: rig.bind,
     });
 
-    // The character layer is part of what the proxy cache is built from: a
-    // different cut-out (or none at all) means the proxy has to be rebuilt.
-    const layerKey = this.characterUrl || "";
+    // The two layers are part of what the proxy cache is built from: a
+    // different cut-out or plate (or none at all) means the proxy has to be
+    // rebuilt.
+    const layerKey = `${this.characterUrl || ""}|${this.backgroundUrl || ""}`;
     if (bindKey === this.cache.bindKey && layerKey === (this.cache.layerKey || "")) return true;
 
     const baseScale = Math.min(1, PROXY_MAX / Math.max(rig.canvas.width, rig.canvas.height));
@@ -487,15 +550,17 @@ export const LbsPreview = {
     const proxy = { width: proxyRig.canvas.width, height: proxyRig.canvas.height, scale: baseScale };
     proxy.source = this.downscale(proxy.width, proxy.height);
 
-    // A split rig deforms only the character layer, so both layers are proxied
-    // at the same size and the background is derived from them exactly as the
-    // engine derives it.
-    const layered = Boolean(rig.layers && rig.layers.split && this.characterImage);
+    // A split rig deforms only the character layer; the background plate is
+    // proxied at the same size and composited underneath, exactly as the
+    // engine composites the two materialised layers.
+    const layered = Boolean(
+      rig.layers && rig.layers.split && this.characterImage && this.backgroundImage
+    );
     proxy.character = layered
       ? this.downscaleImage(this.characterImage, proxy.width, proxy.height)
       : null;
     proxy.background = layered
-      ? backgroundLayer(proxy.source.data, proxy.width, proxy.height, proxy.character.data)
+      ? this.downscaleImage(this.backgroundImage, proxy.width, proxy.height)
       : null;
 
     this.cache = {
@@ -566,7 +631,7 @@ export const LbsPreview = {
     }
 
     // A split rig deforms only the character layer and composites the untouched
-    // background underneath - the same two steps the engine runs.
+    // background plate underneath - the same two steps the engine runs.
     if (proxy.character) {
       const warped = remapBilinear(proxy.character.data, proxy.width, proxy.height, mapX, mapY);
       this.drawCanvas(compositeLayers(warped, proxy.background));
@@ -675,10 +740,9 @@ export const LbsPreview = {
     gl.clear(gl.COLOR_BUFFER_BIT);
 
     // A split rig deforms only the character layer and composites the untouched
-    // background additively (out_alpha = fg + bg, colour weighted by coverage),
-    // exactly as the engine's `core.layers.composite` does. One fragment shader
-    // reads both layers and the backward map so the divide-by-out-alpha the
-    // fixed-function blender cannot express stays exact.
+    // background plate underneath with a plain source-over, exactly as the
+    // engine's `core.layers.composite` does. One fragment shader reads both
+    // layers and the backward map so the per-pixel alpha weighting stays exact.
     if (proxy.character) {
       gl.disable(gl.BLEND);
       this.drawCompositeQuad(proxy.character, proxy.background, proxy.width, proxy.height, mapX, mapY);
@@ -731,9 +795,10 @@ export const LbsPreview = {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   },
 
-  // Composite the warped character over the untouched background in one pass,
-  // matching `core.layers.composite`: out_alpha = fg + bg, out_rgb =
-  // (fg.rgb * fg.a + bg.rgb * bg.a) / out_alpha.
+  // Composite the warped character over the untouched background plate in one
+  // pass, matching `core.layers.composite`: out_alpha = fg.a + bg.a *
+  // (1 - fg.a), out_rgb = (fg.rgb * fg.a + bg.rgb * bg.a * (1 - fg.a)) /
+  // out_alpha.
   drawCompositeQuad(character, background, width, height, mapX, mapY) {
     const gl = this.gl;
 
@@ -1599,10 +1664,11 @@ void main() {
 }
 `;
 
-// Composites the warped character over the untouched background in one pass,
-// mirroring `core.layers.composite`: out_alpha = fg.a + bg.a, out_rgb =
-// (fg.rgb * fg.a + bg.rgb * bg.a) / out_alpha. The background is read straight
-// through (never remapped), the character is sampled through the backward map.
+// Composites the warped character over the untouched background plate in one
+// pass, mirroring `core.layers.composite`: out_alpha = fg.a + bg.a *
+// (1 - fg.a), out_rgb = (fg.rgb * fg.a + bg.rgb * bg.a * (1 - fg.a)) /
+// out_alpha. The plate is read straight through (never remapped), the
+// character is sampled through the backward map.
 const COMPOSITE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D u_character;
@@ -1635,8 +1701,8 @@ void main() {
   vec2 p = texelFetch(u_map, ivec2(x, y), 0).xy;
   vec4 fg = sampleCharacter(p);
   vec4 bg = texelFetch(u_background, ivec2(x, y), 0);
-  float outAlpha = fg.a + bg.a;
-  vec3 colour = fg.rgb * fg.a + bg.rgb * bg.a;
+  float outAlpha = fg.a + bg.a * (1.0 - fg.a);
+  vec3 colour = fg.rgb * fg.a + bg.rgb * bg.a * (1.0 - fg.a);
   colour = colour / max(outAlpha, 1.0 / 255.0);
   outColor = vec4(colour, outAlpha);
 }

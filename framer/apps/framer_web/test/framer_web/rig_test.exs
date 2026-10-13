@@ -395,13 +395,25 @@ defmodule FramerWeb.RigTest do
                "split" => true,
                "character" => "character.png",
                "tolerance" => 45,
-               "soft_edges" => 5,
-               "edge_cleanup" => 3,
+               "soft_edges" => 0,
+               "edge_cleanup" => 0,
                "auto_ranges" => true
              }
 
       assert {:ok, _} = Rig.validate(split, project_dir: "/tmp/project")
       assert Jason.decode!(Jason.encode!(split)) == split
+    end
+
+    test "the recorded split mask is exact, so no background is keyed out wide" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      split = Rig.enable_split(rig)
+
+      # No feathering and no cleanup: the mask is the segmentation's own, so the
+      # character layer carries no background for the bone to resample and the
+      # background plate keeps none of the character rim.
+      assert get_in(split, ["layers", "soft_edges"]) == 0
+      assert get_in(split, ["layers", "edge_cleanup"]) == 0
     end
 
     test "clear_layers returns the rig to a single-picture document" do

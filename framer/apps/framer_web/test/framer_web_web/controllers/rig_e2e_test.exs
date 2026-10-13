@@ -242,10 +242,22 @@ defmodule FramerWebWeb.RigE2ETest do
     # The character itself moved, so the assertion above is not vacuous.
     assert character_block(rest_pixels) != character_block(posed_pixels)
 
-    # The region the character vacated shows none of its original pixels.
-    vacated = vacated_mask(source_pixels, posed_pixels)
-    assert vacated != <<>>
-    assert byte_size(vacated) > 0
+    # The engine also materialises the opaque background plate the character is
+    # composited over, so the preview fetches what the render used.
+    assert File.exists?(Path.join(RigStore.project_dir(id), FramerWeb.Rig.plate_filename()))
+    assert conn |> get(~p"/api/rigs/#{id}/background") |> response(200) |> byte_size() > 0
+
+    # The region the character vacated is opaque and carries the reconstructed
+    # background - never the character's original pixels, never a see-through
+    # hole an MP4 encode would flatten to black.
+    vacated = vacated_pixels(source_pixels, posed_pixels)
+    assert vacated != []
+
+    for <<b, g, _r, a>> <- vacated do
+      assert a == 255
+      assert b == 0
+      assert g > 100
+    end
   end
 
   test "a layered export keeps the background stable across the animation", %{conn: conn} do
@@ -305,16 +317,20 @@ defmodule FramerWebWeb.RigE2ETest do
     end
   end
 
-  # BGRA pixels of a still that are opaque at rest and transparent once posed.
-  defp vacated_mask(source, posed) do
-    for y <- @character_rows, x <- @character_columns, into: <<>> do
+  # BGRA pixels of a still that show the character at rest and no longer show it
+  # once posed: the footprint the background plate has to fill.
+  defp vacated_pixels(source, posed) do
+    for y <- @character_rows, x <- @character_columns, into: [] do
       offset = (y * @width + x) * 4
 
       was_character = :binary.at(source, offset + 2) > 200
-      now_empty = :binary.at(posed, offset + 3) == 0
+      still_character = :binary.at(posed, offset + 2) > 200
 
-      if was_character and now_empty, do: binary_part(posed, offset, 4), else: <<>>
+      if was_character and not still_character do
+        binary_part(posed, offset, 4)
+      end
     end
+    |> Enum.reject(&is_nil/1)
   end
 
   defp background_drift(first, last) do

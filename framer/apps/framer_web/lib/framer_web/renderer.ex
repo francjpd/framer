@@ -20,7 +20,8 @@ defmodule FramerWeb.Renderer do
   A split rig (`rig.layers.split`) renders through the same `deform` operation
   as ever - the rig document tells the engine which character layer to deform -
   so the final render is authoritative for the layering exactly as it is for the
-  math. The interactive preview is only a proxy of the same layering.
+  math. The interactive preview is only a proxy of the same layering: it fetches
+  the engine-materialised cut-out and its opaque background plate.
   """
 
   require Logger
@@ -63,8 +64,7 @@ defmodule FramerWeb.Renderer do
         "options" => %{
           "rig" => rig_path,
           "still" => true,
-          "iterations" => opts[:iterations] || 6,
-          "character" => opts[:character]
+          "iterations" => opts[:iterations] || 6
         }
       }
 
@@ -92,7 +92,8 @@ defmodule FramerWeb.Renderer do
   existing background-removal segmentation over the still through the same Port
   contract every other render uses - the BEAM still only ever sends paths, a
   frame range and JSON options - and writes `<project>/character.png`, the
-  cut-out whose alpha is the character mask.
+  cut-out whose alpha is the character mask, next to the opaque background plate
+  the engine composites it over.
 
   The render that produces it is frame 0 of the very rig being split, so the
   composited still the editor shows afterwards is exactly what the first render
@@ -160,7 +161,6 @@ defmodule FramerWeb.Renderer do
           "iterations" => opts[:iterations] || 5
         }
         |> maybe_put("weights", opts[:weights])
-        |> maybe_put("character", opts[:character])
 
       case Orchestrator.submit_job(source, output,
              operation: "deform",

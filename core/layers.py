@@ -7,18 +7,19 @@ recomposites them after the deformation, so the rig only ever warps the
 character:
 
     source.png ── character mask (background-removal alpha) ──▶ character layer
-                                                             └─▶ background layer
+                                                              └─▶ background layer
 
 * **character layer** - the still's colour with the mask as its alpha, so the
   cut-out is exactly the pixels the background-removal operation kept.
-* **background layer** - the still's colour with the *inverse* of the mask as
-  its alpha, i.e. the same picture with the character punched out. It is never
-  resampled by the rig.
+* **background layer** - an opaque *plate*: a full copy of the still whose
+  character area is reconstructed from the surrounding background, so no pixel
+  is left uncovered. It is never resampled by the rig.
 
-The layers are recomposited additively (out_alpha = fg + bg, colour weighted by
-coverage), so a pixel the character moved away from ends up transparent: the
-character layer no longer covers it and the background layer has no colour there
-either. That is the documented fill behaviour for a vacated region - see
+The layers are recomposited with a plain source-over (``out = fg + bg *
+(1 - fg.a)``), so an opaque character wins outright wherever it moves - even
+over background it did not occupy at rest - and a pixel the character moved
+away from shows the reconstructed plate rather than the character's original
+pixels. That is the documented fill behaviour for a vacated region - see
 `docs/rig-editor.md`.
 
 The mask itself comes from the existing background-removal segmentation
@@ -36,9 +37,11 @@ import numpy as np
 from core.bg_removal import character_alpha
 from core.errors import RigError
 
-# Default file name for the materialised character layer, written next to the
-# still so a project directory stays `source.png` + `character.png` + `rig.json`.
+# Default file names for the materialised layers, written next to the still so
+# a project directory stays `source.png` + `character.png` + `background.png` +
+# `rig.json`.
 LAYER_FILENAME = "character.png"
+PLATE_FILENAME = "background.png"
 
 # The rig document field holding the layered state.
 LAYERS_KEY = "layers"
@@ -49,14 +52,14 @@ def split_layers(
     alpha: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Split a still into its character and background layers.
+    Split a still into its character layer and its background plate.
 
     Args:
         source: BGRA still.
         alpha: ``(H, W)`` uint8 mask, ``255`` = character.
 
     Returns:
-        ``(character, background)`` as BGRA arrays of the same shape.
+        ``(character, plate)`` as BGRA arrays of the same shape.
     """
     if source.ndim != 3 or source.shape[2] != 4:
         raise RigError(f"a layer split needs a BGRA still, got shape {source.shape}")
@@ -70,20 +73,60 @@ def split_layers(
     rgb = source[:, :, :3]
     mask = alpha[:, :, np.newaxis]
     character = np.concatenate([rgb, mask], axis=2)
-    background = np.concatenate([rgb, 255 - mask], axis=2)
-    return character, background
+    return character, background_plate(source, alpha)
+
+
+def background_plate(source: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+    """
+    The still as an opaque plate with the character area reconstructed.
+
+    The plate is a full copy of the still - every pixel, including the ones the
+    character occupied at rest - so the never-warped background layer covers
+    the whole canvas. The character area is reconstructed from the surrounding
+    background with the existing OpenCV inpainting, so where the character moves
+    away the plate shows through instead of a hole or the character's original
+    pixels.
+
+    Args:
+        source: BGRA still.
+        alpha: ``(H, W)`` uint8 mask, ``255`` = character.
+
+    Returns:
+        A BGRA plate whose alpha is fully opaque.
+    """
+    if source.ndim != 3 or source.shape[2] != 4:
+        raise RigError(f"a background plate needs a BGRA still, got shape {source.shape}")
+
+    alpha = np.asarray(alpha, dtype=np.uint8)
+    if alpha.shape != source.shape[:2]:
+        raise RigError(
+            f"character mask shape {alpha.shape} does not match the still {source.shape[:2]}"
+        )
+
+    plate = source[:, :, :3]
+    hole = alpha > 0
+    if hole.any():
+        # cv2.inpaint rewrites only the masked pixels, so the untouched
+        # background keeps the still's own values.
+        plate = cv2.inpaint(
+            plate,
+            hole.astype(np.uint8) * 255,
+            3,
+            cv2.INPAINT_TELEA,
+        )
+
+    return np.concatenate([plate, np.full(source.shape[:2] + (1,), 255, dtype=np.uint8)], axis=2)
 
 
 def composite(character: np.ndarray, background: np.ndarray) -> np.ndarray:
     """
     Composite a (already deformed) character layer over an unwarped background.
 
-    The two layers partition the still (the background's alpha is the inverse
-    of the character's mask), so the composite is additive: ``out_alpha = fg +
-    bg`` with the colour weighted by each layer's coverage and divided by the
-    sum. That keeps a feathered edge opaque - a pixel the character half-covers
-    is half-covered by the background too - and leaves a pixel neither layer
-    covers (the vacated region) transparent.
+    A plain source-over: ``out_alpha = fg.a + bg.a * (1 - fg.a)`` with the
+    colour weighted by each layer's coverage. An opaque character pixel wins
+    outright wherever it lands - including over background it did not occupy at
+    rest, which is what keeps the character from blending with the background -
+    and a pixel the character vacates shows the background plate behind it.
     """
     for name, layer in (("character", character), ("background", background)):
         if layer.ndim != 3 or layer.shape[2] != 4:
@@ -98,10 +141,10 @@ def composite(character: np.ndarray, background: np.ndarray) -> np.ndarray:
     fg_alpha = character[:, :, 3:4].astype(np.float32) / 255.0
     bg_alpha = background[:, :, 3:4].astype(np.float32) / 255.0
 
-    out_alpha = fg_alpha + bg_alpha
+    out_alpha = fg_alpha + bg_alpha * (1.0 - fg_alpha)
     safe_alpha = np.where(out_alpha > 0.0, out_alpha, 1.0)
 
-    colour = character[:, :, :3] * fg_alpha + background[:, :, :3] * bg_alpha
+    colour = character[:, :, :3] * fg_alpha + background[:, :, :3] * bg_alpha * (1.0 - fg_alpha)
     colour = colour / safe_alpha
 
     return np.concatenate(
@@ -111,16 +154,6 @@ def composite(character: np.ndarray, background: np.ndarray) -> np.ndarray:
         ],
         axis=2,
     )
-
-
-def background_layer(source: np.ndarray, character: np.ndarray) -> np.ndarray:
-    """The still's colour with the character layer punched out (its alpha inverted)."""
-    if character.shape[:2] != source.shape[:2]:
-        raise RigError(
-            f"character layer {character.shape[:2]} does not match the still {source.shape[:2]}"
-        )
-    inverse = 255 - character[:, :, 3:4]
-    return np.concatenate([source[:, :, :3], inverse], axis=2)
 
 
 def load_layer(path: str | Path) -> np.ndarray:
@@ -158,8 +191,8 @@ def layer_settings(rig: dict[str, Any]) -> dict[str, Any]:
         "auto_ranges": bool(layers.get("auto_ranges", True)),
         "num_ranges": int(layers.get("num_ranges", 5)),
         "adaptive_bg": bool(layers.get("adaptive_bg", False)),
-        "edge_cleanup": int(layers.get("edge_cleanup", 3)),
-        "soft_edges": int(layers.get("soft_edges", 5)),
+        "edge_cleanup": int(layers.get("edge_cleanup", 0)),
+        "soft_edges": int(layers.get("soft_edges", 0)),
     }
 
 
@@ -178,21 +211,22 @@ def resolve_character_layer(
     rig: dict[str, Any],
     source: np.ndarray,
     source_path: str | Path,
-    explicit: str | Path | None = None,
 ) -> tuple[np.ndarray, Path | None]:
     """
     Return the character layer for a rig, materialising it when needed.
 
-    The declared path is taken from ``explicit`` (an operation option), else
-    from the rig document's ``layers.character``, else the default
-    ``character.png`` beside the still. A relative path is resolved against the
-    still's directory, which is where the editor keeps a project's files.
+    The path is taken from the rig document's ``layers.character``, else the
+    default ``character.png`` beside the still. A relative path is resolved
+    against the still's directory, which is where the editor keeps a project's
+    files.
 
     When the rig asks for a split but the layer file is not there yet, the
     character mask is computed from the still with the background-removal
-    segmentation and written to that path, so a later render, an export and the
-    editor's preview all read the same cut-out. That write is the only thing
-    this function does beyond returning pixels.
+    segmentation and both layers are written beside it - the cut-out and the
+    opaque plate - so a later render, an export and the editor's preview all
+    read the same two layers. A plate that predates the current cut-out is
+    rewritten alongside it. Those writes are the only thing this function does
+    beyond returning pixels.
 
     Returns:
         ``(character_layer, written_path)``; ``written_path`` is ``None`` when an
@@ -202,24 +236,48 @@ def resolve_character_layer(
     if not is_split(rig):
         return None, None
 
-    declared = str(explicit) if explicit else (declared_character_path(rig) or LAYER_FILENAME)
+    declared = declared_character_path(rig) or LAYER_FILENAME
     path = Path(declared)
     if not path.is_absolute():
         path = Path(source_path).parent / path
 
     if path.exists():
-        return load_layer(path), None
+        character = load_layer(path)
+        _plate = _ensure_plate(source, character, Path(source_path).parent / PLATE_FILENAME)
+        return character, None
 
     settings = layer_settings(rig)
     alpha = character_alpha(source, **settings)
-    character, _background = split_layers(source, alpha)
-    return character, write_layer(path, character)
+    character, plate = split_layers(source, alpha)
+    write_layer(path, character)
+    write_layer(Path(source_path).parent / PLATE_FILENAME, plate)
+    return character, path
+
+
+def _ensure_plate(
+    source: np.ndarray,
+    character: np.ndarray,
+    plate_path: Path,
+) -> Path:
+    """
+    Write the plate for an existing character layer when it is missing.
+
+    A project folder that already holds a cut-out from before the plate existed
+    has no background layer yet, and the editor's preview needs the same file
+    the engine composites with - so it is materialised on demand from the
+    cut-out's own alpha, which is the mask it was built with.
+    """
+    if not plate_path.exists():
+        plate = background_plate(source, character[:, :, 3])
+        write_layer(plate_path, plate)
+    return plate_path
 
 
 __all__ = [
     "LAYERS_KEY",
     "LAYER_FILENAME",
-    "background_layer",
+    "PLATE_FILENAME",
+    "background_plate",
     "character_alpha",
     "composite",
     "declared_character_path",

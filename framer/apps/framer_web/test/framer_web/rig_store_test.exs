@@ -120,6 +120,7 @@ defmodule FramerWeb.RigStoreTest do
     id = saved["id"]
 
     assert RigStore.character_layer_path(id) == nil
+    assert RigStore.plate_path(id) == nil
 
     layer = Path.join(RigStore.project_dir(id), Rig.layer_filename())
     File.write!(layer, "cutout")
@@ -131,6 +132,46 @@ defmodule FramerWeb.RigStoreTest do
     # Removing an absent layer is harmless, and an unsafe id never escapes.
     assert :ok = RigStore.remove_character_layer(id)
     assert :ok = RigStore.remove_character_layer("../escape")
+  end
+
+  test "removing the character layer clears every file the engine could resolve" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+    dir = RigStore.project_dir(id)
+
+    split = Rig.enable_split(rig, character: "cutouts/hero.png")
+    assert {:ok, _saved} = RigStore.save(split)
+
+    declared = Path.join(dir, "cutouts/hero.png")
+    File.mkdir_p!(Path.dirname(declared))
+    File.write!(declared, "cutout")
+
+    # The stale default-named cut-out from an earlier split is still on disk, so
+    # the engine would reuse it when the document stops declaring a path...
+    stale_default = Path.join(dir, Rig.layer_filename())
+    File.write!(stale_default, "stale cutout")
+    # ...together with the plate built from it.
+    plate = Path.join(dir, Rig.plate_filename())
+    File.write!(plate, "plate")
+
+    assert :ok = RigStore.remove_character_layer(id)
+
+    refute File.exists?(declared)
+    refute File.exists?(stale_default)
+    refute File.exists?(plate)
+    assert RigStore.character_layer_path(id) == nil
+    assert RigStore.plate_path(id) == nil
+  end
+
+  test "the plate path resolves the materialised background layer" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+
+    plate = Path.join(RigStore.project_dir(id), Rig.plate_filename())
+    File.write!(plate, "plate")
+
+    assert RigStore.plate_path(id) == plate
+    assert RigStore.plate_path("../escape") == nil
   end
 
   test "character layer paths honour the declared layer path" do
