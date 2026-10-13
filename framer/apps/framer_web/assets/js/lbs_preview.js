@@ -738,8 +738,16 @@ export const LbsPreview = {
     ctx.restore();
   },
 
+  // Image coordinates -> overlay canvas coordinates.
+  //
+  // `measureView` already positions both canvases on the letterboxed image
+  // rectangle (`style.left/top` = `view.offsetX/offsetY`), so the overlay's
+  // origin *is* the image's top-left corner. `toImage` therefore subtracts the
+  // letterbox once to reach image space; re-adding it here would offset every
+  // overlay item one letterbox right and down, which is the displacement
+  // reported for a placed bone and its create-drag preview.
   project(point) {
-    return [this.view.offsetX + point[0] * this.view.scale, this.view.offsetY + point[1] * this.view.scale];
+    return [point[0] * this.view.scale, point[1] * this.view.scale];
   },
 
   hitTest(point, world) {

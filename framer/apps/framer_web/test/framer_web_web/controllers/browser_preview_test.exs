@@ -42,6 +42,14 @@ defmodule FramerWebWeb.BrowserPreviewTest do
   @subject_min 5_000
   # Bone stroke (selected #f59e0b, width 4) and joint (#fbbf24): amber pixels.
   @bone_min 200
+  # The rendered overlay must sit on the image point it was created on: window
+  # (device px) around the image point the joint disc is collected from, the
+  # joint pixel count a 5 CSS px disc gives at DPR 1.5, and how far the disc's
+  # centroid may drift from that image point before the overlay counts as
+  # displaced. The reported displacement was tens of CSS pixels.
+  @alignment_window 30
+  @joint_min 80
+  @alignment_tolerance 4
 
   setup_all do
     # Isolate the editor's projects dir exactly like rig_e2e_test.exs, so the
@@ -445,6 +453,180 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     }
 
     assert run_scenario(spec, root) == :ok
+  end
+
+  # The reporter's overlay displacement: a freshly placed bone and its green
+  # create-drag preview drew tens of pixels away from the pointer while a DOM
+  # marker at the same pointer sat exactly on the cursor, and while the click
+  # itself mapped to the right image coordinate. The still is the reporter's own
+  # 464x688 portrait at DPR 1.5, so the landscape editor letterboxes it and the
+  # letterbox offset that the overlay double-counted is hundreds of device
+  # pixels wide. A matching-aspect landscape element does not letterbox, which
+  # is why the companion proof reshapes the element instead.
+  #
+  # Both proofs compare the *drawn* overlay against the rendered image: the red
+  # subject block's box centre in the screenshot is where the clicked image point
+  # landed, and the selected bone's joint disc must be centred on that same
+  # screen position. Comparing stored image coordinates (what the click-precision
+  # tests do) cannot see this defect, because the stored data was already right.
+  test "overlay alignment: a bone drawn on a letterboxed still sits under the pointer",
+       %{root: root} do
+    shots = Path.join(root, "overlay_letterbox")
+    File.mkdir_p!(shots)
+    shot = Path.join(shots, "overlay.png")
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      deviceScaleFactor: 1.5,
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        overlay_align_steps([
+          %{
+            name: "the portrait still is letterboxed on both sides",
+            evaluate:
+              "() => { const el = document.querySelector('#viewport'); const r = el.getBoundingClientRect(); const o = el.querySelector('.framer-viewport-overlay').getBoundingClientRect(); return Math.round(o.left - r.left); }",
+            expect: %{gt: 20}
+          }
+        ]) ++
+          [
+            %{
+              name: "screenshot the letterboxed viewport",
+              screenshot: %{path: shot, selector: "#viewport"}
+            }
+          ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+    assert_overlay_aligned(shot)
+  end
+
+  # The companion proof: the same still in an element whose aspect it matches is
+  # not letterboxed at all, so the fix must not have moved the overlay the other
+  # way. It guards the fix direction - "draw canvas-local" rather than "stop
+  # centring the canvases" - which only the unletterboxed case can catch.
+  test "overlay alignment: a bone drawn on a non-letterboxed still sits under the pointer",
+       %{root: root} do
+    shots = Path.join(root, "overlay_aligned")
+    File.mkdir_p!(shots)
+    shot = Path.join(shots, "overlay.png")
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      deviceScaleFactor: 1.5,
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        overlay_align_steps([]) ++
+          [
+            %{
+              name: "widen the palette until the element's aspect matches the still",
+              evaluate:
+                "() => { const el = document.querySelector('#viewport'); const p = document.querySelector('#palette'); const r = el.getBoundingClientRect(); const target = (464 / 688) * r.height; p.style.width = Math.round(window.innerWidth - 1 - target) + 'px'; p.style.flexShrink = '0'; return Math.round(target); }",
+              expect: %{gt: 0}
+            },
+            %{name: "let the viewport re-fit", sleep: 500},
+            %{
+              name: "the still fills the element, so both letterbox offsets are zero",
+              evaluate:
+                "() => { const el = document.querySelector('#viewport'); const r = el.getBoundingClientRect(); const o = el.querySelector('.framer-viewport-overlay').getBoundingClientRect(); return Math.max(Math.abs(o.left - r.left), Math.abs(o.top - r.top)); }",
+              expect: %{lte: 1}
+            },
+            %{
+              name: "screenshot the fitted viewport",
+              screenshot: %{path: shot, selector: "#viewport"}
+            }
+          ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+    assert_overlay_aligned(shot)
+  end
+
+  # The steps both overlay-alignment proofs share: open the octopus-sized
+  # portrait still, run `prepare` (the proof's own viewport-shape step, which
+  # must land before the drag), then create a bone whose head is the still's
+  # exact centre - image (232, 344), where `png_with_subject` centres its red
+  # subject block. The click is a real pointer drag, so the bone's head is the
+  # image point the pointer actually pressed. Each proof appends its own
+  # screenshot step.
+  defp overlay_align_steps(prepare) do
+    [
+      %{name: "open the editor shell", open: "/editor"},
+      %{name: "shell renders", waitForSelector: "#editor-shell"},
+      %{
+        name: "create the 464x688 portrait still",
+        fetch: %{
+          url: "/api/rigs",
+          method: "POST",
+          headers: %{"content-type" => "application/json"},
+          body: %{
+            "name" => "browser-overlay-align",
+            "filename" => "subject.png",
+            "source_base64" => Base.encode64(Fixtures.png_with_subject(464, 688, @subject))
+          }
+        },
+        saveAs: "create"
+      },
+      %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+      %{name: "viewport renders", waitForSelector: "#viewport"},
+      %{
+        name: "source image drawn",
+        waitForFunction:
+          "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+      },
+      %{name: "let the preview settle", sleep: 1_000},
+      %{
+        name: "the overlay canvas sits exactly on the image canvas",
+        evaluate:
+          "() => { const el = document.querySelector('#viewport'); const c = el.querySelector('canvas').getBoundingClientRect(); const o = el.querySelector('.framer-viewport-overlay').getBoundingClientRect(); return Math.abs(c.left - o.left) < 1 && Math.abs(c.top - o.top) < 1 && Math.abs(c.width - o.width) < 1 && Math.abs(c.height - o.height) < 1; }",
+        expect: %{eq: true}
+      }
+    ] ++
+      prepare ++
+      [
+        %{
+          name: "create a bone whose head is the still's centre, image (232,344)",
+          dragImage: %{
+            from: [232, 344],
+            to: [282, 344],
+            imgW: 464,
+            imgH: 688,
+            steps: 8,
+            settleMs: 300
+          }
+        },
+        %{
+          name: "bone reaches the editor hierarchy",
+          waitForSelector: "button[phx-click=\"select_bone\"]"
+        },
+        %{name: "let the bone overlay draw", sleep: 500}
+      ]
+  end
+
+  # Asserts the drawn bone lands on the image point the pointer pressed. The red
+  # subject block is the only saturated red in the viewport, so its box centre is
+  # the on-screen position of the clicked image point; the selected bone's joint
+  # disc (`#fbbf24`, the light amber the hook fills its joints with, lighter than
+  # the `#f59e0b` stroke) must be centred on that same screen position. Tolerances
+  # are device pixels: 1 CSS px is 1.5 device px at DPR 1.5, and the centring
+  # error is dominated by Playwright's rounded element-screenshot origin.
+  defp assert_overlay_aligned(shot) do
+    assert %{width: width, height: height} = assert_png!(shot)
+    assert subject_pixels(shot, width, height) >= @subject_min
+
+    {image_x, image_y, joint_count, joint_x, joint_y} =
+      alignment_scan(shot, width, height, @alignment_window)
+
+    assert image_x, "the portrait still's red subject block must be visible in the viewport"
+    assert joint_count >= @joint_min
+
+    drift = :math.sqrt((joint_x - image_x) ** 2 + (joint_y - image_y) ** 2)
+
+    assert drift <= @alignment_tolerance,
+           "the bone's joint drifted #{Float.round(drift, 1)} device px from the image point " <>
+             "it was created on (image point at #{image_x},#{image_y}, joint at " <>
+             "#{Float.round(joint_x, 1)},#{Float.round(joint_y, 1)})"
   end
 
   test "element resize without a window resize: a click still lands where placed", %{
@@ -961,10 +1143,81 @@ defmodule FramerWebWeb.BrowserPreviewTest do
   # The red subject block of Fixtures.png_with_subject (saturated red,
   # opaque); bone and joint overlays are amber/slate and never match.
   defp subject_pixels(path, width, height) do
-    count_pixels(path, width, height, fn r, g, b, a ->
-      r >= 200 and g <= 60 and b <= 60 and a >= 200
-    end)
+    count_pixels(path, width, height, &subject_pixel?/4)
   end
+
+  defp subject_pixel?(r, g, b, a) do
+    r >= 200 and g <= 60 and b <= 60 and a >= 200
+  end
+
+  # The joint disc of a selected bone: #fbbf24, lighter than the amber stroke
+  # (#f59e0b, g 158) and the translucent influence ring, neither of which
+  # matches, so a centroid built from these pixels is centred on the joint.
+  defp joint_pixel?(r, g, b, a) do
+    r >= 200 and g >= 175 and b <= 120 and a >= 200
+  end
+
+  # One pass over the screenshot for the overlay-alignment proofs: the bounding
+  # box of the saturated red subject block (the still's on-screen rectangle) and
+  # the centroid of the joint-disc pixels inside `window` device pixels of its
+  # centre. The image point comes back `nil` when no subject block is on screen.
+  defp alignment_scan(path, width, height, window) do
+    raw = raw_rgba(path)
+    row_size = width * 4
+
+    {box, joints} =
+      for y <- 0..(height - 1), reduce: {nil, []} do
+        {box, joints} ->
+          row = binary_part(raw, y * row_size, row_size)
+
+          for x <- 0..(width - 1), reduce: {box, joints} do
+            {box, joints} ->
+              <<r, g, b, a>> = binary_part(row, x * 4, 4)
+
+              cond do
+                subject_pixel?(r, g, b, a) -> {grow_box(box, x, y), joints}
+                joint_pixel?(r, g, b, a) -> {box, [{x, y} | joints]}
+                true -> {box, joints}
+              end
+          end
+      end
+
+    {image_x, image_y} =
+      case box_centre(box) do
+        nil -> {nil, nil}
+        centre -> centre
+      end
+
+    near =
+      if image_x do
+        for {x, y} <- joints,
+            (x - image_x) ** 2 + (y - image_y) ** 2 <= window * window,
+            do: {x, y}
+      else
+        []
+      end
+
+    {image_x, image_y, length(near), centroid_x(near), centroid_y(near)}
+  end
+
+  defp grow_box(nil, x, y), do: {x, y, x, y}
+
+  defp grow_box({x0, y0, x1, y1}, x, y) do
+    {min(x0, x), min(y0, y), max(x1, x), max(y1, y)}
+  end
+
+  defp box_centre(nil), do: nil
+  defp box_centre({x0, y0, x1, y1}), do: {(x0 + x1) / 2, (y0 + y1) / 2}
+
+  defp centroid_x([]), do: 0.0
+
+  defp centroid_x(pixels),
+    do: pixels |> Enum.map(&elem(&1, 0)) |> Enum.sum() |> Kernel./(length(pixels))
+
+  defp centroid_y([]), do: 0.0
+
+  defp centroid_y(pixels),
+    do: pixels |> Enum.map(&elem(&1, 1)) |> Enum.sum() |> Kernel./(length(pixels))
 
   # Bone overlay pixels: the selected bone stroke (#f59e0b) and joint
   # (#fbbf24) the LbsPreview hook paints on its overlay canvas. The subject

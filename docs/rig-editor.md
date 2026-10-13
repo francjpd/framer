@@ -226,9 +226,11 @@ regressions for the slice-1 blank-preview defect and, since slice 4, for
 viewport resize, WebGL context loss/recovery and fullscreen re-measure. It also
 covers click precision (a bone landing where clicked at non-1 DPR, after a
 resize, and on EXIF-rotated photographs whose displayed dimensions differ from
-their stored pixels) and the call-to-action handles (the move handle posing
-rather than mutating rest geometry, the rotate handle dragging the tail without
-a start jump). It excludes itself when
+their stored pixels), overlay alignment (the drawn overlay sitting under the
+pointer on a letterboxed portrait still, where the overlay once drew one
+letterbox off, and on a still whose aspect matches the element), and the
+call-to-action handles (the move handle posing rather than mutating rest
+geometry, the rotate handle dragging the tail without a start jump). It excludes itself when
 Chromium, Node or the built editor assets are missing, so to run it locally,
 install the harness and build the assets first:
 
