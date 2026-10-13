@@ -10,7 +10,7 @@ operation for the final render and export.
 │ header: title · shortcut hint · undo · save                    │
 ├──────────────┬────────────────────────────────────────────────┤
 │ Workflow     │ centre viewport                                 │
-│  step guide  │  toolbar: Mesh · Labels · Reticle · proxy badge            │
+│  step guide  │  toolbar: Mesh · Labels · Reticle · proxy badge │
 │ Media        │  source still + control mesh + bones            │
 │  upload      │  client-side WebGL2 / canvas LBS preview        │
 │  projects    │                                                 │
@@ -232,17 +232,17 @@ The browser proof suite (`browser_preview_test.exs`, tagged
 `tests/browser/editor_runner.mjs` (playwright-core, no browser download) and
 asserts preview pixels on saved `#viewport` screenshots - the browser-level
 regressions for the slice-1 blank-preview defect and, since slice 4, for
-  viewport resize, WebGL context loss/recovery and fullscreen re-measure. It also
-  covers click precision (a bone landing where clicked at non-1 DPR, after a
-  resize, and on EXIF-rotated photographs whose displayed dimensions differ from
-  their stored pixels), the aim reticle (the marker sitting on the image point
-  the editor maps a known pointer position to, following the pointer, going away
-  when its view toggle is off, and marking the same point a bone then lands on),
-  and the call-to-action handles (the move handle posing
-  rather than mutating rest geometry, the rotate handle dragging the tail without
-  a start jump). It excludes itself when
-  Chromium, Node or the built editor assets are missing, so to run it locally,
-  install the harness and build the assets first:
+viewport resize, WebGL context loss/recovery and fullscreen re-measure. It also
+covers click precision (a bone landing where clicked at non-1 DPR, after a
+resize, and on EXIF-rotated photographs whose displayed dimensions differ from
+their stored pixels), the aim reticle (the marker sitting on the image point
+the editor maps a known pointer position to, following the pointer, going away
+when its view toggle is off, and marking the same point a bone then lands on),
+and the call-to-action handles (the move handle posing
+rather than mutating rest geometry, the rotate handle dragging the tail without
+a start jump). It excludes itself when
+Chromium, Node or the built editor assets are missing, so to run it locally,
+install the harness and build the assets first:
 
 ```bash
 (cd tests/browser && npm ci)
