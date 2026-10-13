@@ -231,7 +231,10 @@ defmodule FramerWebWeb.EditorLive do
   end
 
   def handle_event("bone_parented", %{"parent" => parent}, socket) do
-    {:noreply, mutate(socket, fn rig -> Rig.set_parent(rig, socket.assigns.selected_bone, blank_to_nil(parent)) end)}
+    {:noreply,
+     mutate(socket, fn rig ->
+       Rig.set_parent(rig, socket.assigns.selected_bone, blank_to_nil(parent))
+     end)}
   end
 
   def handle_event("set_bone_name", %{"name" => name}, socket) do
@@ -240,14 +243,16 @@ defmodule FramerWebWeb.EditorLive do
     if name in [nil, ""] do
       {:noreply, assign(socket, :error, "Bone name must be a non-empty string")}
     else
-      {:noreply, mutate(socket, fn rig -> Rig.set_name(rig, socket.assigns.selected_bone, name) end)}
+      {:noreply,
+       mutate(socket, fn rig -> Rig.set_name(rig, socket.assigns.selected_bone, name) end)}
     end
   end
 
   def handle_event("set_radius", %{"radius" => radius}, socket) do
     case to_float(radius) do
       value when is_number(value) and value > 0 ->
-        {:noreply, mutate(socket, fn rig -> Rig.set_radius(rig, socket.assigns.selected_bone, value) end)}
+        {:noreply,
+         mutate(socket, fn rig -> Rig.set_radius(rig, socket.assigns.selected_bone, value) end)}
 
       _ ->
         {:noreply, assign(socket, :error, "Radius must be a positive number")}
@@ -256,7 +261,8 @@ defmodule FramerWebWeb.EditorLive do
 
   def handle_event("set_falloff", %{"falloff" => falloff}, socket) do
     if falloff in Rig.falloffs() do
-      {:noreply, mutate(socket, fn rig -> Rig.set_falloff(rig, socket.assigns.selected_bone, falloff) end)}
+      {:noreply,
+       mutate(socket, fn rig -> Rig.set_falloff(rig, socket.assigns.selected_bone, falloff) end)}
     else
       {:noreply, assign(socket, :error, "Unknown falloff; expected smooth, linear or hard")}
     end
