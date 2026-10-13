@@ -1728,7 +1728,13 @@ defmodule FramerWebWeb.BrowserPreviewTest do
         name: "screenshot the in-progress drag",
         screenshot: %{path: shot, selector: "#viewport"}
       },
-      %{name: "release the pointer", pointerUp: %{settleMs: 300}},
+      %{
+        name: "the pointer-up draw holds the dropped joint (in-page release, no rest-pose frame)",
+        evaluate:
+          "() => { window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })); const overlay = document.querySelector('#viewport canvas.framer-viewport-overlay'); const w = overlay.width, h = overlay.height; const rect = overlay.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1; const tx = #{landed_head |> Enum.at(0)} * (rect.width / 200) * dpr, ty = #{landed_head |> Enum.at(1)} * (rect.width / 200) * dpr; const pixels = overlay.getContext('2d').getImageData(0, 0, w, h).data; let jx = 0, jy = 0, jn = 0; for (let y = 0; y < h; y++) { for (let x = 0; x < w; x++) { const i = (y * w + x) * 4; if (pixels[i] >= 200 && pixels[i + 1] >= 175 && pixels[i + 2] <= 120 && pixels[i + 3] >= 200 && Math.hypot(x - tx, y - ty) <= #{@alignment_window}) { jx += x; jy += y; jn++; } } } if (jn < #{@joint_min}) return 999999; return Math.hypot(jx / jn - tx, jy / jn - ty); }",
+        expect: %{lt: @alignment_tolerance}
+      },
+      %{name: "finish the release and let the commit settle", pointerUp: %{settleMs: 300}},
       bone_joint_error(0, "head", landed_head |> Enum.at(0), landed_head |> Enum.at(1)),
       bone_joint_error(0, "tail", landed_tail |> Enum.at(0), landed_tail |> Enum.at(1))
     ]

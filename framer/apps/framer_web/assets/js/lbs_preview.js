@@ -338,7 +338,6 @@ export const LbsPreview = {
       this.resetZoom();
     }
     this.selected = this.el.dataset.selected || null;
-
     // A re-extraction rewrites the layer files behind the same URLs, so the
     // settings recorded on the rig document are what tells the preview to drop
     // the decoded bitmaps it holds and re-request them.
@@ -358,6 +357,7 @@ export const LbsPreview = {
     }
     this.layerSettingsKey = settingsKey;
 
+    if (this.drag && this.drag.released) this.drag = null;
     this.invalidate();
     this.draw();
   },
@@ -1484,7 +1484,7 @@ export const LbsPreview = {
   },
 
   pointerMove(event) {
-    if (!this.drag) {
+    if (!this.drag || this.drag.released) {
       this.updateHover(event);
       return;
     }
@@ -1534,10 +1534,15 @@ export const LbsPreview = {
   },
 
   pointerUp() {
-    if (!this.drag) return;
+    if (!this.drag || this.drag.released) return;
     const drag = this.drag;
-    this.drag = null;
     this.setCursor(this.tool === "bones" ? "crosshair" : "default");
+
+    if (drag.type === "move" || (drag.type === "translate" && drag.offset)) {
+      drag.released = true;
+    } else {
+      this.drag = null;
+    }
 
     if (drag.type === "link") {
       // Dropping on a bone parents the dragged bone onto it; dropping on empty
