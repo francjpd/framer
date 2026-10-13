@@ -47,8 +47,13 @@
 //        "from": [100, 50], "to": [140, 70],          // [ix, iy] in the image
 //        "imgW": 200, "imgH": 100,                     // image dimensions
 //        "steps": 8, "settleMs": 300}},
-//     {"name": "...", "resize": {"width": 1600, "height": 1000}},
-//     {"name": "...", "screenshot": {"path": "/abs/out.png", "selector": "#viewport"}}
+    //     {"name": "...", "resize": {"width": 1600, "height": 1000}},
+    //     {"name": "...", "wheel": {                                   // wheel event
+    //        "at": {"fx": 0.5, "fy": 0.5},                   // pointer pos, optional
+    //        "deltaY": -100,                                // <0 zoom in, >0 out
+    //        "ctrlKey": true,                               // default true (Cmd/Ctrl+wheel)
+    //        "settleMs": 300}},
+    //     {"name": "...", "screenshot": {"path": "/abs/out.png", "selector": "#viewport"}}
 //   ]
 // }
 //
@@ -286,16 +291,20 @@ async function runStep(step, index, total) {
     const drag = step.dragImage;
     const selector = drag.selector || "#viewport";
     const pts = await page.evaluate(
-      ({ selector, from, to, imgW, imgH }) => {
-        const el = document.querySelector(selector);
-        const r = el.getBoundingClientRect();
-        const scale = Math.min(r.width / imgW, r.height / imgH);
-        const offsetX = (r.width - imgW * scale) / 2;
-        const offsetY = (r.height - imgH * scale) / 2;
-        const toClient = ([ix, iy]) => [r.left + offsetX + ix * scale, r.top + offsetY + iy * scale];
+      ({ selector, from, to, imgW }) => {
+        // Derive the image->client map from the live overlay canvas rect, which
+        // the hook positions exactly on the scaled still - at the contain-fit
+        // AND at any zoom (a zoom only rescales that rectangle). This is the
+        // exact inverse of the hook's own toImage at every zoom level, so a
+        // drag aimed at an image point lands there whatever the current zoom.
+        // Assuming a contain-fit here would break the zoom proofs.
+        const canvas = document.querySelector(selector).querySelector(".framer-viewport-overlay");
+        const c = canvas.getBoundingClientRect();
+        const scale = c.width / imgW;
+        const toClient = ([ix, iy]) => [c.left + ix * scale, c.top + iy * scale];
         return { from: toClient(from), to: toClient(to) };
       },
-      { selector, from: drag.from, to: drag.to, imgW: drag.imgW, imgH: drag.imgH }
+      { selector, from: drag.from, to: drag.to, imgW: drag.imgW }
     );
     const steps = drag.steps || 8;
     await page.mouse.move(pts.from[0], pts.from[1]);
@@ -355,6 +364,52 @@ async function runStep(step, index, total) {
     }
     await page.mouse.up();
     if (dh.settleMs) await page.waitForTimeout(dh.settleMs);
+  } else if (step.wheel) {
+    // Dispatch a real wheel over the element. With ctrlKey (the default) it is
+    // the editor's Ctrl/Cmd+wheel zoom shortcut; pass ctrlKey:false for a plain
+    // wheel a scenario wants to prove does NOT zoom. `at` positions the pointer
+    // (fx/fy of the box, absolute x/y, or the box centre by default); deltaY<0
+    // zooms in, deltaY>0 zooms out.
+    const w = step.wheel;
+    const selector = w.selector || "#viewport";
+    let x;
+    let y;
+    if (w.at && w.at.fx !== undefined) {
+      const box = await page.locator(selector).boundingBox();
+      x = box.x + w.at.fx * box.width;
+      y = box.y + w.at.fy * box.height;
+    } else if (w.at) {
+      x = w.at.x;
+      y = w.at.y;
+    } else {
+      const box = await page.locator(selector).boundingBox();
+      x = box.x + box.width / 2;
+      y = box.y + box.height / 2;
+    }
+    await page.evaluate(
+      ({ selector, x, y, deltaY, ctrlKey }) => {
+        document.querySelector(selector).dispatchEvent(
+          new WheelEvent("wheel", {
+            clientX: x,
+            clientY: y,
+            deltaY,
+            deltaMode: 0,
+            ctrlKey,
+            metaKey: ctrlKey,
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+      },
+      {
+        selector,
+        x,
+        y,
+        deltaY: w.deltaY === undefined ? -100 : w.deltaY,
+        ctrlKey: w.ctrlKey !== false,
+      }
+    );
+    if (w.settleMs) await page.waitForTimeout(w.settleMs);
   } else if (step.resize) {
     await page.setViewportSize({ width: step.resize.width, height: step.resize.height });
   } else if (step.screenshot) {

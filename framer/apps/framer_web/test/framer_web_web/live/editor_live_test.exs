@@ -74,6 +74,34 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert has_element?(view, "#viewport[data-tool='pose']")
   end
 
+  test "viewport zoom controls render with a rig and forward to the hook without touching the rig",
+       %{
+         conn: conn
+       } do
+    # No rig: the zoom controls are hidden (the viewport hook, which owns zoom,
+    # only exists once a still is loaded).
+    {:ok, view, _html} = live(conn, ~p"/editor")
+    refute has_element?(view, "button[phx-click=\"zoom\"]")
+
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(48))
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+    assert has_element?(view, "button[phx-click=\"zoom\"][phx-value-action=\"in\"]")
+    assert has_element?(view, "button[phx-click=\"zoom\"][phx-value-action=\"out\"]")
+    assert has_element?(view, "button[phx-click=\"zoom\"][phx-value-action=\"fit\"]")
+
+    # The zoom events are a pure view transform forwarded to the hook: they must
+    # not mutate the rig document.
+    render_hook(view, "zoom", %{"action" => "in"})
+    render_hook(view, "zoom", %{"action" => "out"})
+    render_hook(view, "zoom", %{"action" => "fit"})
+    # An unknown action is ignored, not an error.
+    render_hook(view, "zoom", %{"action" => "wat"})
+
+    {:ok, loaded} = RigStore.load(rig["id"])
+    assert loaded["bones"] == rig["bones"]
+  end
+
   test "creating, binding and deleting bones round-trips through the store", %{conn: conn} do
     {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
     id = rig["id"]

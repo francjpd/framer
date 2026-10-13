@@ -10,7 +10,7 @@ operation for the final render and export.
 │ header: title · shortcut hint · undo · save                    │
 ├──────────────┬────────────────────────────────────────────────┤
 │ Workflow     │ centre viewport                                 │
-│  step guide  │  toolbar: Mesh · Labels · proxy badge           │
+│  step guide  │  toolbar: Mesh · Labels · zoom -/+ · Fit · badge│
 │ Media        │  source still + control mesh + bones            │
 │  upload      │  client-side WebGL2 / canvas LBS preview        │
 │  projects    │                                                 │
@@ -50,9 +50,19 @@ path, a frame range and JSON options - exactly the existing Port contract.
   * **Bind** - the global bind **power** / **radius scale** and `Auto-bind
     mesh`, which rebuilds the control mesh and per-vertex weights.
 * **Centre viewport.** A `phx-hook="LbsPreview"` element with a small toolbar:
-  **Mesh** (toggle the wireframe) and **Labels** (toggle bone names), plus a
+  **Mesh** (toggle the wireframe), **Labels** (toggle bone names), a **zoom**
+  group (**−** / **+** zoom out and in, **Fit** back to the contain-fit) and a
   `proxy preview` badge. It renders the source still, the control mesh and the
-  bones, and handles all pointer interaction locally. The selected bone also
+  bones, and handles all pointer interaction locally. The view starts as a
+  contain-fit of the whole still and **zooms** with the controls or a
+  `Ctrl`/`Cmd` + mouse-wheel that zooms toward the pointer; the zoom is bounded
+  below by the fit and above by the still's own pixels (1:1), except that a
+  still the viewport already shows at 1:1 or larger pins the zoom at the fit.
+  The container
+  keeps the one pointer-to-image mapping exact at every zoom, so a click still
+  places a bone under the pointer with the overlay aligned - panning is not
+  implemented (zooming toward the pointer reaches any region) and is left as a
+  follow-up. The selected bone also
   carries two call-to-action handles: a **move** disc beside its midpoint
   (translate) and a **rotate** ring just beyond its tail (rotate about the
   head), so posing no longer needs a precise grab of a thin joint. The cursor
@@ -80,7 +90,9 @@ path, a frame range and JSON options - exactly the existing Port contract.
   derivative in units per second, with the playhead and keyframe points marked.
 * **Keyboard shortcuts.** Space play/pause, `K` record keyframe, `←`/`→` step
   one frame, `Home`/`End` jump to the range ends, `Cmd`/`Ctrl+Z` undo. They are
-  ignored while a form control has focus.
+  ignored while a form control has focus. `Ctrl`/`Cmd` + mouse-wheel zooms the
+  viewport toward the pointer (flip the sign to zoom out; **Fit** returns to the
+  whole still).
 
 These are refinements of the existing shell, not a new application: the rig
 JSON contract, the fixed-point LBS preview and the `deform` render/export path
@@ -228,9 +240,12 @@ covers click precision (a bone landing where clicked at non-1 DPR, after a
 resize, and on EXIF-rotated photographs whose displayed dimensions differ from
 their stored pixels), overlay alignment (the drawn overlay sitting under the
 pointer on a letterboxed portrait still, where the overlay once drew one
-letterbox off, and on a still whose aspect matches the element), and the
+letterbox off, and on a still whose aspect matches the element), the
 call-to-action handles (the move handle posing rather than mutating rest
-geometry, the rotate handle dragging the tail without a start jump). It excludes itself when
+geometry, the rotate handle dragging the tail without a start jump), and
+viewport zoom (the `Ctrl`/`Cmd`+wheel shortcut and the in/out/fit controls
+rescaling the still while a bone placed after a zoom still lands exactly under
+the pointer). It excludes itself when
 Chromium, Node or the built editor assets are missing, so to run it locally,
 install the harness and build the assets first:
 

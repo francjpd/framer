@@ -183,6 +183,17 @@ defmodule FramerWebWeb.EditorLive do
     {:noreply, assign(socket, :labels_visible, !socket.assigns.labels_visible)}
   end
 
+  # Viewport zoom (in / out / fit) is a pure client-side view transform owned by
+  # the LbsPreview hook (same mapping as the ctrl+wheel shortcut). The toolbar
+  # controls only forward the action to the hook; they never touch the rig
+  # document, so there is nothing to persist or push onto the undo stack.
+  def handle_event("zoom", %{"action" => action}, %{assigns: %{rig: rig}} = socket)
+      when action in ["in", "out", "fit"] and is_map(rig) do
+    {:noreply, push_event(socket, "zoom", %{action: action})}
+  end
+
+  def handle_event("zoom", _params, socket), do: {:noreply, socket}
+
   def handle_event("set_graph_channel", %{"channel" => channel}, socket)
       when channel in ["rot", "tx", "ty"] do
     {:noreply, assign(socket, :graph_channel, channel)}
@@ -879,6 +890,36 @@ defmodule FramerWebWeb.EditorLive do
           title="Show or hide bone names"
         >
           Labels
+        </button>
+        <span aria-hidden="true" class="mx-0.5 h-4 w-px self-stretch bg-base-content/25"></span>
+        <button
+          :if={@rig}
+          phx-click="zoom"
+          phx-value-action="out"
+          class="btn btn-ghost btn-xs w-6 px-0"
+          title="Zoom out (Ctrl/Cmd + wheel)"
+          aria-label="Zoom out"
+        >
+          −
+        </button>
+        <button
+          :if={@rig}
+          phx-click="zoom"
+          phx-value-action="in"
+          class="btn btn-ghost btn-xs w-6 px-0"
+          title="Zoom in (Ctrl/Cmd + wheel)"
+          aria-label="Zoom in"
+        >
+          +
+        </button>
+        <button
+          :if={@rig}
+          phx-click="zoom"
+          phx-value-action="fit"
+          class="btn btn-ghost btn-xs"
+          title="Fit the whole still to the viewport"
+        >
+          Fit
         </button>
         <span class="badge badge-ghost badge-xs">proxy preview</span>
       </div>

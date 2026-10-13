@@ -1005,6 +1005,212 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     assert run_scenario(spec, root) == :ok
   end
 
+  # Zoom proof: the viewport zooms via Ctrl/Cmd+wheel and the in/out/fit
+  # controls, and the one pointer-to-image mapping the hook keeps exact holds at
+  # every zoom - a bone created at a known image point after a zoom lands under
+  # the pointer (its stored head is that image point). The still is far larger
+  # than the element so the contain-fit is well below 1:1, leaving room to zoom
+  # in toward the native pixels.
+  test "zoom: ctrl+wheel and the controls rescale the still and keep the pointer mapping exact",
+       %{root: root} do
+    shots = Path.join(root, "zoom")
+    File.mkdir_p!(shots)
+
+    subj_fit = Path.join(shots, "zoom_fit.png")
+    subj_zoomed = Path.join(shots, "zoom_in.png")
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      deviceScaleFactor: 1.5,
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        zoom_steps("browser-zoom") ++
+          [
+            # Place one bone at the contain-fit first: it selects the bone, which
+            # reveals the timeline graph. Waiting for the graph means the
+            # viewport element has reached its final height, so the fit baseline
+            # recorded next is stable for the whole scenario. This is also the
+            # fit-zoom mapping proof.
+            %{
+              name: "create a bone from image (400,300) to (500,300) at the contain-fit",
+              dragImage: %{
+                from: [400, 300],
+                to: [500, 300],
+                imgW: 2000,
+                imgH: 1400,
+                settleMs: 300
+              }
+            },
+            %{
+              name: "bone reaches the editor hierarchy",
+              waitForSelector: "button[phx-click=\"select_bone\"]"
+            },
+            %{
+              name: "the timeline graph appears (element is now at its final height)",
+              waitForSelector: "button[phx-value-channel=\"rot\"]"
+            },
+            bone_head_error(0, 400, 300),
+            %{name: "let the re-fit settle", sleep: 300},
+            %{
+              name: "record the contain-fit still size and confirm it fits the element",
+              evaluate:
+                "() => { const el = document.querySelector('#viewport'); const r = el.getBoundingClientRect(); const o = el.querySelector('.framer-viewport-overlay').getBoundingClientRect(); window.__zoomFitW = o.width; return o.width <= r.width + 2 && o.height <= r.height + 2; }",
+              expect: %{eq: true}
+            },
+            %{
+              name: "screenshot the contain-fit still",
+              screenshot: %{path: subj_fit, selector: "#viewport"}
+            },
+            # A plain wheel is NOT the zoom shortcut: only Ctrl/Cmd+wheel zooms.
+            %{
+              name: "plain wheel over the viewport",
+              wheel: %{ctrlKey: false, deltaY: -120, settleMs: 200}
+            },
+            %{
+              name: "a plain wheel leaves the scale at fit",
+              evaluate:
+                "() => { const c = document.querySelector('#viewport .framer-viewport-overlay').getBoundingClientRect(); return Math.abs(c.width - window.__zoomFitW) < 1; }",
+              expect: %{eq: true}
+            },
+            # Ctrl/Cmd+wheel toward the pointer: one notch zooms the still in.
+            # The handler applies the zoom synchronously (it resizes the canvas
+            # before it returns), so the scale is already up the instant the
+            # dispatch resolves - a direct read is both correct and robust.
+            %{
+              name: "ctrl+wheel zoom in at the centre",
+              wheel: %{at: %{fx: 0.5, fy: 0.5}, deltaY: -100, settleMs: 250}
+            },
+            %{
+              name: "the rendered still is scaled up past the fit",
+              evaluate:
+                "() => document.querySelector('#viewport .framer-viewport-overlay').getBoundingClientRect().width > window.__zoomFitW * 1.05",
+              expect: %{eq: true}
+            },
+            # The killer assertion: after the wheel zoom a bone created at a
+            # known OFF-centre image point lands exactly there, so the one
+            # pointer-to-image mapping survived the zoom.
+            %{
+              name: "create a bone from image (600,520) to (700,520) while zoomed",
+              dragImage: %{
+                from: [600, 520],
+                to: [700, 520],
+                imgW: 2000,
+                imgH: 1400,
+                settleMs: 300
+              }
+            },
+            %{
+              name: "second bone reaches the editor hierarchy",
+              waitForFunction:
+                "() => document.querySelectorAll('button[phx-click=\"select_bone\"]').length >= 2"
+            },
+            bone_head_error(1, 600, 520),
+            %{
+              name: "screenshot the zoomed still",
+              screenshot: %{path: subj_zoomed, selector: "#viewport"}
+            },
+            # The Fit control returns to the contain-fit from any zoom.
+            %{
+              name: "click Fit",
+              click: %{selector: "button[phx-click=\"zoom\"][phx-value-action=\"fit\"]"}
+            },
+            %{
+              name: "Fit restores the contain-fit scale",
+              waitForFunction:
+                "() => { const c = document.querySelector('#viewport .framer-viewport-overlay').getBoundingClientRect(); return Math.abs(c.width - window.__zoomFitW) < 2; }"
+            },
+            # The in/out controls bound the zoom: one step up from the fit, then
+            # back to the floor (never below the fit).
+            %{
+              name: "click zoom in",
+              click: %{selector: "button[phx-click=\"zoom\"][phx-value-action=\"in\"]"}
+            },
+            %{
+              name: "the in-control scales the still up",
+              waitForFunction:
+                "() => { const c = document.querySelector('#viewport .framer-viewport-overlay').getBoundingClientRect(); return c.width > window.__zoomFitW * 1.05; }"
+            },
+            %{
+              name: "record the zoomed width for the out-control floor check",
+              evaluate:
+                "() => { window.__zoomOutBase = document.querySelector('#viewport .framer-viewport-overlay').getBoundingClientRect().width; return true; }",
+              expect: %{truthy: true}
+            },
+            %{
+              name: "click zoom out",
+              click: %{selector: "button[phx-click=\"zoom\"][phx-value-action=\"out\"]"}
+            },
+            %{
+              name: "the out-control returns to the fit floor without going below it",
+              waitForFunction:
+                "() => { const c = document.querySelector('#viewport .framer-viewport-overlay').getBoundingClientRect(); return Math.abs(c.width - window.__zoomFitW) < 2 && c.width < window.__zoomOutBase; }"
+            },
+            # Back at the fit floor, a third bone still lands under the pointer.
+            %{
+              name: "create a bone from image (1400,980) to (1500,980) at the fit",
+              dragImage: %{
+                from: [1400, 980],
+                to: [1500, 980],
+                imgW: 2000,
+                imgH: 1400,
+                settleMs: 300
+              }
+            },
+            %{
+              name: "third bone reaches the editor hierarchy",
+              waitForFunction:
+                "() => document.querySelectorAll('button[phx-click=\"select_bone\"]').length >= 3"
+            },
+            bone_head_error(2, 1400, 980)
+          ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+
+    # Pixel proof that the rendered image scale really changed: the still fills
+    # more of the viewport when zoomed in than at the contain-fit.
+    assert %{width: wf, height: hf} = assert_png!(subj_fit)
+    assert %{width: wz, height: hz} = assert_png!(subj_zoomed)
+
+    fit_count = subject_pixels(subj_fit, wf, hf)
+    zoomed_count = subject_pixels(subj_zoomed, wz, hz)
+    assert fit_count >= @subject_min
+    assert zoomed_count > fit_count
+  end
+
+  # The shared zoom-proof setup: open the editor and create a still much larger
+  # than the viewport element, then wait for its preview. The fit baseline is
+  # recorded by the scenario itself, after the first bone settles the element.
+  defp zoom_steps(name) do
+    [
+      %{name: "open the editor shell", open: "/editor"},
+      %{name: "shell renders", waitForSelector: "#editor-shell"},
+      %{
+        name: "create a still much larger than the viewport",
+        fetch: %{
+          url: "/api/rigs",
+          method: "POST",
+          headers: %{"content-type" => "application/json"},
+          body: %{
+            "name" => name,
+            "filename" => "subject.png",
+            "source_base64" => Base.encode64(Fixtures.png_with_subject(2000, 1400, @subject))
+          }
+        },
+        saveAs: "create"
+      },
+      %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+      %{name: "viewport renders", waitForSelector: "#viewport"},
+      %{
+        name: "source image drawn",
+        waitForFunction:
+          "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+      },
+      %{name: "let the preview settle", sleep: 1_000}
+    ]
+  end
+
   # --- scenario runner -----------------------------------------------------
 
   # The steps every slice-4 scenario shares: create a rig with the red-subject
