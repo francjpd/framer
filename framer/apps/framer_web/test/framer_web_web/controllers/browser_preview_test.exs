@@ -629,6 +629,34 @@ defmodule FramerWebWeb.BrowserPreviewTest do
              "#{Float.round(joint_x, 1)},#{Float.round(joint_y, 1)})"
   end
 
+  # Asserts the drawn bone sits under the pointer while the drag is still in
+  # progress. The red subject block is the only saturated red on screen, so its
+  # box centre is the on-screen position of the image point the live-drag proof
+  # moved the pointer to; the selected bone's joint disc must already be drawn
+  # there. Before live drag rendering the overlay kept drawing the bone at its
+  # pre-drag rest, so the joint pixels near the pointer were absent (or the
+  # disc sat tens of pixels away) and this assertion failed.
+  defp assert_drawn_joint_under_pointer(shot) do
+    assert %{width: width, height: height} = assert_png!(shot)
+    assert subject_pixels(shot, width, height) >= @subject_min
+
+    {image_x, image_y, joint_count, joint_x, joint_y} =
+      alignment_scan(shot, width, height, @alignment_window)
+
+    assert image_x, "the still's red subject block must be visible in the viewport"
+
+    assert joint_count >= @joint_min,
+           "no joint disc was drawn at the pointer mid-drag: the bone did not follow the pointer " <>
+             "(the still's centre is at #{image_x},#{image_y} in device px)"
+
+    drift = :math.sqrt((joint_x - image_x) ** 2 + (joint_y - image_y) ** 2)
+
+    assert drift <= @alignment_tolerance,
+           "the drawn joint drifted #{Float.round(drift, 1)} device px from the pointer while the " <>
+             "drag was still in progress (pointer image point at #{image_x},#{image_y}, joint at " <>
+             "#{Float.round(joint_x, 1)},#{Float.round(joint_y, 1)})"
+  end
+
   test "element resize without a window resize: a click still lands where placed", %{
     root: root
   } do
@@ -1003,6 +1031,73 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     }
 
     assert run_scenario(spec, root) == :ok
+  end
+
+  # The captain's drag feedback: dragging an already-placed bone moved it only
+  # on release - for the whole drag the bone sat at its old position and jumped
+  # on drop. Both proofs press a placed bone, hold the pointer mid-drag and read
+  # the *drawn* overlay before any release: the joint must already sit under the
+  # pointer while the server still holds the pre-drag rest, and the release must
+  # land the bone exactly where it was shown. The still's red subject block is
+  # centred on image (100,100), so the screenshot of the viewport shows where
+  # the dragged joint sits relative to that point (the same drawn-vs-stored
+  # comparison the overlay-alignment proofs use, because the stored rig is
+  # still the pre-drag one mid-drag).
+  test "bones tool: an in-progress head drag draws the joint under the pointer before release",
+       %{root: root} do
+    shots = Path.join(root, "drag_head")
+    File.mkdir_p!(shots)
+    mid = Path.join(shots, "mid_drag.png")
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      deviceScaleFactor: 1.5,
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        live_drag_steps(%{
+          name: "browser-drag-head",
+          shot: mid,
+          press_at: [60, 100],
+          press_label: "head joint",
+          move_to: [100, 100],
+          landed_head: [100, 100],
+          landed_tail: [140, 100]
+        })
+    }
+
+    assert run_scenario(spec, root) == :ok
+    assert_drawn_joint_under_pointer(mid)
+  end
+
+  # The same proof for the whole-bone translate drag: pressing the bone body
+  # and dragging it by (+40,0) must draw the bone (its joint included) 40px to
+  # the right live, and release into exactly that position.
+  test "bones tool: an in-progress translate drag draws the joint under the pointer before release",
+       %{root: root} do
+    shots = Path.join(root, "drag_translate")
+    File.mkdir_p!(shots)
+    mid = Path.join(shots, "mid_drag.png")
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      deviceScaleFactor: 1.5,
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        live_drag_steps(%{
+          name: "browser-drag-translate",
+          shot: mid,
+          press_at: [80, 100],
+          press_label: "bone body",
+          move_to: [120, 100],
+          landed_head: [100, 100],
+          landed_tail: [180, 100]
+        })
+    }
+
+    assert run_scenario(spec, root) == :ok
+    assert_drawn_joint_under_pointer(mid)
   end
 
   # Zoom proof: the viewport zooms via Ctrl/Cmd+wheel and the in/out/fit
@@ -1560,6 +1655,87 @@ defmodule FramerWebWeb.BrowserPreviewTest do
         "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; const joint = rig.bones[#{bone_index}].rest.#{which}; return Math.hypot(joint[0] - #{x}, joint[1] - #{y}); }",
       expect: %{lt: 2}
     }
+  end
+
+  # The shared shape of the live-drag proofs: a 200x200 still whose red subject
+  # block is centred on image (100,100), one horizontal bone through the centre
+  # row (head (60,100), tail (140,100)), a pointer press on the head joint or
+  # the bone body, and a held move to the still's centre. The steps hold the
+  # pointer down across the screenshot, so the captured overlay is the drag in
+  # progress; `opts.landed_head` / `opts.landed_tail` are the image points the
+  # release must commit the bone to (what the drawn overlay showed).
+  defp live_drag_steps(opts) do
+    %{
+      name: name,
+      shot: shot,
+      press_at: press_at,
+      press_label: press_label,
+      move_to: move_to,
+      landed_head: landed_head,
+      landed_tail: landed_tail
+    } = opts
+
+    [
+      %{name: "open the editor shell", open: "/editor"},
+      %{name: "shell renders", waitForSelector: "#editor-shell"},
+      %{
+        name: "create a rig whose subject block is centred on image (100,100)",
+        fetch: %{
+          url: "/api/rigs",
+          method: "POST",
+          headers: %{"content-type" => "application/json"},
+          body: %{
+            "name" => name,
+            "filename" => "subject.png",
+            "source_base64" => Base.encode64(Fixtures.png_with_subject(200, 200, @subject))
+          }
+        },
+        saveAs: "create"
+      },
+      %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+      %{name: "viewport renders", waitForSelector: "#viewport"},
+      %{
+        name: "source image drawn",
+        waitForFunction:
+          "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+      },
+      %{name: "let the preview settle", sleep: 1_000},
+      %{
+        name: "create a bone from image (60,100) to (140,100)",
+        dragImage: %{from: [60, 100], to: [140, 100], imgW: 200, imgH: 200, settleMs: 300}
+      },
+      %{
+        name: "bone reaches the editor hierarchy",
+        waitForSelector: "button[phx-click=\"select_bone\"]"
+      },
+      %{name: "let the bone overlay draw", sleep: 500},
+      %{
+        name:
+          "press the #{press_label} at image (#{press_at |> Enum.at(0)},#{press_at |> Enum.at(1)})",
+        pointerDown: %{at: press_at, imgW: 200, imgH: 200}
+      },
+      %{
+        name:
+          "move the pointer to image (#{move_to |> Enum.at(0)},#{move_to |> Enum.at(1)}), the still's centre",
+        pointerMove: %{at: move_to, imgW: 200, imgH: 200}
+      },
+      # Mid-drag the edit is not committed yet: the stored rest is still the
+      # pre-drag one, so the screenshot that follows observes client-side
+      # rendering rather than the document the server would push on release.
+      %{
+        name: "the server still holds the pre-drag rest while the pointer is down",
+        evaluate:
+          "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; const head = rig.bones[0].rest.head; return Math.hypot(head[0] - 60, head[1] - 100); }",
+        expect: %{lt: 2}
+      },
+      %{
+        name: "screenshot the in-progress drag",
+        screenshot: %{path: shot, selector: "#viewport"}
+      },
+      %{name: "release the pointer", pointerUp: %{settleMs: 300}},
+      bone_joint_error(0, "head", landed_head |> Enum.at(0), landed_head |> Enum.at(1)),
+      bone_joint_error(0, "tail", landed_tail |> Enum.at(0), landed_tail |> Enum.at(1))
+    ]
   end
 
   defp run_scenario(spec, root) do

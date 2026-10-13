@@ -946,21 +946,60 @@ export const LbsPreview = {
 
     if (!this.rig || !this.view || !this.cache.vertexWeights) return;
 
-    const scale = this.view.scale;
     const poses = this.rig ? this.poses() : {};
-    const world = evaluateBones(this.rig, this.frame, poses);
+    // The rig with the in-progress drag applied, so the overlay draws the bone
+    // (and its joint, handles and parent link) where it will land on release.
+    const rig = this.dragRig();
+    const world = evaluateBones(rig, this.frame, poses);
 
-    if (this.meshVisible) this.drawMesh(world);
-    this.drawBones(world);
+    if (this.meshVisible) this.drawMesh(world, rig);
+    this.drawBones(world, rig);
     if (this.tool === "bones") this.drawLinkHandles(world);
-    this.drawHandles(world);
+    this.drawHandles(world, rig);
     this.drawDrag(world);
   },
 
-  drawMesh(world) {
+  // The rig as the in-progress drag will commit it: a joint drag replaces the
+  // dragged bone's rest head/tail with the live `drag.head`/`drag.tail`, and a
+  // translate drag shifts them by `drag.offset`. Every consumer of the world
+  // (bone, joint, handles, parent link, children) re-derives from this rig, so
+  // the live overlay is exactly the document `bone_moved`/`bone_translated`
+  // commits on pointer-up. Drags that already render live - the create drag's
+  // rubber band in `drawDrag`, and pose drags (which retarget the world
+  // through `this.overrides`) - need no rig change and keep `this.rig`.
+  dragRig() {
+    const drag = this.drag;
+    if (!this.rig || !drag || (drag.type !== "move" && drag.type !== "translate")) {
+      return this.rig;
+    }
+
+    const index = this.rig.bones.findIndex((bone) => bone.id === drag.id);
+    if (index < 0) return this.rig;
+
+    const rest = this.rig.bones[index].rest;
+    let head = parsePoint(rest.head);
+    let tail = parsePoint(rest.tail);
+
+    if (drag.type === "translate") {
+      // The offset only exists once the pointer has moved; before that there
+      // is nothing live to show yet.
+      if (!drag.offset) return this.rig;
+      head = [head[0] + drag.offset[0], head[1] + drag.offset[1]];
+      tail = [tail[0] + drag.offset[0], tail[1] + drag.offset[1]];
+    } else {
+      head = parsePoint(drag.head);
+      tail = parsePoint(drag.tail);
+    }
+
+    const bones = this.rig.bones.slice();
+    bones[index] = { ...bones[index], rest: { head, tail } };
+    return { ...this.rig, bones };
+  },
+
+  drawMesh(world, rig) {
     const vertices = this.cache.vertices;
-    const triangles = (this.rig.mesh && this.rig.mesh.triangles) || [];
-    if (!vertices.length || !triangles.length || this.rig.bones.length === 0) return;
+    const triangles = (rig.mesh && rig.mesh.triangles) || [];
+    if (!vertices.length || !triangles.length || rig.bones.length === 0) return;
 
     const ctx = this.ctx;
     ctx.save();
@@ -984,12 +1023,12 @@ export const LbsPreview = {
     ctx.restore();
   },
 
-  drawBones(world) {
+  drawBones(world, rig) {
     const ctx = this.ctx;
     ctx.save();
     ctx.lineCap = "round";
 
-    this.rig.bones.forEach((bone, index) => {
+    rig.bones.forEach((bone, index) => {
       const head = this.project(applyMatrix(world[index], parsePoint(bone.rest.head)));
       const tail = this.project(applyMatrix(world[index], parsePoint(bone.rest.tail)));
       const selected = bone.id === this.selected;
@@ -1026,26 +1065,27 @@ export const LbsPreview = {
       }
 
       // parent link
-      const parentBone = bone.parent ? this.boneById(bone.parent) : null;
-      if (parentBone) {
-        const parentIndex = this.rig.bones.indexOf(parentBone);
-        const parent = this.project(applyMatrix(world[parentIndex], parsePoint(parentBone.rest.tail)));
-        ctx.strokeStyle = "rgba(148, 163, 184, 0.6)";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 3]);
-        ctx.beginPath();
-        ctx.moveTo(parent[0], parent[1]);
-        ctx.lineTo(head[0], head[1]);
-        ctx.stroke();
-        ctx.setLineDash([]);
+      if (bone.parent) {
+        const parentIndex = rig.bones.findIndex((candidate) => candidate.id === bone.parent);
+        if (parentIndex >= 0) {
+          const parent = this.project(applyMatrix(world[parentIndex], parsePoint(rig.bones[parentIndex].rest.tail)));
+          ctx.strokeStyle = "rgba(148, 163, 184, 0.6)";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(parent[0], parent[1]);
+          ctx.lineTo(head[0], head[1]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
       }
     });
 
     ctx.restore();
   },
 
-  drawHandles(world) {
-    const centers = this.handleCenters(world);
+  drawHandles(world, rig) {
+    const centers = this.handleCenters(world, rig);
     if (!centers) return;
 
     const move = this.project(centers.move);
@@ -1226,12 +1266,19 @@ export const LbsPreview = {
   // tail. They are affordances only - dragging them drives the existing
   // translate / rotate / move-tail drag paths, so posing no longer needs a
   // precise grab of a thin joint.
-  handleCenters(world) {
-    if (!this.rig || !this.selected) return null;
-    const index = this.rig.bones.findIndex((bone) => bone.id === this.selected);
+  handleCenters(world, rig) {
+    if (!rig || !this.selected) return null;
+    const index = rig.bones.findIndex((bone) => bone.id === this.selected);
     if (index < 0) return null;
 
-    const { head, tail, ux, uy } = this.boneAxis(world, index);
+    const bone = rig.bones[index];
+    const head = applyMatrix(world[index], parsePoint(bone.rest.head));
+    const tail = applyMatrix(world[index], parsePoint(bone.rest.tail));
+    const dx = tail[0] - head[0];
+    const dy = tail[1] - head[1];
+    const length = Math.hypot(dx, dy) || 1;
+    const ux = dx / length;
+    const uy = dy / length;
     const offset = HANDLE_OFFSET / this.view.scale;
     const midX = (head[0] + tail[0]) / 2;
     const midY = (head[1] + tail[1]) / 2;
@@ -1244,7 +1291,9 @@ export const LbsPreview = {
   },
 
   handleHit(point, world) {
-    const centers = this.handleCenters(world);
+    // Hit-testing always uses the committed rig: a handle is only a press
+    // target, never something a drag re-derives.
+    const centers = this.handleCenters(world, this.rig);
     if (!centers) return null;
 
     const threshold = (HANDLE_RADIUS + 4) / this.view.scale;

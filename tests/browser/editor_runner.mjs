@@ -43,6 +43,13 @@
 //        "from": {"fx": 0.5, "fy": 0.35},          // fraction of the box, or
 //        "to":   {"x": 640, "y": 500},             // absolute page coords
 //        "steps": 8, "settleMs": 300}},
+//     {"name": "...", "pointerDown": {                            // press & hold
+//        "at": [60, 100], "imgW": 200, "imgH": 200,  // image coords, or
+//        "x": 640, "y": 400,                          // page coords
+//        "selector": "#viewport", "settleMs": 300}},
+//     {"name": "...", "pointerMove": {"at": [100, 100],           // drag while
+//        "imgW": 200, "imgH": 200}},                 // the button stays down
+//     {"name": "...", "pointerUp": {"settleMs": 300}},            // release
 //     {"name": "...", "dragImage": {                               // image coords
 //        "from": [100, 50], "to": [140, 70],          // [ix, iy] in the image
 //        "imgW": 200, "imgH": 100,                     // image dimensions
@@ -166,6 +173,40 @@ function substitute(value) {
 function resolveUrl(url) {
   const substituted = substitute(url);
   return /^https?:\/\//.test(substituted) ? substituted : spec.baseUrl + substituted;
+}
+
+// Map an image point to page coordinates through the element's letterboxed
+// image rectangle (the exact inverse of the hook's `toImage`): the canvases
+// sit on the centred image rectangle, so an image point lands at
+// `rect.left + offsetX + ix * scale, rect.top + offsetY + iy * scale`.
+async function imageToPage(selector, at, imgW, imgH) {
+  return page.evaluate(
+    ({ selector, at, imgW, imgH }) => {
+      const el = document.querySelector(selector);
+      const r = el.getBoundingClientRect();
+      const scale = Math.min(r.width / imgW, r.height / imgH);
+      const offsetX = (r.width - imgW * scale) / 2;
+      const offsetY = (r.height - imgH * scale) / 2;
+      return [r.left + offsetX + at[0] * scale, r.top + offsetY + at[1] * scale];
+    },
+    { selector, at, imgW, imgH }
+  );
+}
+
+// The target of a pointer-gesture step: image coordinates
+// (`{at: [ix, iy], imgW, imgH}`, mapped through the letterbox) or absolute
+// page pixels (`{x, y}`).
+async function gestureTarget(selector, gesture) {
+  if (Array.isArray(gesture.at)) {
+    if (!gesture.imgW || !gesture.imgH) {
+      throw new Error("pointer gesture with `at` image coordinates needs imgW/imgH");
+    }
+    return imageToPage(selector, gesture.at, gesture.imgW, gesture.imgH);
+  }
+  if (gesture.x === undefined || gesture.y === undefined) {
+    throw new Error("pointer gesture needs `at` image coordinates or `x`/`y` page coordinates");
+  }
+  return [gesture.x, gesture.y];
 }
 
 function checkExpect(expect, value, label) {
@@ -321,6 +362,28 @@ async function runStep(step, index, total) {
     }
     await page.mouse.up();
     if (drag.settleMs) await page.waitForTimeout(drag.settleMs);
+  } else if (
+    step.pointerDown !== undefined ||
+    step.pointerMove !== undefined ||
+    step.pointerUp !== undefined
+  ) {
+    // A pointer gesture split across steps: press, move and release are
+    // separate steps so a scenario can screenshot or assert the viewport
+    // *while* the pointer is still down - the only place an in-progress drag
+    // can be observed, since drag/dragImage/dragHandle always end with
+    // mouse.up before the next step runs.
+    const gesture = step.pointerDown || step.pointerMove || step.pointerUp || {};
+    const selector = gesture.selector || "#viewport";
+
+    if (step.pointerUp !== undefined) {
+      await page.mouse.up();
+    } else {
+      const [x, y] = await gestureTarget(selector, gesture);
+      await page.mouse.move(x, y);
+      if (step.pointerDown !== undefined) await page.mouse.down();
+    }
+
+    if (gesture.settleMs) await page.waitForTimeout(gesture.settleMs);
   } else if (step.dragHandle) {
     // Drag one of the CTA handles (move / rotate) beside the selected bone.
     // The step computes the handle's on-screen centre from the bone's image
