@@ -65,15 +65,20 @@ path, a frame range and JSON options - exactly the existing Port contract.
   follow-up. The selected bone also
   carries two call-to-action handles: a **move** disc beside its midpoint
   (translate) and a **rotate** ring just beyond its tail (rotate about the
-  head), so posing no longer needs a precise grab of a thin joint. The cursor
-  reflects what is under the pointer - a grab cursor over a handle or the bone
-  body, a select cursor over a joint, and a crosshair (Bones) or default (Pose)
-  cursor over empty canvas:
+  head), so posing no longer needs a precise grab of a thin joint. Every bone
+  carries a small violet **link dot** behind its head in the Bones tool: drag
+  it onto another bone to make that bone this bone's parent - a one-drag
+  shortcut for the parent dropdown, with the same cycle refusal. A live dotted
+  connector follows the pointer while the drag is in flight, and the dotted
+  parent link stays drawn once it lands. The cursor reflects what is under the
+  pointer - a grab cursor over a handle or the bone body, a select cursor over
+  a joint, an alias cursor over a link dot, and a crosshair (Bones) or default
+  (Pose) cursor over empty canvas:
   * **Bones tool** - drag empty canvas to create a bone (`head → tail`); drag a
-    joint to move it; drag the body to translate it; dropping near another
-    bone's tip parents to it (chains). The move handle translates the bone and
-    the rotate handle moves its tail. Structural edits are pushed to LiveView
-    on pointer-up and persisted.
+    joint to move it; drag the body to translate it; drag a link dot onto
+    another bone to parent them (chains). The move handle translates the bone
+    and the rotate handle moves its tail. Structural edits are pushed to
+    LiveView on pointer-up and persisted.
   * **Pose tool** - drag a joint to rotate about the bone's rest head, drag the
     body to translate. The move handle translates and the rotate handle rotates
     the pending pose. The pose stays local until **Record keyframe** writes it
@@ -245,7 +250,11 @@ call-to-action handles (the move handle posing rather than mutating rest
 geometry, the rotate handle dragging the tail without a start jump), and
 viewport zoom (the `Ctrl`/`Cmd`+wheel shortcut and the in/out/fit controls
 rescaling the still while a bone placed after a zoom still lands exactly under
-the pointer). It excludes itself when
+the pointer). It also drives the link handle end to end: dragging one bone's
+link dot onto another sets the parent on the persisted rig and paints the
+dotted parent link on the overlay canvas, while a drag that would cycle the
+hierarchy is refused with the same inline error the dropdown shows. It
+excludes itself when
 Chromium, Node or the built editor assets are missing, so to run it locally,
 install the harness and build the assets first:
 

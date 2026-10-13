@@ -1211,7 +1211,199 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     ]
   end
 
+  # The captain's ask: "add some small dots around each edge of the vertice; so
+  # that We can link them together" - a drag from one bone's link dot onto
+  # another bone parents the first onto the second, instead of selecting a bone
+  # and picking its parent from the dropdown. This proof drags the real violet
+  # link dot (the runner computes its on-screen centre from the bone's image
+  # coordinates the same way the hook draws it), asserts the parent is set on
+  # the persisted rig, and asserts the dotted parent link renders on the overlay
+  # canvas between the two bones.
+  test "bones tool: a link handle drag parents one bone onto another", %{root: root} do
+    shots = Path.join(root, "link_parent")
+    File.mkdir_p!(shots)
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        two_bone_steps("browser-link-parent", [150, 300], [250, 300], [350, 300], [450, 300]) ++
+          [
+            %{
+              name: "drag b1's link dot onto b0's body",
+              dragLink: %{
+                head: [350, 300],
+                tail: [450, 300],
+                to: [200, 300],
+                imgW: 600,
+                settleMs: 500
+              }
+            },
+            %{
+              name: "b1 is now parented to b0 on the persisted rig",
+              evaluate:
+                "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; return rig.bones[1].parent; }",
+              expect: %{eq: "b0"}
+            },
+            %{
+              name: "the dotted parent link renders between b0's tail and b1's head",
+              evaluate: link_line_band(258, 342, 300, 4, 15)
+            },
+            %{
+              name: "zero page errors",
+              evaluate: "() => window.__framerErrors.length",
+              expect: %{eq: 0}
+            }
+          ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+  end
+
+  # The companion refusal: once b1 is parented to b0, dragging b0's link dot
+  # onto b1 would cycle the hierarchy. The drag must be refused exactly as the
+  # parent dropdown refuses it - an inline error, and the persisted document
+  # unchanged.
+  test "bones tool: a link drag that would cycle is refused", %{root: root} do
+    shots = Path.join(root, "link_cycle")
+    File.mkdir_p!(shots)
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        two_bone_steps("browser-link-cycle", [150, 300], [250, 300], [350, 300], [450, 300]) ++
+          [
+            %{
+              name: "first parent b1 onto b0",
+              dragLink: %{
+                head: [350, 300],
+                tail: [450, 300],
+                to: [200, 300],
+                imgW: 600,
+                settleMs: 500
+              }
+            },
+            %{
+              name: "now drag b0's link dot onto b1's body (would cycle)",
+              dragLink: %{
+                head: [150, 300],
+                tail: [250, 300],
+                to: [400, 300],
+                imgW: 600,
+                settleMs: 500
+              }
+            },
+            %{
+              name: "the cycle is refused with an inline error",
+              waitForSelector: "#editor-error"
+            },
+            %{
+              name: "the error names the cycle",
+              evaluate:
+                "() => { const e = document.querySelector('#editor-error'); return !!e && e.textContent.includes('cycle'); }",
+              expect: %{eq: true}
+            },
+            %{
+              name: "the persisted hierarchy is unchanged",
+              evaluate:
+                "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; return (rig.bones[0].parent || 'none') + '|' + (rig.bones[1].parent || 'none'); }",
+              expect: %{eq: "none|b0"}
+            }
+          ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+  end
+
+  # Counts the slate parent-link pixels the overlay canvas paints inside an
+  # image-coordinate band. The link line is the only slate element in the
+  # overlay (bones are sky, joints ivory, handles amber, link dots violet, mesh
+  # white, labels near-white), so any matching pixel in the band is the dotted
+  # link. The band excludes both joints' own pixels, whose antialiased edges
+  # blend to a similar slate where the bone stroke meets the joint disc.
+  defp link_line_band(x0, x1, y, half_height, min_hits) do
+    body = """
+    async () => {
+      const vp = document.querySelector('#viewport');
+      const overlay = vp.querySelector('.framer-viewport-overlay');
+      const ctx = overlay.getContext('2d');
+      const id = vp.dataset.sourceUrl.split('/')[3];
+      const j = await (await fetch('/api/rigs/' + id)).json();
+      const rig = j.rig || j;
+      const dpr = window.devicePixelRatio || 1;
+      const scale = overlay.width / dpr / rig.canvas.width;
+      const left = Math.floor(#{x0} * scale * dpr);
+      const right = Math.ceil(#{x1} * scale * dpr);
+      const top = Math.floor((#{y} - #{half_height}) * scale * dpr);
+      const bottom = Math.ceil((#{y} + #{half_height}) * scale * dpr);
+      const data = ctx.getImageData(left, top, right - left + 1, bottom - top + 1).data;
+      let hits = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+        if (a >= 60 && r >= 90 && r <= 210 && g >= r && b >= g && b - g <= 60) hits++;
+      }
+      return hits;
+    }
+    """
+
+    %{name: "count link pixels in the band", body: body, expect: %{gte: min_hits}}
+  end
+
   # --- scenario runner -----------------------------------------------------
+
+  # The steps a link-drag proof shares: create a 600x600 rig, open it, wait for
+  # the preview, then draw two horizontal bones (b0 first, then b1) at the given
+  # image coordinates. Each drag starts far from the other bone's tip, so the
+  # create gesture never auto-parents and the two bones begin unrelated.
+  defp two_bone_steps(name, b0_head, b0_tail, b1_head, b1_tail) do
+    [
+      %{name: "open the editor shell", open: "/editor"},
+      %{name: "shell renders", waitForSelector: "#editor-shell"},
+      %{
+        name: "create a rig over the API",
+        fetch: %{
+          url: "/api/rigs",
+          method: "POST",
+          headers: %{"content-type" => "application/json"},
+          body: %{
+            "name" => name,
+            "filename" => "subject.png",
+            "source_base64" => Base.encode64(Fixtures.png_with_subject(600, 600, @subject))
+          }
+        },
+        saveAs: "create"
+      },
+      %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+      %{name: "viewport renders", waitForSelector: "#viewport"},
+      %{
+        name: "source image drawn",
+        waitForFunction:
+          "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+      },
+      %{name: "let the preview settle", sleep: 1_000},
+      %{
+        name: "draw b0",
+        dragImage: %{from: b0_head, to: b0_tail, imgW: 600, imgH: 600, settleMs: 300}
+      },
+      %{
+        name: "b0 reaches the editor hierarchy",
+        waitForSelector: "button[phx-click=\"select_bone\"]"
+      },
+      %{
+        name: "draw b1",
+        dragImage: %{from: b1_head, to: b1_tail, imgW: 600, imgH: 600, settleMs: 300}
+      },
+      %{
+        name: "b1 reaches the editor hierarchy",
+        waitForFunction:
+          "() => document.querySelectorAll('button[phx-click=\"select_bone\"]').length >= 2"
+      },
+      %{name: "let both bones settle", sleep: 300}
+    ]
+  end
 
   # The steps every slice-4 scenario shares: create a rig with the red-subject
   # still, open it, wait for the preview, and drag one bone into the viewport

@@ -211,6 +211,58 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert FramerWeb.Rig.bone(loaded, "b0")["rest"]["tail"] == [48.0, 8.0]
   end
 
+  test "the link handle drag parents the dragged bone (bone_linked)", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    render_hook(view, "bone_created", %{"head" => [8, 40], "tail" => [24, 40]})
+
+    # The viewport's link-dot drag pushes bone_linked with the dragged bone's
+    # id and the bone it was dropped on - the same set_parent the dropdown
+    # drives, so the drag is a shortcut for the precise control.
+    render_hook(view, "bone_linked", %{"id" => "b1", "parent" => "b0"})
+
+    {:ok, loaded} = RigStore.load(id)
+    assert FramerWeb.Rig.bone(loaded, "b1")["parent"] == "b0"
+    assert FramerWeb.Rig.bone(loaded, "b0")["parent"] == nil
+  end
+
+  test "a link drag that would cycle is refused exactly like the dropdown", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    render_hook(view, "bone_created", %{"head" => [8, 40], "tail" => [24, 40], "parent" => "b0"})
+
+    # b0 already parents b1; linking b0 onto b1 would cycle, and so would a bone
+    # linking to itself. Both are refused and leave the document untouched.
+    render_hook(view, "bone_linked", %{"id" => "b0", "parent" => "b1"})
+    assert render(view) =~ "cycle"
+
+    render_hook(view, "bone_linked", %{"id" => "b0", "parent" => "b0"})
+    assert render(view) =~ "itself"
+
+    {:ok, loaded} = RigStore.load(id)
+    assert FramerWeb.Rig.bone(loaded, "b0")["parent"] == nil
+    assert FramerWeb.Rig.bone(loaded, "b1")["parent"] == "b0"
+  end
+
+  test "an unknown or missing link target is refused without crashing", %{conn: conn} do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
+    id = rig["id"]
+    {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+    render_hook(view, "bone_linked", %{"id" => "b0", "parent" => "nope"})
+    assert render(view) =~ "unknown parent"
+
+    render_hook(view, "bone_linked", %{"parent" => "b0"})
+    assert render(view)
+
+    {:ok, loaded} = RigStore.load(id)
+    assert FramerWeb.Rig.bone(loaded, "b0")["parent"] == nil
+  end
+
   test "recording a pose as a keyframe persists it", %{conn: conn} do
     {:ok, rig} = RigStore.save(Fixtures.simple_rig(64))
     id = rig["id"]

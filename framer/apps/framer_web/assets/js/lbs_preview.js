@@ -27,6 +27,14 @@ const HIT_RADIUS = 9; // display pixels
 const SNAP_RADIANS = Math.PI / 12;
 const HANDLE_RADIUS = 7; // display pixels: call-to-action handle radius
 const HANDLE_OFFSET = 16; // display pixels: handle standoff from the bone
+// The link handle: a small violet dot behind each bone's head. It is
+// deliberately unlike the move handle (amber disc with a cross) and the rotate
+// handle (amber ring) in colour, size and placement so the three interactions
+// cannot collide: the dot starts a parent link, dragged onto another bone.
+const LINK_HANDLE_RADIUS = 5; // display pixels
+const LINK_HANDLE_OFFSET = 16; // display pixels: standoff behind the head
+const LINK_COLOR = "#a78bfa"; // violet-400 fill
+const LINK_STROKE = "#6d28d9"; // violet-700 outline
 
 // Viewport zoom. The contain-fit is zoom 1; each wheel notch or control press
 // changes it by ZOOM_STEP. `NATIVE_SCALE` is the ceiling - the still shown at
@@ -712,8 +720,9 @@ export const LbsPreview = {
 
     if (this.meshVisible) this.drawMesh(world);
     this.drawBones(world);
+    if (this.tool === "bones") this.drawLinkHandles(world);
     this.drawHandles(world);
-    this.drawDrag();
+    this.drawDrag(world);
   },
 
   drawMesh(world) {
@@ -841,9 +850,77 @@ export const LbsPreview = {
     ctx.restore();
   },
 
-  drawDrag() {
-    if (!this.drag || this.drag.type !== "create") return;
+  // One violet dot behind every bone's head - the drag-from affordance that
+  // parents this bone onto the one it is dropped on. Drawn for every bone (not
+  // just the selection) because any bone can start a link, and only in the
+  // Bones tool where structural edits live.
+  drawLinkHandles(world) {
+    const centers = this.linkCenters(world);
+    if (!centers.length) return;
+
     const ctx = this.ctx;
+    ctx.save();
+    ctx.fillStyle = LINK_COLOR;
+    ctx.strokeStyle = LINK_STROKE;
+    ctx.lineWidth = 1.5;
+
+    for (const { center } of centers) {
+      const point = this.project(center);
+      ctx.beginPath();
+      ctx.arc(point[0], point[1], LINK_HANDLE_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  },
+
+  drawDrag(world) {
+    const ctx = this.ctx;
+
+    if (this.drag && this.drag.type === "link") {
+      // Live preview of the parent link: from this bone's head to the joint of
+      // the bone under the pointer (its tail, where the persistent link lands),
+      // following the pointer itself when no bone is under it. Styled like the
+      // create-drag line so a drag in progress reads as pending, not committed.
+      const index = this.drag.index;
+      const bone = this.rig.bones[index];
+      const from = this.project(
+        bone ? applyMatrix(world[index], parsePoint(bone.rest.head)) : this.drag.pointer
+      );
+
+      const target = this.boneById(this.drag.target);
+      const targetIndex = target ? this.rig.bones.indexOf(target) : -1;
+      const to = this.project(
+        targetIndex >= 0
+          ? applyMatrix(world[targetIndex], parsePoint(target.rest.tail))
+          : this.drag.pointer
+      );
+
+      ctx.save();
+      ctx.strokeStyle = LINK_COLOR;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(from[0], from[1]);
+      ctx.lineTo(to[0], to[1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // A ring on the drop target's head marks the bone this link would parent.
+      if (targetIndex >= 0) {
+        const head = this.project(
+          applyMatrix(world[targetIndex], parsePoint(target.rest.head))
+        );
+        ctx.beginPath();
+        ctx.arc(head[0], head[1], LINK_HANDLE_RADIUS + 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+      return;
+    }
+
+    if (!this.drag || this.drag.type !== "create") return;
     const head = this.project(this.drag.head);
     const tail = this.project(this.drag.tail);
     ctx.save();
@@ -854,6 +931,10 @@ export const LbsPreview = {
     ctx.lineTo(tail[0], tail[1]);
     ctx.stroke();
     ctx.restore();
+  },
+
+  boneById(id) {
+    return this.rig.bones.find((candidate) => candidate.id === id) || null;
   },
 
   // Image coordinates -> overlay canvas coordinates.
@@ -941,6 +1022,37 @@ export const LbsPreview = {
     return null;
   },
 
+  // Image-coordinate centres of the link dots: one per bone, a LINK_HANDLE_OFFSET
+  // standoff behind its head along the reversed bone direction - the "root" side
+  // of the joint, where a parent link attaches.
+  linkCenters(world) {
+    if (!this.rig) return [];
+    const offset = LINK_HANDLE_OFFSET / this.view.scale;
+
+    return this.rig.bones.map((bone, index) => {
+      const head = applyMatrix(world[index], parsePoint(bone.rest.head));
+      const tail = applyMatrix(world[index], parsePoint(bone.rest.tail));
+      const dx = tail[0] - head[0];
+      const dy = tail[1] - head[1];
+      const length = Math.hypot(dx, dy) || 1;
+      const ux = dx / length;
+      const uy = dy / length;
+      return { id: bone.id, index, center: [head[0] - ux * offset, head[1] - uy * offset] };
+    });
+  },
+
+  linkHit(point, world) {
+    const threshold = (LINK_HANDLE_RADIUS + 4) / this.view.scale;
+    const [x, y] = point;
+
+    for (const link of this.linkCenters(world)) {
+      if (Math.hypot(x - link.center[0], y - link.center[1]) <= threshold) {
+        return { type: "link", id: link.id, index: link.index };
+      }
+    }
+    return null;
+  },
+
   // Reflect what is under the cursor: a grab cursor over a handle or the bone
   // body (both drag to translate/rotate), a select cursor over a joint, and a
   // crosshair / default cursor over empty canvas depending on the tool.
@@ -960,6 +1072,11 @@ export const LbsPreview = {
 
     if (this.handleHit(point, world)) {
       this.setCursor("grab");
+      return;
+    }
+
+    if (this.tool === "bones" && this.linkHit(point, world)) {
+      this.setCursor("alias");
       return;
     }
 
@@ -1026,6 +1143,21 @@ export const LbsPreview = {
       return;
     }
 
+    // The link dot: dragged from a bone's root-side dot onto another bone to
+    // parent it (the drag shortcut for the parent dropdown). The drop target
+    // is resolved live in pointerMove and committed - through the same
+    // set_parent semantics - on pointer-up.
+    if (this.tool === "bones") {
+      const link = this.linkHit(point, world);
+      if (link) {
+        this.selectBone(link.id);
+        this.drag = { type: "link", id: link.id, index: link.index, pointer: point, target: null };
+        this.setCursor("grabbing");
+        this.draw();
+        return;
+      }
+    }
+
     const hit = this.hitTest(point, world);
 
     if (this.tool === "pose") {
@@ -1070,7 +1202,15 @@ export const LbsPreview = {
     }
     const point = this.toImage(event);
 
-    if (this.drag.type === "create") {
+    if (this.drag.type === "link") {
+      // Track the pointer for the live connector and resolve the bone under
+      // it. The source can never be its own parent, so its own body is not a
+      // valid drop target.
+      this.drag.pointer = point;
+      const world = evaluateBones(this.rig, this.frame, this.poses());
+      const hit = this.hitTest(point, world);
+      this.drag.target = hit && hit.id !== this.drag.id ? hit.id : null;
+    } else if (this.drag.type === "create") {
       this.drag.tail = snap(point, this.drag.head, event.shiftKey);
     } else if (this.drag.type === "move") {
       const grab = this.drag.grab || [0, 0];
@@ -1111,7 +1251,15 @@ export const LbsPreview = {
     this.drag = null;
     this.setCursor(this.tool === "bones" ? "crosshair" : "default");
 
-    if (drag.type === "create") {
+    if (drag.type === "link") {
+      // Dropping on a bone parents the dragged bone onto it; dropping on empty
+      // canvas or back on the source cancels the gesture silently, exactly as
+      // a too-short create drag does. Cycles are refused server-side by the
+      // same set_parent the dropdown uses.
+      if (drag.target) {
+        this.pushEvent("bone_linked", { id: drag.id, parent: drag.target });
+      }
+    } else if (drag.type === "create") {
       if (Math.hypot(drag.tail[0] - drag.head[0], drag.tail[1] - drag.head[1]) < 2) {
         this.draw();
         return;
