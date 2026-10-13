@@ -485,16 +485,24 @@ defmodule FramerWeb.Rig do
   defp valid_character_declaration?(nil), do: true
   defp valid_character_declaration?(value), do: is_binary(value) and value != ""
 
-  # Every mask setting must survive a Jason round-trip as the JSON type the
-  # engine's validator expects (numbers stay numbers, booleans stay booleans).
+  # Every mask setting must hold the JSON type the engine's validator expects:
+  # integers for the numeric keys, booleans for the flags, and a [B, G, R]
+  # triple for the colour.
+  defp valid_layer_setting?(layers, "color"), do: color_setting?(layers)
   defp valid_layer_setting?(layers, "auto_ranges"), do: boolean_setting?(layers, "auto_ranges")
   defp valid_layer_setting?(layers, "adaptive_bg"), do: boolean_setting?(layers, "adaptive_bg")
 
   defp valid_layer_setting?(layers, key) do
     case layers[key] do
       nil -> true
-      value when is_integer(value) -> true
-      value when is_float(value) -> true
+      value -> is_integer(value)
+    end
+  end
+
+  defp color_setting?(layers) do
+    case layers["color"] do
+      nil -> true
+      [b, g, r] -> is_number(b) and is_number(g) and is_number(r)
       _ -> false
     end
   end

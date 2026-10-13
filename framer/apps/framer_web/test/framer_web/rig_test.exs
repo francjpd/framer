@@ -467,6 +467,34 @@ defmodule FramerWeb.RigTest do
       assert message =~ "rig.layers settings must be a plain JSON value"
     end
 
+    test "aligns the layer setting types with the engine validator" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      # The engine requires integers (not floats) for the numeric keys.
+      assert {:error, message} =
+               Rig.validate(
+                 Map.put(rig, "layers", %{"split" => true, "tolerance" => 45.5}),
+                 project_dir: "/tmp/project"
+               )
+
+      assert message =~ "rig.layers settings must be a plain JSON value"
+
+      # ...and a [B, G, R] triple (not a scalar) for the colour.
+      assert {:error, message} =
+               Rig.validate(
+                 Map.put(rig, "layers", %{"split" => true, "color" => 15}),
+                 project_dir: "/tmp/project"
+               )
+
+      assert message =~ "rig.layers settings must be a plain JSON value"
+
+      assert {:ok, _} =
+               Rig.validate(
+                 Map.put(rig, "layers", %{"split" => true, "color" => [10, 20, 30]}),
+                 project_dir: "/tmp/project"
+               )
+    end
+
     test "rejects a character layer path that escapes the project directory" do
       {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
 

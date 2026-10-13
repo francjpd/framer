@@ -135,23 +135,22 @@ def test_composite_leaves_a_vacated_pixel_transparent():
     assert not vacated[:, :, :3].any()  # and none of its original colour either
 
 
-def test_composite_is_a_straight_alpha_over():
-    character = np.zeros((4, 4, 4), dtype=np.uint8)
-    background = np.zeros((4, 4, 4), dtype=np.uint8)
-
-    background[:, :, :3] = (0, 190, 0)  # BGR green
-    background[:, :, 3] = 255
+def test_composite_keeps_a_soft_edge_opaque():
+    # A partition at a feathered edge: the character half-covers the pixel and
+    # the background covers the other half, both carrying the still's colour.
+    character = np.zeros((2, 2, 4), dtype=np.uint8)
+    background = np.zeros((2, 2, 4), dtype=np.uint8)
     character[:, :, :3] = (0, 0, 255)  # BGR red
-    character[:, :, 3] = 128  # half cover
+    background[:, :, :3] = (0, 0, 255)  # BGR red (the still's own colour)
+    character[:, :, 3] = 128
+    background[:, :, 3] = 127  # 255 - 128
 
     out = composite(character, background)
 
-    # alpha = fg + bg * (1 - fg)
+    # The two layers partition the still, so the feathered edge stays opaque.
     assert (out[:, :, 3] == 255).all()
-    # colour = (fg * fg.a + bg * bg.a * (1 - fg.a)) / out.a
-    assert out[0, 0, 0] == 0  # blue: neither layer carries any
-    assert out[0, 0, 1] == pytest.approx(95, abs=1)  # green, from the background
-    assert out[0, 0, 2] == pytest.approx(128, abs=1)  # red, from the character
+    # And the still's colour is preserved exactly.
+    assert (out[:, :, :3] == (0, 0, 255)).all()
 
 
 def test_composite_passes_an_opaque_character_through_unchanged():
@@ -159,8 +158,8 @@ def test_composite_passes_an_opaque_character_through_unchanged():
     character[:, :, :3] = (0, 0, 255)
     character[:, :, 3] = 255
     background = np.zeros((4, 4, 4), dtype=np.uint8)
-    background[:, :, 3] = 255
 
+    # A pixel the character fully covers has no background behind it.
     assert np.array_equal(composite(character, background), character)
 
 

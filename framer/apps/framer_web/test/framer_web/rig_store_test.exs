@@ -133,6 +133,27 @@ defmodule FramerWeb.RigStoreTest do
     assert :ok = RigStore.remove_character_layer("../escape")
   end
 
+  test "character layer paths honour the declared layer path" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+
+    split = Rig.enable_split(rig, character: "cutouts/hero.png")
+    assert {:ok, saved} = RigStore.save(split)
+    assert saved["id"] == id
+
+    assert RigStore.character_layer_path(id) == nil
+
+    layer = Path.join(RigStore.project_dir(id), "cutouts/hero.png")
+    File.mkdir_p!(Path.dirname(layer))
+    File.write!(layer, "cutout")
+
+    assert RigStore.character_layer_path(id) == layer
+
+    assert :ok = RigStore.remove_character_layer(id)
+    refute File.exists?(layer)
+    assert RigStore.character_layer_path(id) == nil
+  end
+
   test "a split rig saves and loads with its layered state round-tripped" do
     {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
 

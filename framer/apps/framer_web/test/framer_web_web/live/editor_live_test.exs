@@ -687,12 +687,18 @@ defmodule FramerWebWeb.EditorLiveTest do
       _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
       {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
 
+      # Split first so the cut-out is already materialised; moving the slider
+      # must then re-key the existing layer rather than extract a fresh one.
+      render_click(view, "toggle_background_layer", %{})
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+
       render_change(view, "set_layer_tolerance", %{"tolerance" => "65"})
 
       {:ok, saved} = RigStore.load(rig["id"])
       assert FramerWeb.Rig.split?(saved)
       assert get_in(saved, ["layers", "tolerance"]) == 65
       assert has_element?(view, "#layer-tolerance-form input[value='65']")
+      refute render(view) =~ "layer_not_materialised"
     end
 
     test "a non-positive tolerance is rejected without touching the document", %{conn: conn} do

@@ -10,6 +10,7 @@
 import fs from "node:fs";
 
 import {
+  compositeLayers,
   computeDenseWeights,
   interpolatePoses,
   renderFrameRGBA,
@@ -28,6 +29,12 @@ if (spec.source) {
   const output = renderFrameRGBA(source, spec.width, spec.height, spec.rig, spec.frame, options);
 
   fs.writeFileSync(spec.output, Buffer.from(output));
+}
+
+if (spec.composite) {
+  const character = new Uint8Array(fs.readFileSync(spec.composite.character));
+  const background = new Uint8Array(fs.readFileSync(spec.composite.background));
+  fs.writeFileSync(spec.output, Buffer.from(compositeLayers(character, background)));
 }
 
 if (spec.weights_output) {

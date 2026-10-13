@@ -192,16 +192,20 @@ still); there is no second segmenter or model. Its alpha is the character mask:
 
 ### Fill of a vacated region
 
-Where the character moves away from, neither layer covers the pixel any more,
-so the composite is **transparent**: the vacated region shows none of the
-character's original pixels and no reconstructed background either. That is
-the chosen fill, and its limit is deliberate - there is no inpainting, so the
-hole stays see-through until the character animates back over it (at which
-point the frame is again exactly the original still). On export the video
-carries alpha in that region (WebM/VP9), and a single-frame PNG render is
-transparent there too; anything that flattens the alpha (for example an MP4
-encode, or viewing the PNG on an opaque background) shows whatever is behind
-it instead.
+The two layers partition the still - the character layer's alpha is the mask
+and the background layer's is its inverse - so they are recomposited additively
+(out alpha = character + background, colour weighted by coverage). That keeps a
+feathered edge opaque: wherever the key is unsure, the two layers split the
+pixel and add back to a fully covered pixel. Where the character moves away
+from, neither layer covers the pixel any more, so the composite is
+**transparent**: the vacated region shows none of the character's original
+pixels and no reconstructed background either. That is the chosen fill, and its
+limit is deliberate - there is no inpainting, so the hole stays see-through
+until the character animates back over it (at which point the frame is again
+exactly the original still). On export the video carries alpha in that region
+(WebM/VP9), and a single-frame PNG render is transparent there too; anything
+that flattens the alpha (for example an MP4 encode, or viewing the PNG on an
+opaque background) shows whatever is behind it instead.
 
 ### Limits of the split
 

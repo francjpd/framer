@@ -256,7 +256,7 @@ def test_interpolated_poses_match_the_engine(tmp_path):
 # --- layered preview --------------------------------------------------------
 #
 # A split rig deforms the character layer only. `lbs.mjs` mirrors
-# `core/layers.py` (background derivation + straight-alpha composite), so the
+# `core/layers.py` (background derivation + additive composite), so the
 # preview and the export agree on the layering by construction - these tests
 # hold both halves of that claim: the preview keeps the background put, and the
 # preview's layered render matches the engine's.
@@ -303,3 +303,41 @@ def test_layered_preview_matches_the_engine(tmp_path):
     assert outlier_fraction <= MAX_OUTLIER_FRACTION, (
         f"{outlier_fraction:.4f} of pixels differ by more than {OUTLIER_TOLERANCE}"
     )
+
+
+def test_js_composite_keeps_a_soft_edge_opaque(tmp_path):
+    # A partition at a feathered edge: the character half-covers the pixel and
+    # the background covers the other half, both carrying the still's colour.
+    character = np.zeros((2, 2, 4), dtype=np.uint8)
+    background = np.zeros((2, 2, 4), dtype=np.uint8)
+    character[:, :, :3] = (255, 0, 0)
+    background[:, :, :3] = (255, 0, 0)
+    character[:, :, 3] = 128
+    background[:, :, 3] = 127
+
+    character_path = tmp_path / "character.rgba"
+    background_path = tmp_path / "background.rgba"
+    character_path.write_bytes(character.tobytes())
+    background_path.write_bytes(background.tobytes())
+
+    output_path = tmp_path / "composite.rgba"
+
+    spec = {
+        "composite": {"character": str(character_path), "background": str(background_path)},
+        "output": str(output_path),
+    }
+    spec_path = tmp_path / "spec_composite.json"
+    spec_path.write_text(json.dumps(spec))
+
+    completed = subprocess.run(
+        [NODE, str(RUNNER), str(spec_path)],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        check=False,
+    )
+    assert completed.returncode == 0, f"node composite failed:\n{completed.stderr}"
+
+    out = np.frombuffer(output_path.read_bytes(), dtype=np.uint8).reshape(2, 2, 4)
+    assert (out[:, :, 3] == 255).all()
+    assert (out[:, :, :3] == (255, 0, 0)).all()

@@ -615,20 +615,22 @@ export const LbsPreview = {
       if (!gl) throw new Error("WebGL2 unavailable");
 
       const program = createProgram(gl);
-      const passthrough = createPassthroughProgram(gl);
+      const composite = createCompositeProgram(gl);
       this.gl = gl;
       this.glProgram = program;
-      this.glPassthroughProgram = passthrough;
+      this.glCompositeProgram = composite;
       this.glLocations = {
         pos: gl.getAttribLocation(program, "a_pos"),
         source: gl.getUniformLocation(program, "u_source"),
         map: gl.getUniformLocation(program, "u_map"),
         size: gl.getUniformLocation(program, "u_size"),
-        passthrough: gl.getUniformLocation(passthrough, "u_source"),
-        passthroughSize: gl.getUniformLocation(passthrough, "u_size"),
       };
-      this.glPassthroughLocations = {
-        pos: gl.getAttribLocation(passthrough, "a_pos"),
+      this.glCompositeLocations = {
+        pos: gl.getAttribLocation(composite, "a_pos"),
+        character: gl.getUniformLocation(composite, "u_character"),
+        background: gl.getUniformLocation(composite, "u_background"),
+        map: gl.getUniformLocation(composite, "u_map"),
+        size: gl.getUniformLocation(composite, "u_size"),
       };
 
       this.glBuffer = gl.createBuffer();
@@ -636,9 +638,16 @@ export const LbsPreview = {
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
 
       this.glSourceTex = gl.createTexture();
+      this.glBackgroundTex = gl.createTexture();
       this.glMapTex = gl.createTexture();
 
       gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+      gl.bindTexture(gl.TEXTURE_2D, this.glBackgroundTex);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -665,58 +674,19 @@ export const LbsPreview = {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    // A split rig is two passes over the same backward map: the background
-    // layer is blitted untouched, then the warped character layer is composited
-    // over it with a straight-alpha "over" so the result matches the engine's
-    // `core.layers.composite`.
+    // A split rig deforms only the character layer and composites the untouched
+    // background additively (out_alpha = fg + bg, colour weighted by coverage),
+    // exactly as the engine's `core.layers.composite` does. One fragment shader
+    // reads both layers and the backward map so the divide-by-out-alpha the
+    // fixed-function blender cannot express stays exact.
     if (proxy.character) {
       gl.disable(gl.BLEND);
-      this.drawTexturedQuad(proxy.background, proxy.width, proxy.height);
-
-      gl.enable(gl.BLEND);
-      gl.blendFuncSeparate(
-        gl.SRC_ALPHA,
-        gl.ONE_MINUS_SRC_ALPHA,
-        gl.ONE,
-        gl.ONE_MINUS_SRC_ALPHA
-      );
-      this.drawSampledQuad(proxy.character, proxy.width, proxy.height, mapX, mapY);
-      gl.disable(gl.BLEND);
+      this.drawCompositeQuad(proxy.character, proxy.background, proxy.width, proxy.height, mapX, mapY);
       return;
     }
 
     gl.disable(gl.BLEND);
     this.drawSampledQuad(proxy.source, proxy.width, proxy.height, mapX, mapY);
-  },
-
-  // Blit a layer straight through: no remap, which is what keeps the background
-  // unwarped.
-  drawTexturedQuad(layer, width, height) {
-    const gl = this.gl;
-
-    gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.RGBA,
-      width,
-      height,
-      0,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      new Uint8Array(layer.data.buffer)
-    );
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
-
-    gl.useProgram(this.glPassthroughProgram);
-    gl.uniform1i(this.glLocations.passthrough, 0);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.glBuffer);
-    gl.enableVertexAttribArray(this.glPassthroughLocations.pos);
-    gl.vertexAttribPointer(this.glPassthroughLocations.pos, 2, gl.FLOAT, false, 0, 0);
-
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   },
 
   drawSampledQuad(layer, width, height, mapX, mapY) {
@@ -761,20 +731,84 @@ export const LbsPreview = {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   },
 
+  // Composite the warped character over the untouched background in one pass,
+  // matching `core.layers.composite`: out_alpha = fg + bg, out_rgb =
+  // (fg.rgb * fg.a + bg.rgb * bg.a) / out_alpha.
+  drawCompositeQuad(character, background, width, height, mapX, mapY) {
+    const gl = this.gl;
+
+    gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array(character.data.buffer)
+    );
+
+    gl.bindTexture(gl.TEXTURE_2D, this.glBackgroundTex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array(background.data.buffer)
+    );
+
+    const map = new Float32Array(width * height * 2);
+    for (let i = 0; i < mapX.length; i++) {
+      map[i * 2] = mapX[i];
+      map[i * 2 + 1] = mapY[i];
+    }
+
+    gl.bindTexture(gl.TEXTURE_2D, this.glMapTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, width, height, 0, gl.RG, gl.FLOAT, map);
+
+    gl.useProgram(this.glCompositeProgram);
+    gl.uniform1i(this.glCompositeLocations.character, 0);
+    gl.uniform1i(this.glCompositeLocations.background, 1);
+    gl.uniform1i(this.glCompositeLocations.map, 2);
+    gl.uniform2f(this.glCompositeLocations.size, width, height);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.glBackgroundTex);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.glMapTex);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.glBuffer);
+    gl.enableVertexAttribArray(this.glCompositeLocations.pos);
+    gl.vertexAttribPointer(this.glCompositeLocations.pos, 2, gl.FLOAT, false, 0, 0);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  },
+
   releaseGl() {
     if (this.gl) {
       const gl = this.gl;
       if (this.glBuffer) gl.deleteBuffer(this.glBuffer);
       if (this.glSourceTex) gl.deleteTexture(this.glSourceTex);
+      if (this.glBackgroundTex) gl.deleteTexture(this.glBackgroundTex);
       if (this.glMapTex) gl.deleteTexture(this.glMapTex);
       if (this.glProgram) gl.deleteProgram(this.glProgram);
-      if (this.glPassthroughProgram) gl.deleteProgram(this.glPassthroughProgram);
+      if (this.glCompositeProgram) gl.deleteProgram(this.glCompositeProgram);
     }
     this.gl = null;
     this.glBuffer = null;
     this.glSourceTex = null;
+    this.glBackgroundTex = null;
     this.glMapTex = null;
     this.glProgram = null;
+    this.glCompositeProgram = null;
   },
 
   // --- WebGL context loss / restore ----------------------------------------
@@ -1532,22 +1566,6 @@ in vec2 a_pos;
 void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
 `;
 
-// Blits a layer straight through, with no remap: the background layer of a
-// split rig is drawn with this so it is never warped. The y flip matches the
-// remap shader - WebGL's fragment origin is the bottom-left of the canvas,
-// while the layer data's first row is the top.
-const PASSTHROUGH_FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-uniform sampler2D u_source;
-uniform vec2 u_size;
-out vec4 outColor;
-void main() {
-  int x = int(floor(gl_FragCoord.x));
-  int y = int(u_size.y) - 1 - int(floor(gl_FragCoord.y));
-  outColor = texelFetch(u_source, ivec2(x, y), 0);
-}
-`;
-
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D u_source;
@@ -1581,6 +1599,49 @@ void main() {
 }
 `;
 
+// Composites the warped character over the untouched background in one pass,
+// mirroring `core.layers.composite`: out_alpha = fg.a + bg.a, out_rgb =
+// (fg.rgb * fg.a + bg.rgb * bg.a) / out_alpha. The background is read straight
+// through (never remapped), the character is sampled through the backward map.
+const COMPOSITE_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D u_character;
+uniform sampler2D u_background;
+uniform sampler2D u_map;
+uniform vec2 u_size;
+out vec4 outColor;
+
+vec4 characterTexel(int x, int y) {
+  if (x < 0 || y < 0 || x >= int(u_size.x) || y >= int(u_size.y)) return vec4(0.0);
+  return texelFetch(u_character, ivec2(x, y), 0);
+}
+
+vec4 sampleCharacter(vec2 p) {
+  float x0 = floor(p.x);
+  float y0 = floor(p.y);
+  float ax = p.x - x0;
+  float ay = p.y - y0;
+  int ix = int(x0);
+  int iy = int(y0);
+  return characterTexel(ix, iy) * (1.0 - ax) * (1.0 - ay)
+       + characterTexel(ix + 1, iy) * ax * (1.0 - ay)
+       + characterTexel(ix, iy + 1) * (1.0 - ax) * ay
+       + characterTexel(ix + 1, iy + 1) * ax * ay;
+}
+
+void main() {
+  int x = int(floor(gl_FragCoord.x));
+  int y = int(u_size.y) - 1 - int(floor(gl_FragCoord.y));
+  vec2 p = texelFetch(u_map, ivec2(x, y), 0).xy;
+  vec4 fg = sampleCharacter(p);
+  vec4 bg = texelFetch(u_background, ivec2(x, y), 0);
+  float outAlpha = fg.a + bg.a;
+  vec3 colour = fg.rgb * fg.a + bg.rgb * bg.a;
+  colour = colour / max(outAlpha, 1.0 / 255.0);
+  outColor = vec4(colour, outAlpha);
+}
+`;
+
 function compile(gl, type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -1610,9 +1671,9 @@ function createProgram(gl) {
   return program;
 }
 
-function createPassthroughProgram(gl) {
+function createCompositeProgram(gl) {
   const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-  const fragment = compile(gl, gl.FRAGMENT_SHADER, PASSTHROUGH_FRAGMENT_SHADER);
+  const fragment = compile(gl, gl.FRAGMENT_SHADER, COMPOSITE_FRAGMENT_SHADER);
   const program = gl.createProgram();
   gl.attachShader(program, vertex);
   gl.attachShader(program, fragment);
@@ -1622,7 +1683,7 @@ function createPassthroughProgram(gl) {
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
     const log = gl.getProgramInfoLog(program);
     gl.deleteProgram(program);
-    throw new Error(`passthrough program link failed: ${log}`);
+    throw new Error(`composite program link failed: ${log}`);
   }
   return program;
 }

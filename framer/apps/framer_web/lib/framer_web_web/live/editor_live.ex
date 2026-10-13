@@ -330,13 +330,6 @@ defmodule FramerWebWeb.EditorLive do
     end
   end
 
-  def handle_event("re_extract_character", _params, %{assigns: %{rig: nil}} = socket),
-    do: {:noreply, assign(socket, :error, "Load a rig first")}
-
-  def handle_event("re_extract_character", _params, socket) do
-    {:noreply, extract_character(socket, socket.assigns.rig)}
-  end
-
   def handle_event("set_layer_tolerance", %{"tolerance" => tolerance}, socket) do
     case to_float(tolerance) do
       value when is_number(value) and value > 0 ->
@@ -494,6 +487,12 @@ defmodule FramerWebWeb.EditorLive do
       rig
       |> Rig.enable_split(tolerance: tolerance)
       |> Rig.set_layer_settings(tolerance: tolerance)
+
+    # Changing the settings drops the recorded character path, but the file it
+    # materialised is still on disk and the engine falls back to the default
+    # name, so it would reuse the stale cut-out instead of re-keying it. Remove
+    # it first so the engine recomputes the cut-out with the new settings.
+    RigStore.remove_character_layer(rig["id"])
 
     socket =
       socket

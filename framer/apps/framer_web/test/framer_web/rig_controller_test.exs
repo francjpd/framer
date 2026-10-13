@@ -163,6 +163,18 @@ defmodule FramerWebWeb.RigControllerTest do
       assert conn |> get(~p"/api/rigs/#{rig["id"]}/character") |> response(200) == "cutout"
     end
 
+    test "serves the character layer at a declared custom path", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png(8, 8), "s.png")
+      split = FramerWeb.Rig.enable_split(rig, character: "cutouts/hero.png")
+      assert {:ok, _} = RigStore.save(split)
+
+      layer = Path.join(RigStore.project_dir(rig["id"]), "cutouts/hero.png")
+      File.mkdir_p!(Path.dirname(layer))
+      File.write!(layer, "cutout")
+
+      assert conn |> get(~p"/api/rigs/#{rig["id"]}/character") |> response(200) == "cutout"
+    end
+
     test "404s when the rig has not been split", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png(8, 8), "s.png")
 

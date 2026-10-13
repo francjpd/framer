@@ -42,11 +42,13 @@ defmodule FramerWeb.RigStore do
 
   The engine writes this when a split rig first renders; it is the cut-out the
   rig deforms, and the only layer file a project keeps (the background layer is
-  derived from the still and the character's alpha).
+  derived from the still and the character's alpha). The path is the one the
+  rig document declares, falling back to the default name.
   """
   def character_layer_path(id) do
-    with :ok <- validate_id(id) do
-      path = Path.join(project_dir(id), Rig.layer_filename())
+    with :ok <- validate_id(id),
+         {:ok, rig} <- load(id) do
+      path = character_layer_for(rig, id)
       if File.exists?(path), do: path
     else
       _ -> nil
@@ -55,13 +57,17 @@ defmodule FramerWeb.RigStore do
 
   @doc "Remove a project's character layer, returning the rig to a single picture."
   def remove_character_layer(id) do
-    with :ok <- validate_id(id) do
-      path = Path.join(project_dir(id), Rig.layer_filename())
-      File.rm(path)
+    with :ok <- validate_id(id),
+         {:ok, rig} <- load(id) do
+      File.rm(character_layer_for(rig, id))
       :ok
     else
       _ -> :ok
     end
+  end
+
+  defp character_layer_for(rig, id) do
+    Path.join(project_dir(id), Rig.character_layer(rig) || Rig.layer_filename())
   end
 
   @doc "Absolute path of a project's exported result, if it exists."

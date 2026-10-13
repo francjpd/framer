@@ -15,10 +15,11 @@ character:
   its alpha, i.e. the same picture with the character punched out. It is never
   resampled by the rig.
 
-The layers are recomposited with a straight-alpha "over", so a pixel the
-character moved away from ends up transparent: the character layer no longer
-covers it and the background layer has no colour there either. That is the
-documented fill behaviour for a vacated region - see `docs/rig-editor.md`.
+The layers are recomposited additively (out_alpha = fg + bg, colour weighted by
+coverage), so a pixel the character moved away from ends up transparent: the
+character layer no longer covers it and the background layer has no colour there
+either. That is the documented fill behaviour for a vacated region - see
+`docs/rig-editor.md`.
 
 The mask itself comes from the existing background-removal segmentation
 (`core.bg_removal.character_alpha`); there is no second segmenter here.
@@ -77,9 +78,12 @@ def composite(character: np.ndarray, background: np.ndarray) -> np.ndarray:
     """
     Composite a (already deformed) character layer over an unwarped background.
 
-    Straight-alpha "over": ``out = fg + bg * (1 - fg.a)`` per channel, with the
-    colour premultiplied by the coverage so a transparent pixel contributes
-    nothing. Where neither layer covers a pixel the result is transparent.
+    The two layers partition the still (the background's alpha is the inverse
+    of the character's mask), so the composite is additive: ``out_alpha = fg +
+    bg`` with the colour weighted by each layer's coverage and divided by the
+    sum. That keeps a feathered edge opaque - a pixel the character half-covers
+    is half-covered by the background too - and leaves a pixel neither layer
+    covers (the vacated region) transparent.
     """
     for name, layer in (("character", character), ("background", background)):
         if layer.ndim != 3 or layer.shape[2] != 4:
@@ -94,10 +98,10 @@ def composite(character: np.ndarray, background: np.ndarray) -> np.ndarray:
     fg_alpha = character[:, :, 3:4].astype(np.float32) / 255.0
     bg_alpha = background[:, :, 3:4].astype(np.float32) / 255.0
 
-    out_alpha = fg_alpha + bg_alpha * (1.0 - fg_alpha)
+    out_alpha = fg_alpha + bg_alpha
     safe_alpha = np.where(out_alpha > 0.0, out_alpha, 1.0)
 
-    colour = character[:, :, :3] * fg_alpha + background[:, :, :3] * bg_alpha * (1.0 - fg_alpha)
+    colour = character[:, :, :3] * fg_alpha + background[:, :, :3] * bg_alpha
     colour = colour / safe_alpha
 
     return np.concatenate(

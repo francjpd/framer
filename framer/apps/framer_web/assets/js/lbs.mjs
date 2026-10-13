@@ -481,9 +481,11 @@ export function backgroundLayer(source, w, h, character) {
 }
 
 /**
- * Straight-alpha "over" composite of a character layer onto a background layer.
- * Mirrors `core.layers.composite`, so the preview's layering matches the
- * engine's export by construction.
+ * Additive composite of a character layer onto a background layer. The two
+ * layers partition the still (the background's alpha is the inverse of the
+ * character's mask), so out_alpha = fg + bg with colour weighted by coverage -
+ * which keeps a feathered edge opaque. Mirrors `core.layers.composite`, so the
+ * preview's layering matches the engine's export by construction.
  */
 export function compositeLayers(character, background) {
   const plane = character.length / 4;
@@ -492,12 +494,11 @@ export function compositeLayers(character, background) {
   for (let i = 0; i < plane; i++) {
     const fgAlpha = character[i * 4 + 3] / 255;
     const bgAlpha = background[i * 4 + 3] / 255;
-    const outAlpha = fgAlpha + bgAlpha * (1 - fgAlpha);
+    const outAlpha = fgAlpha + bgAlpha;
     const safe = outAlpha > 0 ? outAlpha : 1;
 
     for (let c = 0; c < 3; c++) {
-      const value =
-        character[i * 4 + c] * fgAlpha + background[i * 4 + c] * bgAlpha * (1 - fgAlpha);
+      const value = character[i * 4 + c] * fgAlpha + background[i * 4 + c] * bgAlpha;
       out[i * 4 + c] = value / safe;
     }
 
