@@ -510,7 +510,7 @@ defmodule FramerWebWeb.BrowserPreviewTest do
         },
         %{
           name: "the reticle marks the pointer's image point",
-          waitForFunction: reticle_at(100, 50)
+          waitForFunction: wait_for_reticle(100, 50, 200, 100)
         },
         reticle_on_screen(100, 50, 200, 100),
         %{name: "screenshot the visible reticle", screenshot: %{path: on, selector: "#viewport"}},
@@ -518,13 +518,13 @@ defmodule FramerWebWeb.BrowserPreviewTest do
           name: "move the pointer to image (40,80)",
           pointerImage: %{image: [40, 80], imgW: 200, imgH: 100, settleMs: 200}
         },
-        %{name: "the reticle follows the pointer", waitForFunction: reticle_at(40, 80)},
+        %{name: "the reticle follows the pointer", waitForFunction: wait_for_reticle(40, 80, 200, 100)},
         reticle_on_screen(40, 80, 200, 100),
         %{name: "resize the browser window", resize: %{width: 1600, height: 1000}},
         %{name: "let the preview re-fit", sleep: 500},
         %{
           name: "the reticle still marks the same image point",
-          waitForFunction: reticle_at(40, 80)
+          waitForFunction: wait_for_reticle(40, 80, 200, 100)
         },
         reticle_on_screen(40, 80, 200, 100),
         %{
@@ -557,7 +557,7 @@ defmodule FramerWebWeb.BrowserPreviewTest do
           name: "move the pointer back into the viewport",
           pointerImage: %{image: [100, 50], imgW: 200, imgH: 100, settleMs: 200}
         },
-        %{name: "the reticle is visible again", waitForFunction: reticle_at(100, 50)},
+        %{name: "the reticle is visible again", waitForFunction: wait_for_reticle(100, 50, 200, 100)},
         %{name: "let the reticle draw", sleep: 300},
         %{
           name: "create a bone from image (100,50) to (140,70)",
@@ -1035,15 +1035,31 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     }
   end
 
-  # The reticle records the image point it is marking on itself, so a scenario
-  # can wait until the editor's own reading of the pointer reaches a known image
-  # point before checking where the marker ended up on screen.
-  defp reticle_at(x, y) do
-    "() => {
-      const el = document.querySelector('#viewport .framer-viewport-reticle');
-      if (!el || el.style.display !== 'block') return false;
-      return Math.abs(Number(el.dataset.imageX) - #{x}) < 0.5 && Math.abs(Number(el.dataset.imageY) - #{y}) < 0.5;
-    }"
+  # The reticle geometry both the wait and the assertion read: the on-screen
+  # distance between the marker's drawn centre and the image point projected
+  # through the viewport's letterbox geometry (99 while the marker is hidden).
+  defp reticle_geometry(x, y, img_w, img_h) do
+    """
+    (() => {
+      const viewport = document.querySelector('#viewport');
+      const el = viewport.querySelector('.framer-viewport-reticle');
+      if (!el || el.style.display !== 'block') return 99;
+      const r = viewport.getBoundingClientRect();
+      const scale = Math.min(r.width / #{img_w}, r.height / #{img_h});
+      const offsetX = (r.width - #{img_w} * scale) / 2;
+      const offsetY = (r.height - #{img_h} * scale) / 2;
+      const box = el.getBoundingClientRect();
+      const cx = box.left + box.width / 2;
+      const cy = box.top + box.height / 2;
+      return Math.hypot(cx - (r.left + offsetX + #{x} * scale), cy - (r.top + offsetY + #{y} * scale));
+    })()
+    """
+  end
+
+  # Waits until the visible reticle's drawn centre matches the expected image
+  # point, so the scenario converges on the marker's real on-screen position.
+  defp wait_for_reticle(x, y, img_w, img_h) do
+    "() => #{reticle_geometry(x, y, img_w, img_h)} < 2"
   end
 
   # Asserts the visible reticle is centred on the expected image point: it reads
@@ -1053,19 +1069,7 @@ defmodule FramerWebWeb.BrowserPreviewTest do
   defp reticle_on_screen(x, y, img_w, img_h) do
     %{
       name: "the reticle is drawn at image (#{x}, #{y})",
-      evaluate: "() => {
-          const viewport = document.querySelector('#viewport');
-          const el = viewport.querySelector('.framer-viewport-reticle');
-          if (!el || el.style.display !== 'block') return 99;
-          const r = viewport.getBoundingClientRect();
-          const scale = Math.min(r.width / #{img_w}, r.height / #{img_h});
-          const offsetX = (r.width - #{img_w} * scale) / 2;
-          const offsetY = (r.height - #{img_h} * scale) / 2;
-          const box = el.getBoundingClientRect();
-          const cx = box.left + box.width / 2;
-          const cy = box.top + box.height / 2;
-          return Math.hypot(cx - (r.left + offsetX + #{x} * scale), cy - (r.top + offsetY + #{y} * scale));
-        }",
+      evaluate: "() => #{reticle_geometry(x, y, img_w, img_h)}",
       expect: %{lt: 2}
     }
   end

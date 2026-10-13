@@ -357,8 +357,6 @@ export const LbsPreview = {
     const [x, y] = this.project(this.reticlePoint);
     this.reticle.style.display = "block";
     this.reticle.style.transform = `translate(${x}px, ${y}px)`;
-    this.reticle.dataset.imageX = this.reticlePoint[0].toFixed(3);
-    this.reticle.dataset.imageY = this.reticlePoint[1].toFixed(3);
   },
 
   hideReticle() {
