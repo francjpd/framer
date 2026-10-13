@@ -28,6 +28,13 @@ const SNAP_RADIANS = Math.PI / 12;
 const HANDLE_RADIUS = 7; // display pixels: call-to-action handle radius
 const HANDLE_OFFSET = 16; // display pixels: handle standoff from the bone
 
+// Viewport zoom. The contain-fit is zoom 1; each wheel notch or control press
+// changes it by ZOOM_STEP. `NATIVE_SCALE` is the ceiling - the still shown at
+// its own pixels (1 image px = 1 CSS px) - so we never magnify past the source
+// resolution, and the fit floor means we never shrink below the contain-fit.
+const ZOOM_STEP = 1.2;
+const NATIVE_SCALE = 1;
+
 function parsePoint(value) {
   if (!Array.isArray(value)) return [0, 0];
   return [Number(value[0]) || 0, Number(value[1]) || 0];
@@ -90,6 +97,8 @@ export const LbsPreview = {
     this.drag = null;
     this.hover = null;
     this.view = null;
+    this.zoom = 1; // >= 1; 1 is the contain-fit. Never below fit, never past 1:1.
+    this.zoomAnchor = null; // the {ix,iy,vx,vy} a zoomed view pivots around; null at fit.
     this.cache = { bindKey: null, weights: null, proxy: null, vertexWeights: null, vertices: null };
     this.renderKey = null;
     this.gl = null;
@@ -107,11 +116,17 @@ export const LbsPreview = {
     this.setCursor(this.tool === "bones" ? "crosshair" : "default");
 
     this.handleEvent("rig", ({ rig }) => this.setRig(rig));
+    this.handleEvent("zoom", ({ action }) => this.zoomAction(action));
     this.handleEvent("clear_overrides", () => {
       this.overrides = {};
       this.invalidate();
       this.draw();
     });
+
+    // Ctrl/Cmd + wheel zooms the viewport. `passive: false` so the handler can
+    // preventDefault the browser's own page-zoom on those shortcuts.
+    this.onWheel = (event) => this.handleWheel(event);
+    this.el.addEventListener("wheel", this.onWheel, { passive: false });
 
     // The one signal that fires on *every* viewport size change: the
     // ResizeObserver watches the element itself, so it catches the
@@ -157,6 +172,7 @@ export const LbsPreview = {
     if (url !== this.sourceUrl) {
       this.sourceUrl = url;
       this.sourceImage = null;
+      this.resetZoom();
       this.invalidate();
       this.loadSource();
       return;
@@ -174,6 +190,7 @@ export const LbsPreview = {
     this.el.removeEventListener("pointerdown", this.onPointerDown);
     window.removeEventListener("pointermove", this.onPointerMove);
     window.removeEventListener("pointerup", this.onPointerUp);
+    this.el.removeEventListener("wheel", this.onWheel);
     this.releaseGl();
   },
 
@@ -228,6 +245,7 @@ export const LbsPreview = {
     this.rig = rig;
     if (!previous || previous.id !== rig.id) {
       this.overrides = {};
+      this.resetZoom();
     }
     this.selected = this.el.dataset.selected || null;
     this.invalidate();
@@ -253,22 +271,64 @@ export const LbsPreview = {
     this.renderKey = null;
   },
 
+  // Zoom bounds in terms of the contain-fit: the effective scale is
+  // `fitScale * zoom`. `zoom` runs from 1 (the fit) up to the still at its own
+  // pixels, and never below 1. When the element already exceeds 1:1 at fit,
+  // the ceiling equals the fit, so `zoom` is pinned at 1 (no room to magnify).
+  zoomRange(fitScale) {
+    const maxScale = Math.max(NATIVE_SCALE, fitScale);
+    return { min: 1, max: maxScale / fitScale };
+  },
+
+  resetZoom() {
+    this.zoom = 1;
+    this.zoomAnchor = null;
+  },
+
   measureView() {
     const rect = this.el.getBoundingClientRect();
     if (!this.rig || !rect.width || !rect.height) return;
 
     const imageWidth = this.rig.canvas.width;
     const imageHeight = this.rig.canvas.height;
-    const scale = Math.min(rect.width / imageWidth, rect.height / imageHeight);
+    const fitScale = Math.min(rect.width / imageWidth, rect.height / imageHeight);
+    const maxZoom = this.zoomRange(fitScale).max;
+    const zoom = Math.min(Math.max(this.zoom, 1), maxZoom);
+    this.zoom = zoom;
+    const scale = fitScale * zoom;
     const dispWidth = imageWidth * scale;
     const dispHeight = imageHeight * scale;
 
+    let offsetX;
+    let offsetY;
+    if (zoom <= 1) {
+      offsetX = (rect.width - dispWidth) / 2;
+      offsetY = (rect.height - dispHeight) / 2;
+    } else {
+      // A zoomed view pivots on its anchor: the same image point stays at the
+      // same viewport offset across a zoom, which is what keeps the
+      // pointer-to-image mapping exact (see `zoomToward`). Without an anchor
+      // yet, pivot on the still's centre against the element's centre.
+      const anchor =
+        this.zoomAnchor || {
+          ix: imageWidth / 2,
+          iy: imageHeight / 2,
+          vx: rect.width / 2,
+          vy: rect.height / 2,
+        };
+      offsetX = anchor.vx - anchor.ix * scale;
+      offsetY = anchor.vy - anchor.iy * scale;
+    }
+
     this.view = {
       scale,
-      offsetX: (rect.width - dispWidth) / 2,
-      offsetY: (rect.height - dispHeight) / 2,
+      offsetX,
+      offsetY,
       dispWidth,
       dispHeight,
+      zoom,
+      fitScale,
+      maxZoom,
     };
 
     const dpr = window.devicePixelRatio || 1;
@@ -282,6 +342,64 @@ export const LbsPreview = {
     this.overlay.width = Math.max(1, Math.round(dispWidth * dpr));
     this.overlay.height = Math.max(1, Math.round(dispHeight * dpr));
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  },
+
+  // Change the zoom by `factor` while keeping the image point currently under
+  // the pointer (`clientX`,`clientY` in page coordinates) exactly under it.
+  // `toImage` and `project` both read `this.view`, so pinning the anchor's
+  // viewport position and re-deriving the offset at the new scale holds that
+  // image point on screen - the one invariant that lets a bone placed after a
+  // zoom land under the pointer. Once the target reaches the fit floor the view
+  // snaps back to the centred contain-fit.
+  zoomToward(clientX, clientY, factor) {
+    if (!this.rig) return;
+    this.measureView();
+    if (!this.view) return;
+
+    const maxZoom = this.zoomRange(this.view.fitScale).max;
+    const target = Math.min(Math.max(this.zoom * factor, 1), maxZoom);
+    if (target === this.zoom) return;
+
+    if (target <= 1) {
+      this.resetZoom();
+    } else {
+      const rect = this.el.getBoundingClientRect();
+      const cx = clientX - rect.left;
+      const cy = clientY - rect.top;
+      const ix = (cx - this.view.offsetX) / this.view.scale;
+      const iy = (cy - this.view.offsetY) / this.view.scale;
+      this.zoom = target;
+      this.zoomAnchor = { ix, iy, vx: cx, vy: cy };
+    }
+
+    this.draw();
+  },
+
+  // Apply a zoom action pushed from LiveView (the toolbar's in/out/fit). A
+  // control has no pointer on the still, so it zooms toward the element centre.
+  zoomAction(action) {
+    const rect = this.el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+
+    if (action === "fit") {
+      this.resetZoom();
+      this.draw();
+    } else if (action === "in") {
+      this.zoomToward(cx, cy, ZOOM_STEP);
+    } else if (action === "out") {
+      this.zoomToward(cx, cy, 1 / ZOOM_STEP);
+    }
+  },
+
+  // Ctrl/Cmd + wheel is the editor's zoom shortcut: wheel up zooms in, down
+  // zooms out, pivoting on the pointer. A plain wheel is left untouched so the
+  // page keeps its normal scroll.
+  handleWheel(event) {
+    if (!this.rig || !(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    const factor = event.deltaY > 0 ? 1 / ZOOM_STEP : ZOOM_STEP;
+    this.zoomToward(event.clientX, event.clientY, factor);
   },
 
   toImage(event) {
