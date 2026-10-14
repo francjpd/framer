@@ -181,7 +181,7 @@ and in the final render alike.
 The split is produced with the engine's existing background-removal
 segmentation (the `remove-bg` operation's own colour key, run over the single
 still); there is no second segmenter or model. Its alpha is the character mask,
-which is recorded exactly - no feathering or cleanup - so the character layer
+which is recorded exactly - no feathering or cleanup by default - so the character layer
 carries none of the background:
 
 * **character layer** - the still's colour with the mask as its alpha, so the

@@ -71,10 +71,10 @@ Port contract, request lifecycle, configuration keys and distribution seam.
 ## Operations
 
 Every operation reachable over the Port uses the same contract: paths, a frame
-range and JSON options. Operations that write alpha (`remove-bg`, `deform`)
-must target an alpha-capable container (`.webm` or `.mov`); `.mp4` drops the
-alpha plane. `export` is standalone-only: it runs through the Python CLI and is
-not dispatched by the orchestrator.
+range and JSON options. Operations that write alpha (`remove-bg`, or
+`deform` when frames have transparency) must target an alpha-capable container
+(`.webm` or `.mov`); `.mp4` drops the alpha plane. `export` is standalone-only:
+it runs through the Python CLI and is not dispatched by the orchestrator.
 
 | Operation | Runs | Notes |
 | --- | --- | --- |

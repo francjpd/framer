@@ -137,7 +137,7 @@ The operation travels through the normal Port contract
 ```jsonc
 {
   "op": "deform",
-  "input": "/abs/project/character.png",
+  "input": "/abs/project/source.png",
   "output": "/abs/tmp/chunk_3.webm",
   "start_frame": 72, "end_frame": 95, "fps": 24.0,
   "options": {
