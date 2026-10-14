@@ -946,11 +946,9 @@ export const LbsPreview = {
 
     if (!this.rig || !this.view || !this.cache.vertexWeights) return;
 
-    const poses = this.rig ? this.poses() : {};
     // The rig with the in-progress drag applied, so the overlay draws the bone
     // (and its joint, handles and parent link) where it will land on release.
-    const rig = this.dragRig();
-    const world = evaluateBones(rig, this.frame, poses);
+    const { rig, world } = this.interactionWorld();
 
     if (this.meshVisible) this.drawMesh(world, rig);
     this.drawBones(world, rig);
@@ -964,26 +962,32 @@ export const LbsPreview = {
   // translate drag shifts them by `drag.offset`. Every consumer of the world
   // (bone, joint, handles, parent link, children) re-derives from this rig, so
   // the live overlay is exactly the document `bone_moved`/`bone_translated`
-  // commits on pointer-up. Drags that already render live - the create drag's
-  // rubber band in `drawDrag`, and pose drags (which retarget the world
-  // through `this.overrides`) - need no rig change and keep `this.rig`.
+  // commits on pointer-up. The drag renders against the rig it started from
+  // (`drag.base`), never against `this.rig`: inside the held-release window the
+  // next drag starts on top of a pose the previous drag already drew but the
+  // server has not pushed yet, so only the base keeps that earlier edit on
+  // screen (and in the joint seeds) until the push lands, instead of silently
+  // reverting it to the committed rest. Drags that already render live - the
+  // create drag's rubber band in `drawDrag`, and pose drags (which retarget the
+  // world through `this.overrides`) - need no rig change and keep `this.rig`.
   dragRig() {
     const drag = this.drag;
     if (!this.rig || !drag || (drag.type !== "move" && drag.type !== "translate")) {
       return this.rig;
     }
 
-    const index = this.rig.bones.findIndex((bone) => bone.id === drag.id);
+    const base = drag.base || this.rig;
+    const index = base.bones.findIndex((bone) => bone.id === drag.id);
     if (index < 0) return this.rig;
 
-    const rest = this.rig.bones[index].rest;
+    const rest = base.bones[index].rest;
     let head = parsePoint(rest.head);
     let tail = parsePoint(rest.tail);
 
     if (drag.type === "translate") {
       // The offset only exists once the pointer has moved; before that there
       // is nothing live to show yet.
-      if (!drag.offset) return this.rig;
+      if (!drag.offset) return base;
       head = [head[0] + drag.offset[0], head[1] + drag.offset[1]];
       tail = [tail[0] + drag.offset[0], tail[1] + drag.offset[1]];
     } else {
@@ -991,9 +995,23 @@ export const LbsPreview = {
       tail = parsePoint(drag.tail);
     }
 
-    const bones = this.rig.bones.slice();
+    const bones = base.bones.slice();
     bones[index] = { ...bones[index], rest: { head, tail } };
-    return { ...this.rig, bones };
+    return { ...base, bones };
+  },
+
+  // The one world both the overlay and the pointer read: the drag-applied rig
+  // and its evaluated matrices. Drawing with it keeps the bone where the drag
+  // will land it on release; reading it for hit-testing and for every drag seed
+  // is what makes the drawn geometry the geometry that responds and the geometry
+  // that commits - the shared boundary where a press during the held-release
+  // window (drag held until `setRig` confirms the pushed rig) seeds from the
+  // pose already on screen instead of the stale committed rest, so no edit is
+  // silently reverted and nothing falls through to the create path. Outside a
+  // move/translate drag it is simply `this.rig`.
+  interactionWorld() {
+    const rig = this.dragRig();
+    return { rig, world: evaluateBones(rig, this.frame, this.poses()) };
   },
 
   drawMesh(world, rig) {
@@ -1220,13 +1238,13 @@ export const LbsPreview = {
     return [point[0] * this.view.scale, point[1] * this.view.scale];
   },
 
-  hitTest(point, world) {
-    if (!this.rig) return null;
+  hitTest(point, world, rig) {
+    if (!rig) return null;
     const [x, y] = point;
     const threshold = HIT_RADIUS / this.view.scale;
     let best = null;
 
-    this.rig.bones.forEach((bone, index) => {
+    rig.bones.forEach((bone, index) => {
       const head = applyMatrix(world[index], parsePoint(bone.rest.head));
       const tail = applyMatrix(world[index], parsePoint(bone.rest.tail));
 
@@ -1290,10 +1308,11 @@ export const LbsPreview = {
     };
   },
 
-  handleHit(point, world) {
-    // Hit-testing always uses the committed rig: a handle is only a press
-    // target, never something a drag re-derives.
-    const centers = this.handleCenters(world, this.rig);
+  // Hit-testing reads the rig the overlay draws, so the drawn geometry is also
+  // the interactive geometry. A handle is only a press target, never something
+  // a drag re-derives.
+  handleHit(point, world, rig) {
+    const centers = this.handleCenters(world, rig);
     if (!centers) return null;
 
     const threshold = (HANDLE_RADIUS + 4) / this.view.scale;
@@ -1352,21 +1371,20 @@ export const LbsPreview = {
     if (!inside) return;
 
     const point = this.toImage(event);
-    const world = evaluateBones(this.rig, this.frame, this.poses());
+    const { rig, world } = this.interactionWorld();
 
-    if (this.handleHit(point, world)) {
+    if (this.handleHit(point, world, rig)) {
       this.setCursor("grab");
       return;
     }
 
     const link = this.tool === "bones" ? this.linkHit(point, world) : null;
-    const hit = this.hitTest(point, world);
+    const hit = this.hitTest(point, world, rig);
 
     if (link && (!hit || link.distance < hit.distance)) {
       this.setCursor("alias");
       return;
     }
-
     if (hit) {
       this.setCursor(hit.kind === "body" ? "grab" : "pointer");
       return;
@@ -1380,9 +1398,9 @@ export const LbsPreview = {
     event.preventDefault();
 
     const point = this.toImage(event);
-    const world = evaluateBones(this.rig, this.frame, this.poses());
+    const { rig, world } = this.interactionWorld();
 
-    const handle = this.handleHit(point, world);
+    const handle = this.handleHit(point, world, rig);
     if (handle) {
       this.selectBone(handle.id);
       if (handle.type === "move") {
@@ -1393,15 +1411,16 @@ export const LbsPreview = {
             start: point,
             initial: poseFor(this.poses(), handle.id),
             mode: "translate",
-            head: lastWorldPoint(world, handle.index, this.rig, "head"),
+            head: lastWorldPoint(world, handle.index, rig, "head"),
           };
         } else {
           this.drag = {
             type: "translate",
             id: handle.id,
             start: point,
-            head: parsePoint(this.rig.bones[handle.index].rest.head),
-            tail: parsePoint(this.rig.bones[handle.index].rest.tail),
+            head: parsePoint(rig.bones[handle.index].rest.head),
+            tail: parsePoint(rig.bones[handle.index].rest.tail),
+            base: rig,
           };
         }
       } else if (this.tool === "pose") {
@@ -1411,17 +1430,18 @@ export const LbsPreview = {
           start: point,
           initial: poseFor(this.poses(), handle.id),
           mode: "rotate",
-          head: lastWorldPoint(world, handle.index, this.rig, "head"),
+          head: lastWorldPoint(world, handle.index, rig, "head"),
         };
       } else {
-        const tail = parsePoint(this.rig.bones[handle.index].rest.tail);
+        const tail = parsePoint(rig.bones[handle.index].rest.tail);
         this.drag = {
           type: "move",
           id: handle.id,
           which: "tail",
-          head: parsePoint(this.rig.bones[handle.index].rest.head),
+          head: parsePoint(rig.bones[handle.index].rest.head),
           tail,
           grab: [point[0] - tail[0], point[1] - tail[1]],
+          base: rig,
         };
       }
       this.setCursor("grabbing");
@@ -1435,7 +1455,7 @@ export const LbsPreview = {
     // set_parent semantics - on pointer-up. The nearest affordance wins: the
     // dot claims the grab only when no nearer bone body or joint exists, so a
     // dot drawn over another bone's barrel never steals that bone's grab.
-    const hit = this.hitTest(point, world);
+    const hit = this.hitTest(point, world, rig);
 
     if (this.tool === "bones") {
       const link = this.linkHit(point, world);
@@ -1457,7 +1477,7 @@ export const LbsPreview = {
           start: point,
           initial: poseFor(this.poses(), hit.id),
           mode: hit.kind === "body" ? "translate" : "rotate",
-          head: lastWorldPoint(world, hit.index, this.rig, "head"),
+          head: lastWorldPoint(world, hit.index, rig, "head"),
         };
         this.setCursor("grabbing");
       }
@@ -1466,16 +1486,16 @@ export const LbsPreview = {
 
     // bones tool
     if (hit && hit.kind === "head") {
-      this.drag = { type: "move", id: hit.id, which: "head", head: parsePoint(this.rig.bones[hit.index].rest.head), tail: parsePoint(this.rig.bones[hit.index].rest.tail) };
+      this.drag = { type: "move", id: hit.id, which: "head", head: parsePoint(rig.bones[hit.index].rest.head), tail: parsePoint(rig.bones[hit.index].rest.tail), base: rig };
       this.selectBone(hit.id);
     } else if (hit && hit.kind === "tail") {
-      this.drag = { type: "move", id: hit.id, which: "tail", head: parsePoint(this.rig.bones[hit.index].rest.head), tail: parsePoint(this.rig.bones[hit.index].rest.tail) };
+      this.drag = { type: "move", id: hit.id, which: "tail", head: parsePoint(rig.bones[hit.index].rest.head), tail: parsePoint(rig.bones[hit.index].rest.tail), base: rig };
       this.selectBone(hit.id);
     } else if (hit) {
-      this.drag = { type: "translate", id: hit.id, start: point, head: parsePoint(this.rig.bones[hit.index].rest.head), tail: parsePoint(this.rig.bones[hit.index].rest.tail) };
+      this.drag = { type: "translate", id: hit.id, start: point, head: parsePoint(rig.bones[hit.index].rest.head), tail: parsePoint(rig.bones[hit.index].rest.tail), base: rig };
       this.selectBone(hit.id);
     } else {
-      const parent = nearestTail(this.rig, world, point, HIT_RADIUS * 2);
+      const parent = nearestTail(rig, world, point, HIT_RADIUS * 2);
       this.drag = { type: "create", head: point, tail: point, parent };
     }
 

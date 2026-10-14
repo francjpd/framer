@@ -1096,6 +1096,117 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     assert_overlay_aligned(mid, :dragging)
   end
 
+  # The held-release window: while the released drag is held until `setRig`
+  # confirms the pushed rig, a second press must read the same world the overlay
+  # draws. The proof translates the whole bone +40 image px, then - inside the
+  # window - presses the drawn body where the committed body no longer is, and
+  # hold-drags it on. The overlay must hold the dropped pose through the release
+  # (no rest-pose frame), the press must hit the drawn bone instead of falling
+  # through to the create path, and the release must commit the second edit on
+  # top of the first one instead of reverting it.
+  test "bones tool: a press inside the held-release window hits the drawn bone and commits on top of it",
+       %{root: root} do
+    shots = Path.join(root, "held_release")
+    File.mkdir_p!(shots)
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      deviceScaleFactor: 1.5,
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps: [
+        %{name: "open the editor shell", open: "/editor"},
+        %{name: "shell renders", waitForSelector: "#editor-shell"},
+        %{
+          name: "create a rig whose subject block is centred on image (100,100)",
+          fetch: %{
+            url: "/api/rigs",
+            method: "POST",
+            headers: %{"content-type" => "application/json"},
+            body: %{
+              "name" => "browser-held-release",
+              "filename" => "subject.png",
+              "source_base64" => Base.encode64(Fixtures.png_with_subject(200, 200, @subject))
+            }
+          },
+          saveAs: "create"
+        },
+        %{name: "open the rig", open: "/editor?rig={{create.rig.id}}"},
+        %{name: "viewport renders", waitForSelector: "#viewport"},
+        %{
+          name: "source image drawn",
+          waitForFunction:
+            "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+        },
+        %{name: "let the preview settle", sleep: 1_000},
+        %{
+          name: "create a bone from image (60,100) to (140,100)",
+          dragImage: %{from: [60, 100], to: [140, 100], imgW: 200, imgH: 200, settleMs: 300}
+        },
+        %{
+          name: "bone reaches the editor hierarchy",
+          waitForSelector: "button[phx-click=\"select_bone\"]"
+        },
+        %{name: "let the bone overlay draw", sleep: 500},
+        # First drag: translate the whole bone by (+40,0). The drawn bone now
+        # spans image (100,100)-(180,100) while the committed rest still spans
+        # (60,100)-(140,100).
+        %{
+          name: "press the bone body at image (80,100)",
+          pointerDown: %{at: [80, 100], imgW: 200, imgH: 200}
+        },
+        %{
+          name: "move the pointer to the still's centre",
+          pointerMove: %{at: [120, 100], imgW: 200, imgH: 200}
+        },
+        # The whole window in one in-page turn: the release, the second press
+        # on the drawn body, the hold-drag and the observations must all happen
+        # before the server's rig push can land and rebase the rig. Each step
+        # of it records its measurement on `window` for the assertions below.
+        %{
+          name: "release, press the drawn body and hold-drag - all inside the window",
+          evaluate:
+            "() => { const vp = document.querySelector('#viewport'); const overlay = vp.querySelector('canvas.framer-viewport-overlay'); const rect = overlay.getBoundingClientRect(); const scale = rect.width / 200; const dpr = window.devicePixelRatio || 1; const at = (ix, iy) => [rect.left + ix * scale, rect.top + iy * scale]; const ctx = overlay.getContext('2d'); const fire = (type, ix, iy) => { const [x, y] = at(ix, iy); window.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, bubbles: true })); }; const press = (ix, iy) => { const [x, y] = at(ix, iy); vp.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, button: 0, bubbles: true })); }; const jointDrift = (ix, iy) => { const tx = ix * scale * dpr, ty = iy * scale * dpr; const data = ctx.getImageData(0, 0, overlay.width, overlay.height).data; let sx = 0, sy = 0, n = 0; for (let y = 0; y < overlay.height; y++) { for (let x = 0; x < overlay.width; x++) { const i = (y * overlay.width + x) * 4; if (data[i] >= 200 && data[i + 1] >= 175 && data[i + 2] <= 120 && data[i + 3] >= 200 && Math.hypot(x - tx, y - ty) <= #{@alignment_window}) { sx += x; sy += y; n++; } } } if (n < #{@joint_min}) return 999999; return Math.hypot(sx / n - tx, sy / n - ty); }; const greenNear = (ix, iy) => { const tx = ix * scale * dpr, ty = iy * scale * dpr; const data = ctx.getImageData(0, 0, overlay.width, overlay.height).data; let green = 0; for (let i = 0; i < data.length; i += 4) { const p = i / 4; const x = p % overlay.width; const y = (p - x) / overlay.width; if (data[i] <= 60 && data[i + 1] >= 170 && data[i + 2] <= 120 && data[i + 3] >= 200 && Math.hypot(x - tx, y - ty) <= #{@alignment_window}) green++; } return green; }; fire('pointerup', 120, 100); const afterRelease = jointDrift(100, 100); press(160, 100); fire('pointermove', 180, 100); const createBand = greenNear(170, 100); const afterSecondDrag = jointDrift(120, 100); fire('pointerup', 180, 100); window.__heldRelease = { release: afterRelease, createBand: createBand, secondDrag: afterSecondDrag }; return true; }"
+        },
+        # The release draw keeps the dropped pose: the joint stays on the head
+        # the first drag dropped, with no rest-pose frame in between.
+        %{
+          name: "the released draw holds the dropped joint (no rest-pose frame)",
+          evaluate: "() => window.__heldRelease.release",
+          expect: %{lt: @alignment_tolerance}
+        },
+        # Pressing the drawn body must not become a create drag: the green
+        # rubber band is only ever drawn for one, so none may appear.
+        %{
+          name: "pressing the drawn body started no create drag",
+          evaluate: "() => window.__heldRelease.createBand",
+          expect: %{lt: @joint_min}
+        },
+        # The second drag is seeded from the drawn bone, so the joint follows it
+        # instead of snapping back to the committed rest at (60,100).
+        %{
+          name: "the second drag draws from the drawn bone, not the committed rest",
+          evaluate: "() => window.__heldRelease.secondDrag",
+          expect: %{lt: @alignment_tolerance}
+        },
+        %{name: "finish the release and let the commits settle", pointerUp: %{settleMs: 300}},
+        %{name: "let both rig round trips settle", sleep: 1_000},
+        # Both edits are on the document: the bone sits where the second drag
+        # drew it, and nothing extra was created.
+        bone_joint_error(0, "head", 120, 100),
+        bone_joint_error(0, "tail", 200, 100),
+        %{
+          name: "the document holds exactly one bone",
+          evaluate:
+            "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; return rig.bones.length; }",
+          expect: %{eq: 1}
+        }
+      ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+  end
+
   # Zoom proof: the viewport zooms via Ctrl/Cmd+wheel and the in/out/fit
   # controls, and the one pointer-to-image mapping the hook keeps exact holds at
   # every zoom - a bone created at a known image point after a zoom lands under
