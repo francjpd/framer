@@ -28,9 +28,9 @@ The mask itself comes from the existing background-removal segmentation
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
-import uuid
 
 import cv2
 import numpy as np
