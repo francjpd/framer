@@ -1055,8 +1055,10 @@ export const LbsPreview = {
   },
 
   // Reflect what is under the cursor: a grab cursor over a handle or the bone
-  // body (both drag to translate/rotate), a select cursor over a joint, and a
-  // crosshair / default cursor over empty canvas depending on the tool.
+  // body (both drag to translate/rotate), a select cursor over a joint, an
+  // alias cursor over a link dot when it is the nearest affordance (a nearer
+  // handle or bone body wins), and a crosshair / default cursor over empty
+  // canvas depending on the tool.
   updateHover(event) {
     if (!this.rig || !this.view) return;
 
