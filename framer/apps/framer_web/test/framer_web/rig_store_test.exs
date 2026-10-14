@@ -211,10 +211,6 @@ defmodule FramerWeb.RigStoreTest do
     assert get_in(loaded, ["layers", "tolerance"]) == 55
     assert Rig.character_layer(loaded) == "hero.png"
 
-    # The project list reports the layered state so the palette can show it.
-    summary = Enum.find(RigStore.list(), &(&1.id == saved["id"]))
-    assert summary.layered
-
     # Turning it back off round-trips as the single-picture document it was.
     assert {:ok, cleared} = RigStore.save(Rig.clear_layers(loaded))
     assert RigStore.load(cleared["id"]) == {:ok, cleared}

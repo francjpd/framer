@@ -352,6 +352,27 @@ def test_a_split_rig_exports_to_mp4_with_the_plate_in_the_vacated_region(tmp_pat
     assert (vacated_block[:, 1] > 100).all()
 
 
+def test_mp4_export_rejects_transparency_in_frame(tmp_path):
+    source = np.zeros((32, 32, 4), dtype=np.uint8)
+    source_path = tmp_path / "transparent.png"
+    cv2.imwrite(str(source_path), source)
+    legacy_rig, _ = splitless_scene()
+    rig_path = tmp_path / "rig.json"
+    rig_path.write_text(json.dumps(legacy_rig))
+
+    result = deform_video(
+        input_path=str(source_path),
+        output_path=str(tmp_path / "transparent.mp4"),
+        rig=str(rig_path),
+        fps=12.0,
+        iterations=1,
+        still=True,
+    )
+    assert not result["success"]
+    assert "MP4 does not support alpha" in result["error"]
+    assert not (tmp_path / "transparent.mp4").exists()
+
+
 def _yuv420p_frame(ffmpeg: str, path: Path, frame: int) -> np.ndarray:
     """Decode one frame of an alpha-dropping (yuv420p) encode back to BGRA."""
     raw = subprocess.run(

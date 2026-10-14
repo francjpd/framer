@@ -34,8 +34,6 @@ defmodule FramerWeb.Rig do
   @default_tolerance 30
   @default_soft_edges 0
   @default_edge_cleanup 0
-  @layer_settings ~w(color tolerance auto_ranges num_ranges adaptive_bg edge_cleanup soft_edges)
-
   # The editor-facing option name for each mask setting, so a caller never has
   # to build an atom from a JSON key.
   @layer_setting_options [
@@ -47,6 +45,7 @@ defmodule FramerWeb.Rig do
     {:edge_cleanup, "edge_cleanup"},
     {:soft_edges, "soft_edges"}
   ]
+  @layer_settings Enum.map(@layer_setting_options, fn {_option, key} -> key end)
 
   @type rig :: map()
   @type point :: {number(), number()}

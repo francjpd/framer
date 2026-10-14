@@ -144,18 +144,25 @@ def deform_video(
         # whether the format can carry the output: a split rig composites over
         # an opaque plate and never needs alpha, but a deformation that pulls
         # transparency in from outside the canvas still cannot be encoded.
-        if output.suffix.lower() == ".mp4" and _has_transparency(renderer.render(start)):
+        frames = 0
+        is_mp4 = output.suffix.lower() == ".mp4"
+        alpha_error = False
+        with VideoStreamWriter(output_path, resolved_fps, width, height, has_alpha=True) as writer:
+            for frame in range(start, end + 1):
+                rendered = renderer.render(frame)
+                if is_mp4 and _has_transparency(rendered):
+                    alpha_error = True
+                    break
+                writer.write_frame(rendered)
+                frames += 1
+
+        if alpha_error:
+            output.unlink(missing_ok=True)
             return {
                 "success": False,
                 "output_path": None,
                 "error": "MP4 does not support alpha; use .webm or .mov for a transparent rig",
             }
-
-        frames = 0
-        with VideoStreamWriter(output_path, resolved_fps, width, height, has_alpha=True) as writer:
-            for frame in range(start, end + 1):
-                writer.write_frame(renderer.render(frame))
-                frames += 1
 
         if frames == 0:
             return {

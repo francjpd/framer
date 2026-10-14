@@ -634,7 +634,7 @@ export const LbsPreview = {
     // background plate underneath - the same two steps the engine runs.
     if (proxy.character) {
       const warped = remapBilinear(proxy.character.data, proxy.width, proxy.height, mapX, mapY);
-      this.drawCanvas(compositeLayers(warped, proxy.background));
+      this.drawCanvas(compositeLayers(warped, proxy.background.data));
       return;
     }
 

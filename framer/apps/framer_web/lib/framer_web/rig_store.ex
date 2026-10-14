@@ -178,12 +178,41 @@ defmodule FramerWeb.RigStore do
       File.mkdir_p!(dir)
 
       body = Jason.encode!(rig, pretty: true)
-      File.write!(Path.join(dir, "rig.json"), body)
+      target = Path.join(dir, "rig.json")
+      temp = Path.join(dir, ".rig.json.tmp.#{System.unique_integer([:positive])}")
+      File.write!(temp, body)
+      File.rename(temp, target)
       {:ok, rig}
     end
   end
 
   def save(_rig), do: {:error, :missing_id}
+
+  @doc "Write a layer PNG file atomically through a temporary file and rename."
+  def write_layer(id, filename, binary)
+      when is_binary(id) and is_binary(filename) and is_binary(binary) do
+    with :ok <- validate_id(id) do
+      path = Path.join(project_dir(id), filename)
+      {:ok, write_layer_file!(path, binary)}
+    end
+  end
+
+  def write_layer(path, binary) when is_binary(path) and is_binary(binary) do
+    {:ok, write_layer_file!(path, binary)}
+  end
+
+  def write_layer!(path, binary) when is_binary(path) and is_binary(binary) do
+    write_layer_file!(path, binary)
+  end
+
+  defp write_layer_file!(path, binary) do
+    dir = Path.dirname(path)
+    File.mkdir_p!(dir)
+    temp = Path.join(dir, ".#{Path.basename(path)}.tmp.#{System.unique_integer([:positive])}")
+    File.write!(temp, binary)
+    File.rename(temp, path)
+    path
+  end
 
   @doc "Load and validate a stored rig."
   def load(id) do
@@ -250,8 +279,7 @@ defmodule FramerWeb.RigStore do
       frames: Rig.frame_count(rig),
       fps: Rig.fps(rig),
       has_source: source_path(id) != nil,
-      has_result: result_path(id) != nil,
-      layered: Rig.split?(rig)
+      has_result: result_path(id) != nil
     }
   end
 

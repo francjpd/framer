@@ -261,6 +261,28 @@ def test_layer_accessors_default_to_an_exact_mask():
     assert settings["soft_edges"] == 0
 
 
+def test_layer_settings_treats_none_as_absent():
+    rig = {
+        "layers": {
+            "color": None,
+            "tolerance": None,
+            "auto_ranges": None,
+            "num_ranges": None,
+            "adaptive_bg": None,
+            "edge_cleanup": None,
+            "soft_edges": None,
+        }
+    }
+    settings = layer_settings(rig)
+    assert settings["color"] is None
+    assert settings["tolerance"] == 30
+    assert settings["auto_ranges"] is True
+    assert settings["num_ranges"] == 5
+    assert settings["adaptive_bg"] is False
+    assert settings["edge_cleanup"] == 0
+    assert settings["soft_edges"] == 0
+
+
 def test_a_rig_without_layers_gets_no_character_layer():
     character, written = resolve_character_layer({"layers": {"split": False}}, still(), "x.png")
     assert character is None

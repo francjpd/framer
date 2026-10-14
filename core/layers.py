@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import uuid
 
 import cv2
 import numpy as np
@@ -177,22 +178,31 @@ def write_layer(path: str | Path, layer: np.ndarray) -> Path:
     """Write a character layer as a PNG and return its path."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if not cv2.imwrite(str(target), layer):
+    temp = target.with_name(f".{target.name}.tmp.{uuid.uuid4().hex}.png")
+    if not cv2.imwrite(str(temp), layer):
+        if temp.exists():
+            temp.unlink()
         raise RigError(f"could not write character layer to {target}")
+    temp.replace(target)
     return target
 
 
 def layer_settings(rig: dict[str, Any]) -> dict[str, Any]:
     """The character-mask settings recorded on the rig document."""
     layers = rig.get(LAYERS_KEY) or {}
+
+    def _get(key: str, default: Any, cast: Any) -> Any:
+        v = layers.get(key)
+        return default if v is None else cast(v)
+
     return {
         "color": layers.get("color"),
-        "tolerance": int(layers.get("tolerance", 30)),
-        "auto_ranges": bool(layers.get("auto_ranges", True)),
-        "num_ranges": int(layers.get("num_ranges", 5)),
-        "adaptive_bg": bool(layers.get("adaptive_bg", False)),
-        "edge_cleanup": int(layers.get("edge_cleanup", 0)),
-        "soft_edges": int(layers.get("soft_edges", 0)),
+        "tolerance": _get("tolerance", 30, int),
+        "auto_ranges": _get("auto_ranges", True, bool),
+        "num_ranges": _get("num_ranges", 5, int),
+        "adaptive_bg": _get("adaptive_bg", False, bool),
+        "edge_cleanup": _get("edge_cleanup", 0, int),
+        "soft_edges": _get("soft_edges", 0, int),
     }
 
 

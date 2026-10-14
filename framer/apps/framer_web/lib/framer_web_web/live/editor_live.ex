@@ -331,6 +331,9 @@ defmodule FramerWebWeb.EditorLive do
     end
   end
 
+  def handle_event("set_layer_tolerance", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
   def handle_event("set_layer_tolerance", %{"tolerance" => tolerance}, socket) do
     case to_float(tolerance) do
       value when is_number(value) and value > 0 ->
@@ -485,9 +488,11 @@ defmodule FramerWebWeb.EditorLive do
     tolerance = Keyword.get(opts, :tolerance, layer_tolerance(rig))
 
     rig =
-      rig
-      |> Rig.enable_split(tolerance: tolerance)
-      |> Rig.set_layer_settings(tolerance: tolerance)
+      if Rig.split?(rig) do
+        Rig.set_layer_settings(rig, tolerance: tolerance)
+      else
+        Rig.enable_split(rig, tolerance: tolerance)
+      end
 
     # Changing the settings drops the recorded character path, but the files it
     # materialised are still on disk and the engine falls back to the default

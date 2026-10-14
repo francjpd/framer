@@ -754,5 +754,27 @@ defmodule FramerWebWeb.EditorLiveTest do
       refute FramerWeb.Rig.split?(restored)
       refute has_element?(view, "#viewport[data-character-url]")
     end
+
+    test "set_layer_tolerance with no rig returns error and does not crash", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/editor")
+      assert render_change(view, "set_layer_tolerance", %{"tolerance" => "40"}) =~ "Load a rig first"
+    end
+
+    test "changing tolerance on a split rig preserves declared layer settings", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      base = Fixtures.simple_rig(32) |> Map.put("id", rig["id"])
+      split = FramerWeb.Rig.enable_split(base, tolerance: 30, soft_edges: 8, edge_cleanup: 2)
+      assert {:ok, _saved} = RigStore.save(split)
+
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_change(view, "set_layer_tolerance", %{"tolerance" => "45"})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.split?(saved)
+      assert get_in(saved, ["layers", "tolerance"]) == 45
+      assert get_in(saved, ["layers", "soft_edges"]) == 8
+      assert get_in(saved, ["layers", "edge_cleanup"]) == 2
+    end
   end
 end
