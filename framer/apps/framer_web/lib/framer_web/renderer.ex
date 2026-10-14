@@ -13,8 +13,15 @@ defmodule FramerWeb.Renderer do
       chunks into the project's `output.*`. Progress is broadcast on the
       project's PubSub topic.
 
-  The final render is authoritative: the interactive preview is only a proxy
-  of the same fixed-point linear-blend-skinning math.
+  `split_character/2` is the bridge's third entry point and shares the same
+  contract: it materialises the character layer of a split rig with the engine's
+  existing background-removal segmentation.
+
+  A split rig (`rig.layers.split`) renders through the same `deform` operation
+  as ever - the rig document tells the engine which character layer to deform -
+  so the final render is authoritative for the layering exactly as it is for the
+  math. The interactive preview is only a proxy of the same layering: it fetches
+  the engine-materialised cut-out and its opaque background plate.
   """
 
   require Logger
@@ -79,6 +86,61 @@ defmodule FramerWeb.Renderer do
   end
 
   @doc """
+  Materialise the character layer of a split rig and return `{:ok, path}`.
+
+  This is the editor's "extract the character" action. It runs the engine's
+  existing background-removal segmentation over the still through the same Port
+  contract every other render uses - the BEAM still only ever sends paths, a
+  frame range and JSON options - and writes `<project>/character.png`, the
+  cut-out whose alpha is the character mask, next to the opaque background plate
+  the engine composites it over.
+
+  The render that produces it is frame 0 of the very rig being split, so the
+  composited still the editor shows afterwards is exactly what the first render
+  will produce. The response carries the materialised path, which is what the
+  editor records in `rig.layers.character` and persists.
+  """
+  def split_character(rig, opts \\ []) do
+    with {:ok, source} <- source_path(rig) do
+      workspace = workspace_dir(rig)
+      rig_path = Path.join(workspace, "split_rig.json")
+      output = Path.join(workspace, "split_#{System.unique_integer([:positive])}.png")
+
+      File.mkdir_p!(workspace)
+      File.write!(rig_path, Jason.encode!(rig))
+
+      request = %{
+        "op" => "deform",
+        "input" => source,
+        "output" => output,
+        "start_frame" => 0,
+        "end_frame" => 0,
+        "fps" => Rig.fps(rig),
+        "options" => %{
+          "rig" => rig_path,
+          "still" => true,
+          "iterations" => opts[:iterations] || 6
+        }
+      }
+
+      try do
+        case PortWorker.run_once(request, Keyword.get(opts, :timeout, @default_timeout)) do
+          {:ok, %{"character" => path}} when is_binary(path) ->
+            {:ok, path}
+
+          {:ok, _response} ->
+            {:error, :layer_not_materialised}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      after
+        File.rm(output)
+      end
+    end
+  end
+
+  @doc """
   Submit a chunked deform export for `rig`.
 
   Returns `{:ok, %{job_id: id, output: path, format: format}}` and starts a
@@ -92,25 +154,38 @@ defmodule FramerWeb.Renderer do
       frames = to_int(opts[:frames]) || Rig.frame_count(rig)
       fps = opts[:fps] || Rig.fps(rig)
 
+      workspace = workspace_dir(rig)
+      export_dir = Path.join(workspace, "export_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(export_dir)
+
+      snapshotted_source = Path.join(export_dir, Path.basename(source))
+      File.cp!(source, snapshotted_source)
+
+      snapshotted_rig_path = Path.join(export_dir, "rig.json")
+      File.write!(snapshotted_rig_path, Jason.encode!(rig))
+
+      snapshot_layer_files(rig, export_dir)
+
       options =
         %{
-          "rig" => RigStore.rig_path(rig["id"]),
+          "rig" => snapshotted_rig_path,
           "still" => true,
           "iterations" => opts[:iterations] || 5
         }
         |> maybe_put("weights", opts[:weights])
 
-      case Orchestrator.submit_job(source, output,
+      case Orchestrator.submit_job(snapshotted_source, output,
              operation: "deform",
              options: options,
              total_frames: frames,
              fps: to_float(fps)
            ) do
         {:ok, job_id} ->
-          start_watcher(job_id, rig["id"], output)
+          start_watcher(job_id, rig["id"], output, export_dir)
           {:ok, %{job_id: job_id, output: output, format: format}}
 
         {:error, reason} ->
+          File.rm_rf(export_dir)
           {:error, reason}
       end
     end
@@ -126,27 +201,30 @@ defmodule FramerWeb.Renderer do
 
   # --- internals ---
 
-  defp start_watcher(job_id, rig_id, output) do
-    Task.start(fn -> watch(job_id, rig_id, output) end)
+  defp start_watcher(job_id, rig_id, output, export_dir) do
+    Task.start(fn -> watch(job_id, rig_id, output, export_dir) end)
   end
 
-  defp watch(job_id, rig_id, output, attempts \\ 750) do
+  defp watch(job_id, rig_id, output, export_dir, attempts \\ 750) do
     state = Orchestrator.get_status()
 
     cond do
       state.job && state.job.id == job_id && state.job.status == :completed ->
         event = completion_event(job_id, merge(state.job, state.completed_chunks), output, state)
+        if export_dir, do: File.rm_rf(export_dir)
         broadcast(rig_id, event)
 
       state.job && state.job.id == job_id && state.job.status == :failed ->
+        if export_dir, do: File.rm_rf(export_dir)
         broadcast(rig_id, event(job_id, :failed, {:error, :job_failed}, output, state))
 
       attempts <= 0 ->
+        if export_dir, do: File.rm_rf(export_dir)
         broadcast(rig_id, event(job_id, :failed, {:error, :timeout}, output, state))
 
       true ->
         Process.sleep(@poll_interval)
-        watch(job_id, rig_id, output, attempts - 1)
+        watch(job_id, rig_id, output, export_dir, attempts - 1)
     end
   end
 
@@ -226,6 +304,37 @@ defmodule FramerWeb.Renderer do
   defp workspace_dir(rig) do
     id = rig["id"] || "scratch"
     Path.join(RigStore.project_dir(id), ".render")
+  end
+
+  defp snapshot_layer_files(rig, export_dir) do
+    id = rig["id"]
+
+    if id do
+      project_dir = RigStore.project_dir(id)
+      char_rel = Rig.character_layer(rig) || Rig.layer_filename()
+      char_src = RigStore.character_layer_path(id)
+
+      if char_src && File.exists?(char_src) do
+        char_dest = Path.join(export_dir, char_rel)
+        File.mkdir_p!(Path.dirname(char_dest))
+        File.cp!(char_src, char_dest)
+      end
+
+      default_layer_src = Path.join(project_dir, Rig.layer_filename())
+
+      if File.exists?(default_layer_src) && default_layer_src != char_src do
+        default_dest = Path.join(export_dir, Rig.layer_filename())
+        File.mkdir_p!(Path.dirname(default_dest))
+        File.cp!(default_layer_src, default_dest)
+      end
+
+      plate_src = RigStore.plate_path(id) || Path.join(project_dir, Rig.plate_filename())
+
+      if plate_src && File.exists?(plate_src) do
+        plate_dest = Path.join(export_dir, Rig.plate_filename())
+        File.cp!(plate_src, plate_dest)
+      end
+    end
   end
 
   defp maybe_put(map, _key, nil), do: map

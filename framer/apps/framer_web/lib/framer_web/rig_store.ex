@@ -37,6 +37,68 @@ defmodule FramerWeb.RigStore do
   @doc "Absolute path of a project's `rig.json`."
   def rig_path(id), do: Path.join(project_dir(id), "rig.json")
 
+  @doc """
+  Absolute path of a project's materialised character layer, if it exists.
+
+  The engine writes this when a split rig first renders; it is the cut-out the
+  rig deforms. The path is the one the rig document declares, falling back to
+  the default name.
+  """
+  def character_layer_path(id) do
+    with :ok <- validate_id(id),
+         {:ok, rig} <- load(id) do
+      path = character_layer_for(rig, id)
+      if File.exists?(path), do: path
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Absolute path of a project's background plate, if it exists.
+
+  The engine materialises it beside the cut-out at split time: an opaque copy of
+  the still whose character area is reconstructed from the surrounding
+  background, so the layer the rig never warps covers every pixel. The character
+  layer is composited over it with a plain source-over, which is what the
+  editor's preview fetches to agree with the export.
+  """
+  def plate_path(id) do
+    with :ok <- validate_id(id) do
+      path = Path.join(project_dir(id), Rig.plate_filename())
+      if File.exists?(path), do: path
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Remove a split rig's materialised layers, so the engine recomputes them.
+
+  A re-extraction has to drop every file the engine could resolve for the rig:
+  the declared character path and the default name it falls back to once the
+  document stops declaring one, plus the plate that was built from them.
+  """
+  def remove_character_layer(id) do
+    with :ok <- validate_id(id),
+         {:ok, rig} <- load(id) do
+      [
+        character_layer_for(rig, id),
+        Path.join(project_dir(id), Rig.layer_filename()),
+        Path.join(project_dir(id), Rig.plate_filename())
+      ]
+      |> Enum.each(&File.rm/1)
+
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  defp character_layer_for(rig, id) do
+    Path.join(project_dir(id), Rig.character_layer(rig) || Rig.layer_filename())
+  end
+
   @doc "Absolute path of a project's exported result, if it exists."
   def result_path(id) do
     with :ok <- validate_id(id) do
@@ -116,7 +178,10 @@ defmodule FramerWeb.RigStore do
       File.mkdir_p!(dir)
 
       body = Jason.encode!(rig, pretty: true)
-      File.write!(Path.join(dir, "rig.json"), body)
+      target = Path.join(dir, "rig.json")
+      temp = Path.join(dir, ".rig.json.tmp.#{System.unique_integer([:positive])}")
+      File.write!(temp, body)
+      File.rename!(temp, target)
       {:ok, rig}
     end
   end

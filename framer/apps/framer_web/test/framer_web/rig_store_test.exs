@@ -113,4 +113,107 @@ defmodule FramerWeb.RigStoreTest do
     assert {:error, reason} = RigStore.save(rig)
     assert inspect(reason) =~ "version"
   end
+
+  test "the character layer is stored, read and removed beside the still" do
+    rig = Fixtures.simple_rig(32)
+    {:ok, saved} = RigStore.save(rig)
+    id = saved["id"]
+
+    assert RigStore.character_layer_path(id) == nil
+    assert RigStore.plate_path(id) == nil
+
+    layer = Path.join(RigStore.project_dir(id), Rig.layer_filename())
+    File.write!(layer, "cutout")
+    assert RigStore.character_layer_path(id) == layer
+
+    assert :ok = RigStore.remove_character_layer(id)
+    assert RigStore.character_layer_path(id) == nil
+
+    # Removing an absent layer is harmless, and an unsafe id never escapes.
+    assert :ok = RigStore.remove_character_layer(id)
+    assert :ok = RigStore.remove_character_layer("../escape")
+  end
+
+  test "removing the character layer clears every file the engine could resolve" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+    dir = RigStore.project_dir(id)
+
+    split = Rig.enable_split(rig, character: "cutouts/hero.png")
+    assert {:ok, _saved} = RigStore.save(split)
+
+    declared = Path.join(dir, "cutouts/hero.png")
+    File.mkdir_p!(Path.dirname(declared))
+    File.write!(declared, "cutout")
+
+    # The stale default-named cut-out from an earlier split is still on disk, so
+    # the engine would reuse it when the document stops declaring a path...
+    stale_default = Path.join(dir, Rig.layer_filename())
+    File.write!(stale_default, "stale cutout")
+    # ...together with the plate built from it.
+    plate = Path.join(dir, Rig.plate_filename())
+    File.write!(plate, "plate")
+
+    assert :ok = RigStore.remove_character_layer(id)
+
+    refute File.exists?(declared)
+    refute File.exists?(stale_default)
+    refute File.exists?(plate)
+    assert RigStore.character_layer_path(id) == nil
+    assert RigStore.plate_path(id) == nil
+  end
+
+  test "the plate path resolves the materialised background layer" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+
+    plate = Path.join(RigStore.project_dir(id), Rig.plate_filename())
+    File.write!(plate, "plate")
+
+    assert RigStore.plate_path(id) == plate
+    assert RigStore.plate_path("../escape") == nil
+  end
+
+  test "character layer paths honour the declared layer path" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+
+    split = Rig.enable_split(rig, character: "cutouts/hero.png")
+    assert {:ok, saved} = RigStore.save(split)
+    assert saved["id"] == id
+
+    assert RigStore.character_layer_path(id) == nil
+
+    layer = Path.join(RigStore.project_dir(id), "cutouts/hero.png")
+    File.mkdir_p!(Path.dirname(layer))
+    File.write!(layer, "cutout")
+
+    assert RigStore.character_layer_path(id) == layer
+
+    assert :ok = RigStore.remove_character_layer(id)
+    refute File.exists?(layer)
+    assert RigStore.character_layer_path(id) == nil
+  end
+
+  test "a split rig saves and loads with its layered state round-tripped" do
+    {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+
+    split =
+      rig
+      |> Rig.enable_split(tolerance: 55)
+      |> Rig.set_character_layer("hero.png")
+
+    assert {:ok, saved} = RigStore.save(split)
+    assert RigStore.load(saved["id"]) == {:ok, saved}
+
+    loaded = elem(RigStore.load(saved["id"]), 1)
+    assert Rig.split?(loaded)
+    assert get_in(loaded, ["layers", "tolerance"]) == 55
+    assert Rig.character_layer(loaded) == "hero.png"
+
+    # Turning it back off round-trips as the single-picture document it was.
+    assert {:ok, cleared} = RigStore.save(Rig.clear_layers(loaded))
+    assert RigStore.load(cleared["id"]) == {:ok, cleared}
+    refute Rig.split?(elem(RigStore.load(cleared["id"]), 1))
+  end
 end

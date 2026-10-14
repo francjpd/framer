@@ -609,4 +609,172 @@ defmodule FramerWebWeb.EditorLiveTest do
     assert render(view) =~ "Load a still image to start rigging."
     refute has_element?(view, "button[phx-value-id='#{id}']")
   end
+
+  describe "the layer split" do
+    test "offers the extraction control and explains the single-picture default", %{conn: conn} do
+      rig = saved_rig("Layers off")
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      assert has_element?(view, "#toggle-background-layer", "Extract the character")
+      # HEEx escapes the apostrophe to an entity, so the assertion window is the
+      # apostrophe-free part of the sentence.
+      assert render(view) =~ "reach also moves the background. Extract the character to"
+      assert render(view) =~ "give it its own layer"
+      refute has_element?(view, "#layer-tolerance-form")
+      refute has_element?(view, "#viewport[data-character-url]")
+      refute has_element?(view, "#viewport[data-background-url]")
+    end
+
+    test "asks for a rig first when none is loaded", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/editor")
+
+      render_click(view, "toggle_background_layer", %{})
+      assert render(view) =~ "Load a rig first"
+    end
+
+    test "extracting the character persists the layered state and points the viewport at it", %{
+      conn: conn
+    } do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _bones = Fixtures.simple_rig(32) |> Map.put("id", rig["id"]) |> then(&RigStore.save/1)
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.split?(saved)
+      assert get_in(saved, ["layers", "tolerance"]) == 30
+      assert get_in(saved, ["layers", "soft_edges"]) == 0
+      assert get_in(saved, ["layers", "edge_cleanup"]) == 0
+      assert FramerWeb.Rig.character_layer(saved) == FramerWeb.Rig.layer_filename()
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+
+      # The engine materialises the opaque plate beside the cut-out, and the
+      # preview points at both layers so it composites what the export renders.
+      assert File.exists?(RigStore.plate_path(rig["id"]))
+
+      assert has_element?(
+               view,
+               "#viewport[data-character-url='/api/rigs/#{rig["id"]}/character']"
+             )
+
+      assert has_element?(
+               view,
+               "#viewport[data-background-url='/api/rigs/#{rig["id"]}/background']"
+             )
+
+      assert has_element?(view, "span.badge", "layered")
+      assert has_element?(view, "#toggle-background-layer", "Remove the character layer")
+      assert render(view) =~ "the background now stays put"
+    end
+
+    test "turning the split off keeps the layers so undo can restore them", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+
+      render_click(view, "toggle_background_layer", %{})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      refute FramerWeb.Rig.split?(saved)
+      refute Map.has_key?(saved, "layers")
+
+      # The materialised layers stay on disk: undo restores the split document
+      # pushed just before the toggle, and it must not point at a missing asset.
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+      assert File.exists?(RigStore.plate_path(rig["id"]))
+
+      assert has_element?(view, "#toggle-background-layer", "Extract the character")
+      refute has_element?(view, "#viewport[data-character-url]")
+      refute has_element?(view, "#viewport[data-background-url]")
+
+      render_click(view, "undo", %{})
+
+      {:ok, restored} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.split?(restored)
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+
+      assert has_element?(
+               view,
+               "#viewport[data-character-url='/api/rigs/#{rig["id"]}/character']"
+             )
+    end
+
+    test "changing the tolerance re-extracts with the new setting", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      # Split first so the cut-out is already materialised; moving the slider
+      # must then re-key the existing layer rather than extract a fresh one.
+      render_click(view, "toggle_background_layer", %{})
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+      assert File.exists?(RigStore.plate_path(rig["id"]))
+
+      render_change(view, "set_layer_tolerance", %{"tolerance" => "65"})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.split?(saved)
+      assert get_in(saved, ["layers", "tolerance"]) == 65
+      assert has_element?(view, "#layer-tolerance-form input[value='65']")
+      refute render(view) =~ "layer_not_materialised"
+
+      # Both layers were re-materialised with the new key, so the preview picks
+      # them up again through the same URLs.
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+      assert File.exists?(RigStore.plate_path(rig["id"]))
+    end
+
+    test "a non-positive tolerance is rejected without touching the document", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_change(view, "set_layer_tolerance", %{"tolerance" => "0"})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      refute FramerWeb.Rig.split?(saved)
+      assert render(view) =~ "Tolerance must be a positive number"
+    end
+
+    test "undo restores the unsplit document", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      assert FramerWeb.Rig.split?(elem(RigStore.load(rig["id"]), 1))
+
+      render_click(view, "undo", %{})
+
+      {:ok, restored} = RigStore.load(rig["id"])
+      refute FramerWeb.Rig.split?(restored)
+      refute has_element?(view, "#viewport[data-character-url]")
+    end
+
+    test "set_layer_tolerance with no rig returns error and does not crash", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/editor")
+      assert render_change(view, "set_layer_tolerance", %{"tolerance" => "40"}) =~ "Load a rig first"
+    end
+
+    test "changing tolerance on a split rig preserves declared layer settings", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      base = Fixtures.simple_rig(32) |> Map.put("id", rig["id"])
+      split = FramerWeb.Rig.enable_split(base, tolerance: 30, soft_edges: 8, edge_cleanup: 2)
+      assert {:ok, _saved} = RigStore.save(split)
+
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_change(view, "set_layer_tolerance", %{"tolerance" => "45"})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.split?(saved)
+      assert get_in(saved, ["layers", "tolerance"]) == 45
+      assert get_in(saved, ["layers", "soft_edges"]) == 8
+      assert get_in(saved, ["layers", "edge_cleanup"]) == 2
+    end
+  end
 end

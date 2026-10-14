@@ -305,6 +305,47 @@ defmodule FramerWebWeb.EditorLive do
      )}
   end
 
+  # --- layers ---------------------------------------------------------------
+
+  # Splitting is an editing capability, not a repair: the rig keeps one still
+  # until the editor asks the engine to extract the character, and from then on
+  # only the character layer is deformed. Turning it back off returns the rig to
+  # the single-picture document it was.
+  def handle_event("toggle_background_layer", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("toggle_background_layer", _params, socket) do
+    socket = maybe_push_undo(socket, [])
+    rig = socket.assigns.rig
+
+    if Rig.split?(rig) do
+      # The materialised layers stay on disk: the document no longer references
+      # them, and Undo - which restores the split document pushed just above -
+      # must not bring back a rig pointing at a deleted asset. The next
+      # extraction removes them before re-keying.
+      {:noreply,
+       socket
+       |> finalize_mutation(Rig.clear_layers(rig), undo: false, status: "Back to one layer")}
+    else
+      {:noreply, extract_character(socket, rig)}
+    end
+  end
+
+  def handle_event("set_layer_tolerance", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("set_layer_tolerance", %{"tolerance" => tolerance}, socket) do
+    case to_float(tolerance) do
+      value when is_number(value) and value > 0 ->
+        {:noreply, extract_character(socket, socket.assigns.rig, tolerance: trunc(value))}
+
+      _ ->
+        {:noreply, assign(socket, :error, "Tolerance must be a positive number")}
+    end
+  end
+
+  def handle_event("set_layer_tolerance", _params, socket), do: {:noreply, socket}
+
   # --- undo ----------------------------------------------------------------
 
   def handle_event("undo", _params, %{assigns: %{undo: [previous | rest]}} = socket) do
@@ -436,6 +477,57 @@ defmodule FramerWebWeb.EditorLive do
      socket
      |> finalize_mutation(socket.assigns.rig, [])
      |> assign(:status, "Saved")}
+  end
+
+  # --- layer extraction -----------------------------------------------------
+
+  # Ask the engine to key the background out of the still and write the
+  # character layer beside it. The BEAM never sees pixels: it sends the still
+  # path and gets the materialised path back, which is what the rig records.
+  defp extract_character(socket, rig, opts \\ []) do
+    tolerance = Keyword.get(opts, :tolerance, layer_tolerance(rig))
+
+    rig =
+      if Rig.split?(rig) do
+        Rig.set_layer_settings(rig, tolerance: tolerance)
+      else
+        Rig.enable_split(rig, tolerance: tolerance)
+      end
+
+    # Changing the settings drops the recorded character path, but the files it
+    # materialised are still on disk and the engine falls back to the default
+    # name, so it would reuse the stale cut-out instead of re-keying it. Remove
+    # both layers first so the engine recomputes them with the new settings.
+    RigStore.remove_character_layer(rig["id"])
+
+    socket =
+      socket
+      |> assign(:rig, rig)
+      |> assign(:status, "Extracting the character...")
+
+    case Renderer.split_character(rig) do
+      {:ok, path} ->
+        rig = Rig.set_character_layer(rig, Path.basename(path))
+
+        socket
+        |> finalize_mutation(rig,
+          undo: false,
+          status: "Character extracted - the background now stays put"
+        )
+
+      {:error, reason} ->
+        socket
+        |> assign(:error, "Could not extract the character: #{format_reason(reason)}")
+        |> assign(:status, nil)
+    end
+  end
+
+  # The tolerance the character mask is built with.
+  defp layer_tolerance(rig) do
+    case get_in(rig, ["layers", "tolerance"]) do
+      value when is_number(value) -> trunc(value)
+      _ -> 30
+    end
   end
 
   # --- timers / pubsub -----------------------------------------------------
@@ -861,6 +953,47 @@ defmodule FramerWebWeb.EditorLive do
           Auto-bind mesh
         </button>
       </section>
+
+      <section>
+        <h2 class="mb-2 font-semibold uppercase tracking-wide opacity-70">Layers</h2>
+        <p :if={@rig == nil} class="opacity-60">Load a rig to split its layers.</p>
+        <div :if={@rig}>
+          <p class="opacity-60">
+            <%= if Rig.split?(@rig) do %>
+              The character is on its own layer: posing moves it and the background stays put.
+            <% else %>
+              One still, so a bone's reach also moves the background. Extract the character to
+              give it its own layer.
+            <% end %>
+          </p>
+          <button
+            id="toggle-background-layer"
+            phx-click="toggle_background_layer"
+            class={["btn btn-xs mt-2 w-full", Rig.split?(@rig) && "btn-primary"]}
+          >
+            {if Rig.split?(@rig), do: "Remove the character layer", else: "Extract the character"}
+          </button>
+
+          <form :if={Rig.split?(@rig)} id="layer-tolerance-form" class="mt-2">
+            <label class="label-text" for="layer-tolerance">
+              Background tolerance
+            </label>
+            <input
+              id="layer-tolerance"
+              type="range"
+              min="10"
+              max="90"
+              step="5"
+              value={layer_tolerance(@rig)}
+              phx-change="set_layer_tolerance"
+              name="tolerance"
+              class="range range-xs"
+              title="How far a pixel may sit from the background colour and still count as background"
+            />
+            <p class="opacity-60">{layer_tolerance(@rig)}</p>
+          </form>
+        </div>
+      </section>
     </aside>
     """
   end
@@ -936,6 +1069,7 @@ defmodule FramerWebWeb.EditorLive do
         >
           Fit
         </button>
+        <span :if={Rig.split?(@rig)} class="badge badge-secondary badge-xs">layered</span>
         <span class="badge badge-ghost badge-xs">proxy preview</span>
       </div>
       <div
@@ -943,6 +1077,8 @@ defmodule FramerWebWeb.EditorLive do
         id="viewport"
         phx-hook="LbsPreview"
         data-source-url={~p"/api/rigs/#{@rig["id"]}/source"}
+        data-character-url={character_layer_url(@rig)}
+        data-background-url={background_layer_url(@rig)}
         data-frame={@playhead}
         data-tool={@tool}
         data-selected={@selected || ""}
@@ -1513,6 +1649,22 @@ defmodule FramerWebWeb.EditorLive do
   defp selected_bone(_rig, nil), do: nil
   defp selected_bone(nil, _id), do: nil
   defp selected_bone(rig, id), do: Rig.bone(rig, id)
+
+  # The character-layer URL the preview fetches. It is only meaningful once the
+  # engine has materialised the cut-out, so an un-materialised split rig
+  # deliberately yields no URL and the preview shows the still unchanged. Same
+  # for the opaque background plate it composites the character over.
+  defp character_layer_url(rig) do
+    if Rig.split?(rig) and is_binary(Rig.character_layer(rig)) do
+      ~p"/api/rigs/#{rig["id"]}/character"
+    end
+  end
+
+  defp background_layer_url(rig) do
+    if Rig.split?(rig) and is_binary(Rig.character_layer(rig)) do
+      ~p"/api/rigs/#{rig["id"]}/background"
+    end
+  end
 
   defp clamp_frame(socket, frame) do
     frames = if socket.assigns.rig, do: Rig.frame_count(socket.assigns.rig), else: 1

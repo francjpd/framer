@@ -74,7 +74,7 @@ next queued chunk.
 | `remove-bg` | `core/bg_removal.py` (`_remove_bg_frame_processor`), `core/color_ranges.py`, `core/mask_refinement.py`, `core/motion_detection.py` | per-frame keying, chunkable; writes BGRA chunks |
 | `fps-boost` | `ffmpeg` (same filter choices as `ops/fps_boost.py`) | interpolates a frame range, chunkable |
 | `loop`      | `ops/loop.py` (`create_loop`) | whole-file operation, always one chunk |
-| `deform`    | `core/deform.py` (LBS math), `ops/deform.py` (render/loop) | rig/bones puppet warp of a still image, chunkable; writes BGRA chunks |
+| `deform`    | `core/deform.py` (LBS math), `core/layers.py` (layer split/plate composite), `ops/deform.py` (render/loop) | rig/bones puppet warp of a still image, chunkable; writes BGRA chunks |
 | `merge`     | `ffmpeg` concat | concatenates finished chunks into the final output |
 | `info`      | `ffprobe` | resolves width/height/fps/frame count |
 
@@ -102,9 +102,11 @@ schema is documented in `docs/rig-schema-v1.md`; no pixels cross the Port.
   single-pass Python baseline.
 - `loop` is a whole-file operation (`ops/loop.py` reads frames with OpenCV) and
   therefore does not preserve an input alpha channel.
-- `deform` writes BGRA chunks, so its output must be `.webm` or `.mov` when the
-  source has transparency; `.mp4` drops the alpha plane and the op rejects it
-  with an explicit error. Decoding a VP9 `.webm` for verification still needs
+- `deform` writes BGRA chunks, so its output must be `.webm` or `.mov` when any
+  rendered frame has transparency; `.mp4` drops the alpha plane and the op
+  rejects it with an explicit error. (A split rig composites over an opaque plate,
+  so its frames are opaque and export to `.mp4` unless the deformation exposes
+  the canvas exterior). Decoding a VP9 `.webm` for verification still needs
   `-c:v libvpx-vp9`.
 
 ## Distribution seam

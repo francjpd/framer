@@ -38,6 +38,14 @@ from core.deform import (
     interpolate_keyframes,
 )
 from tests.deform_scene import GOLDEN_FRAME, build_scene
+from tests.layer_scene import (
+    FRAMES,
+    background_block,
+    character_block,
+)
+from tests.layer_scene import (
+    build_scene as build_layered_scene,
+)
 
 RUNNER = Path(__file__).parent / "preview_parity_runner.mjs"
 NODE = shutil.which("node")
@@ -85,6 +93,52 @@ def _render_preview(tmp_path: Path, rig: dict, source: np.ndarray, frame: int, i
         len(rig["bones"]), height, width
     )
     return rgba, weights
+
+
+def _render_layered_preview(
+    tmp_path: Path,
+    rig: dict,
+    source: np.ndarray,
+    character: np.ndarray,
+    plate: np.ndarray,
+    frame: int,
+    iterations: int,
+):
+    """Render the split scene through the preview, passing the two layers."""
+    height, width = source.shape[:2]
+    source_path = tmp_path / "source.rgba"
+    source_path.write_bytes(source.tobytes())
+    character_path = tmp_path / "character.rgba"
+    character_path.write_bytes(character.tobytes())
+    plate_path = tmp_path / "background.rgba"
+    plate_path.write_bytes(plate.tobytes())
+
+    output_path = tmp_path / "preview.rgba"
+
+    spec = {
+        "source": str(source_path),
+        "character": str(character_path),
+        "background": str(plate_path),
+        "output": str(output_path),
+        "width": int(width),
+        "height": int(height),
+        "rig": rig,
+        "frame": int(frame),
+        "iterations": int(iterations),
+    }
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(spec))
+
+    completed = subprocess.run(
+        [NODE, str(RUNNER), str(spec_path)],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        check=False,
+    )
+    assert completed.returncode == 0, f"node preview failed:\n{completed.stderr}"
+
+    return np.frombuffer(output_path.read_bytes(), dtype=np.uint8).reshape(height, width, 4)
 
 
 def _interpolated_poses(tmp_path: Path, rig: dict, frames: list[int]) -> dict[str, dict]:
@@ -201,3 +255,92 @@ def test_interpolated_poses_match_the_engine(tmp_path):
         for bone_id, pose in expected.items():
             for channel in ("rot", "tx", "ty"):
                 assert float(actual[bone_id][channel]) == pytest.approx(pose[channel], abs=1e-6)
+
+
+# --- layered preview --------------------------------------------------------
+#
+# A split rig deforms the character layer only. `lbs.mjs` mirrors
+# `core/layers.py` (the cut-out, the opaque background plate and the
+# source-over composite), so the preview and the export agree on the layering by
+# construction - these tests hold both halves of that claim: the preview keeps
+# the background put, and the preview's layered render matches the engine's.
+
+
+def _layered_layers(source: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The engine's own character cut-out and background plate for a still."""
+    from core.bg_removal import character_alpha
+    from core.layers import split_layers
+
+    return split_layers(source, character_alpha(source, tolerance=40, soft_edges=0, edge_cleanup=0))
+
+
+def test_layered_preview_keeps_the_background_put(tmp_path):
+    rig, source = build_layered_scene()
+    character, plate = _layered_layers(source)
+
+    rest = _render_layered_preview(tmp_path, rig, source, character, plate, 0, 8)
+    posed = _render_layered_preview(tmp_path, rig, source, character, plate, FRAMES - 1, 8)
+
+    # The background rows are byte-identical between the rest frame and the
+    # posed frame in the browser preview too.
+    assert np.array_equal(background_block(rest), background_block(posed))
+    # And the character layer really moved, so the claim is not vacuous.
+    assert not np.array_equal(character_block(rest), character_block(posed))
+
+
+def test_layered_preview_matches_the_engine(tmp_path):
+    rig, source = build_layered_scene()
+    character, plate = _layered_layers(source)
+
+    preview = _render_layered_preview(tmp_path, rig, source, character, plate, FRAMES - 1, 8)
+    engine = DeformRenderer(rig, source, iterations=8, character=character).render(FRAMES - 1)
+
+    assert preview.shape == engine.shape
+
+    diff = np.abs(preview.astype(np.int16) - engine.astype(np.int16))
+    mean_diff = float(diff.mean())
+    outlier_fraction = float((diff > OUTLIER_TOLERANCE).mean())
+
+    assert mean_diff <= MEAN_TOLERANCE, f"mean pixel difference {mean_diff:.3f} too large"
+    assert outlier_fraction <= MAX_OUTLIER_FRACTION, (
+        f"{outlier_fraction:.4f} of pixels differ by more than {OUTLIER_TOLERANCE}"
+    )
+
+
+def test_js_composite_puts_an_opaque_character_over_an_opaque_plate(tmp_path):
+    # The core scenario in one pixel: the character has warped over background
+    # it did not occupy at rest, so both layers are opaque there. The composite
+    # must hand the character through solid rather than blend it 50/50.
+    character = np.zeros((2, 2, 4), dtype=np.uint8)
+    plate = np.zeros((2, 2, 4), dtype=np.uint8)
+    character[:, :, :3] = (255, 0, 0)
+    character[:, :, 3] = 255
+    plate[:, :, :3] = (0, 190, 0)
+    plate[:, :, 3] = 255
+
+    character_path = tmp_path / "character.rgba"
+    plate_path = tmp_path / "background.rgba"
+    character_path.write_bytes(character.tobytes())
+    plate_path.write_bytes(plate.tobytes())
+
+    output_path = tmp_path / "composite.rgba"
+
+    spec = {
+        "composite": {"character": str(character_path), "background": str(plate_path)},
+        "output": str(output_path),
+    }
+    spec_path = tmp_path / "spec_composite.json"
+    spec_path.write_text(json.dumps(spec))
+
+    completed = subprocess.run(
+        [NODE, str(RUNNER), str(spec_path)],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        check=False,
+    )
+    assert completed.returncode == 0, f"node composite failed:\n{completed.stderr}"
+
+    out = np.frombuffer(output_path.read_bytes(), dtype=np.uint8).reshape(2, 2, 4)
+    assert (out[:, :, 3] == 255).all()
+    assert (out[:, :, :3] == (255, 0, 0)).all()

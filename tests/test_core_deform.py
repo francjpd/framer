@@ -137,6 +137,56 @@ def test_load_rig_round_trips_and_rejects_missing_files(tmp_path):
         load_rig(tmp_path / "missing.json")
 
 
+# --- layered documents ------------------------------------------------------
+
+
+def split_rig(**overrides):
+    layers = {
+        "split": True,
+        "character": "character.png",
+        "tolerance": 40,
+        "soft_edges": 0,
+        "edge_cleanup": 0,
+    }
+    layers.update(overrides)
+    return base_rig(layers=layers)
+
+
+def test_validate_rig_accepts_a_layered_document():
+    assert validate_rig(split_rig())["layers"]["split"] is True
+
+
+def test_validate_rig_keeps_a_document_without_layers_valid():
+    # A rig saved before layers existed must load exactly as before.
+    assert "layers" not in base_rig()
+    assert validate_rig(base_rig()) is not None
+
+
+def test_validate_rig_rejects_a_malformed_layers_field():
+    with pytest.raises(RigError, match="layers must be an object"):
+        validate_rig(split_rig(split=None) | {"layers": "yes"})
+
+    with pytest.raises(RigError, match="layers.split must be a boolean"):
+        validate_rig(split_rig(split="true"))
+
+    with pytest.raises(RigError, match="layers.character must be a non-empty string"):
+        validate_rig(split_rig(character=""))
+
+    with pytest.raises(RigError, match="layers.tolerance must be an integer"):
+        validate_rig(split_rig(tolerance="wide"))
+
+    with pytest.raises(RigError, match="layers.auto_ranges must be a boolean"):
+        validate_rig(split_rig(auto_ranges=1))
+
+    with pytest.raises(RigError, match="layers.color must be a \\[B, G, R\\] triple"):
+        validate_rig(split_rig(color="green"))
+
+
+def test_validate_rig_rejects_a_bool_where_a_number_is_expected_in_layers():
+    with pytest.raises(RigError, match="layers.soft_edges must be an integer"):
+        validate_rig(split_rig(soft_edges=True))
+
+
 # --- weights ----------------------------------------------------------------
 
 

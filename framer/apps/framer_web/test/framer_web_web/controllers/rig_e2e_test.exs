@@ -19,6 +19,7 @@ defmodule FramerWebWeb.RigE2ETest do
   @moduletag timeout: 300_000
 
   alias FramerCore.Orchestrator
+  alias FramerWeb.Renderer
   alias FramerWeb.Rig
   alias FramerWeb.RigStore
   alias FramerWebWeb.Fixtures
@@ -170,4 +171,212 @@ defmodule FramerWebWeb.RigE2ETest do
   end
 
   defp alpha_at(frame, x, y), do: :binary.at(frame, (y * @width + x) * 4 + 3)
+
+  # --- layered deformation ---------------------------------------------------
+
+  # Upload a still that is deliberately keyable (a near-flat green background with
+  # a tight three-step band and a solid red character block), so the automated
+  # proof can compare background pixels exactly.
+  defp upload_keyable_still(conn) do
+    payload = %{
+      "name" => "layered",
+      "filename" => "source.png",
+      "source_base64" => Base.encode64(Fixtures.keyable_still())
+    }
+
+    %{"rig" => %{"id" => id}} = conn |> post(~p"/api/rigs", payload) |> json_response(201)
+    id
+  end
+
+  test "a layered rig renders the background unchanged while the character moves", %{conn: conn} do
+    id = upload_keyable_still(conn)
+    {:ok, rig} = RigStore.load(id)
+
+    # One bone over the character, animated by a pure translation.
+    {rig, _bone} =
+      Rig.add_bone(rig, [16, 48], [16, 32], radius: 64)
+
+    rig =
+      rig
+      |> Map.put("duration", %{"fps" => @fps, "frames" => @frames})
+      |> Rig.record_keyframe(0, %{"b0" => %{"rot" => 0.0, "tx" => 0, "ty" => 0}})
+      |> Rig.record_keyframe(@frames - 1, %{"b0" => %{"rot" => 0.0, "tx" => 20, "ty" => 0}})
+      |> Rig.auto_bind()
+      |> Rig.enable_split(tolerance: 40, soft_edges: 0, edge_cleanup: 0)
+
+    assert {:ok, saved} = RigStore.save(rig)
+    assert FramerWeb.Rig.split?(saved)
+
+    # The editor's "extract the character" action materialises the cut-out.
+    assert {:ok, layer_path} = Renderer.split_character(saved)
+    assert layer_path == RigStore.character_layer_path(id)
+    assert File.exists?(layer_path)
+
+    # ...and the rig records it, so save/load round-trips the layered state.
+    to_record = Rig.set_character_layer(saved, Path.basename(layer_path))
+    assert {:ok, _recorded} = RigStore.save(to_record)
+    assert {:ok, reloaded} = RigStore.load(id)
+    assert FramerWeb.Rig.split?(reloaded)
+    assert FramerWeb.Rig.character_layer(reloaded) == FramerWeb.Rig.layer_filename()
+
+    # Render the rest frame and the posed frame at full quality.
+    rest = conn |> post(~p"/api/rigs/#{id}/render", %{"frame" => 0}) |> response(200)
+    posed = conn |> post(~p"/api/rigs/#{id}/render", %{"frame" => @frames - 1}) |> response(200)
+    assert <<0x89, "PNG", _::binary>> = rest
+    assert <<0x89, "PNG", _::binary>> = posed
+
+    {:ok, rest_png} = FramerWeb.ImageInfo.read(rest)
+    assert rest_png.width == @width and rest_png.height == @height
+    {:ok, posed_png} = FramerWeb.ImageInfo.read(posed)
+    assert posed_png.width == @width and posed_png.height == @height
+
+    # The background rows (above the character's travel) are byte-identical
+    # between the two frames, and identical to the source's own pixels.
+    rest_pixels = decode_png(rest)
+    posed_pixels = decode_png(posed)
+    source_pixels = File.read!(RigStore.source_path(id)) |> decode_png()
+
+    assert background_block(rest_pixels) == background_block(posed_pixels)
+    assert background_block(posed_pixels) == background_block(source_pixels)
+
+    # The character itself moved, so the assertion above is not vacuous.
+    assert character_block(rest_pixels) != character_block(posed_pixels)
+
+    # The engine also materialises the opaque background plate the character is
+    # composited over, so the preview fetches what the render used.
+    assert File.exists?(Path.join(RigStore.project_dir(id), FramerWeb.Rig.plate_filename()))
+    assert conn |> get(~p"/api/rigs/#{id}/background") |> response(200) |> byte_size() > 0
+
+    # The region the character vacated is opaque and carries the reconstructed
+    # background - never the character's original pixels, never a see-through
+    # hole an MP4 encode would flatten to black.
+    vacated = vacated_pixels(source_pixels, posed_pixels)
+    assert vacated != []
+
+    for <<b, g, _r, a>> <- vacated do
+      assert a == 255
+      assert b == 0
+      assert g > 100
+    end
+  end
+
+  test "a layered export keeps the background stable across the animation", %{conn: conn} do
+    id = upload_keyable_still(conn)
+    {:ok, rig} = RigStore.load(id)
+
+    {rig, _bone} = Rig.add_bone(rig, [16, 48], [16, 32], radius: 64)
+
+    rig =
+      rig
+      |> Map.put("duration", %{"fps" => @fps, "frames" => @frames})
+      |> Rig.record_keyframe(0, %{"b0" => %{"rot" => 0.0, "tx" => 0, "ty" => 0}})
+      |> Rig.record_keyframe(@frames - 1, %{"b0" => %{"rot" => 0.0, "tx" => 20, "ty" => 0}})
+      |> Rig.auto_bind()
+      |> Rig.enable_split(tolerance: 40, soft_edges: 0, edge_cleanup: 0)
+
+    assert {:ok, saved} = RigStore.save(rig)
+    assert {:ok, _layer} = Renderer.split_character(saved)
+
+    assert {:ok, _recorded} =
+             RigStore.save(Rig.set_character_layer(saved, FramerWeb.Rig.layer_filename()))
+
+    export = conn |> post(~p"/api/rigs/#{id}/export", %{"format" => "webm"}) |> json_response(202)
+    state = await_job(export["job_id"])
+    assert state.job.status == :completed
+    assert state.failed_chunks == []
+
+    output = await_result(conn, id)
+
+    assert {:ok, first} = decode_frame(Path.join(RigStore.project_dir(id), "output.webm"), 0)
+
+    assert {:ok, last} =
+             decode_frame(Path.join(RigStore.project_dir(id), "output.webm"), @frames - 1)
+
+    # A VP9 encode is lossy, so this compares drift rather than bytes: the
+    # background barely moves, while the same scene exported as one layer drifts
+    # far more.
+    assert background_drift(first, last) <= 1.0
+    assert byte_size(output) > 0
+  end
+
+  # --- layered helpers ---
+
+  # Rows of the still no part of the character reaches, so they are pure
+  # background in every frame.
+  @background_rows 30
+  @character_rows 32..47
+  @character_columns 8..24
+
+  defp background_block(pixels) do
+    binary_part(pixels, 0, @width * 4 * @background_rows)
+  end
+
+  defp character_block(pixels) do
+    for y <- @character_rows, x <- @character_columns, into: <<>> do
+      binary_part(pixels, (y * @width + x) * 4, 4)
+    end
+  end
+
+  # BGRA pixels of a still that show the character at rest and no longer show it
+  # once posed: the footprint the background plate has to fill.
+  defp vacated_pixels(source, posed) do
+    for y <- @character_rows, x <- @character_columns, into: [] do
+      offset = (y * @width + x) * 4
+
+      was_character = :binary.at(source, offset + 2) > 200
+      still_character = :binary.at(posed, offset + 2) > 200
+
+      if was_character and not still_character do
+        binary_part(posed, offset, 4)
+      end
+    end
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp background_drift(first, last) do
+    first_block = background_block(first)
+    last_block = background_block(last)
+
+    drift =
+      first_block
+      |> :binary.bin_to_list()
+      |> Enum.zip(:binary.bin_to_list(last_block))
+      |> Enum.map(fn {a, b} -> abs(a - b) end)
+      |> Enum.sum()
+
+    drift / byte_size(first_block)
+  end
+
+  defp decode_png(binary) do
+    ffmpeg = System.find_executable("ffmpeg") || flunk("ffmpeg missing")
+    path = Path.join(System.tmp_dir!(), "framer_layer_#{System.unique_integer([:positive])}.png")
+    File.write!(path, binary)
+
+    try do
+      {raw, status} =
+        System.cmd(
+          ffmpeg,
+          [
+            "-v",
+            "error",
+            "-i",
+            path,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgra",
+            "-"
+          ],
+          stderr_to_stdout: false
+        )
+
+      if status != 0 or byte_size(raw) < @width * @height * 4 do
+        flunk("could not decode the rendered PNG")
+      end
+
+      binary_part(raw, 0, @width * @height * 4)
+    after
+      File.rm(path)
+    end
+  end
 end

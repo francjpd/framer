@@ -24,12 +24,38 @@ defmodule FramerWeb.Rig do
   @default_radius 10.0
   @falloffs ~w(smooth linear hard)
 
+  # The rig document field holding the layered state, the default character-layer
+  # and background-plate file names and the background-removal settings recorded
+  # with them. These mirror `core/layers.py` and `core/deform.py`'s `layers`
+  # validation.
+  @layers_key "layers"
+  @layer_filename "character.png"
+  @plate_filename "background.png"
+  @default_tolerance 30
+  @default_soft_edges 0
+  @default_edge_cleanup 0
+  # The editor-facing option name for each mask setting, so a caller never has
+  # to build an atom from a JSON key.
+  @layer_setting_options [
+    {:color, "color"},
+    {:tolerance, "tolerance"},
+    {:auto_ranges, "auto_ranges"},
+    {:num_ranges, "num_ranges"},
+    {:adaptive_bg, "adaptive_bg"},
+    {:edge_cleanup, "edge_cleanup"},
+    {:soft_edges, "soft_edges"}
+  ]
+  @layer_settings Enum.map(@layer_setting_options, fn {_option, key} -> key end)
+
   @type rig :: map()
   @type point :: {number(), number()}
 
   def schema, do: @schema
   def version, do: @version
   def falloffs, do: @falloffs
+  def layer_filename, do: @layer_filename
+  def plate_filename, do: @plate_filename
+  def layers_key, do: @layers_key
 
   # ---------------------------------------------------------------------------
   # construction
@@ -109,7 +135,8 @@ defmodule FramerWeb.Rig do
              {:ok, _} <- validate_keyframes(rig, bones),
              {:ok, _} <- validate_bind(rig),
              {:ok, _} <- validate_duration(rig),
-             {:ok, _} <- validate_source(rig, project_dir) do
+             {:ok, _} <- validate_source(rig, project_dir),
+             {:ok, _} <- validate_layers(rig, project_dir) do
           {:ok, rig}
         end
 
@@ -343,6 +370,165 @@ defmodule FramerWeb.Rig do
 
       _ ->
         {:error, "rig.source must be an object"}
+    end
+  end
+
+  # --- layers ---------------------------------------------------------------
+
+  @doc """
+  The layered state of a rig document (an empty map when it is not split).
+
+  Mirrors `core/deform.py`'s `layers` validation: a document without the field
+  is a legacy single-picture rig and stays valid, which is what keeps rigs saved
+  before this change loading and rendering exactly as before.
+  """
+  def layers(%{@layers_key => layers}) when is_map(layers), do: layers
+  def layers(_rig), do: %{}
+
+  @doc "Whether the rig asks the engine to render it split into layers."
+  def split?(rig), do: layers(rig)["split"] == true
+
+  @doc "The character-layer path the rig document declares, or `nil`."
+  def character_layer(rig) do
+    case layers(rig)["character"] do
+      path when is_binary(path) and path != "" -> path
+      _ -> nil
+    end
+  end
+
+  @doc "Turn on the layer split, recording the default file and mask settings."
+  def enable_split(rig, opts \\ []) do
+    layers = %{
+      "split" => true,
+      "character" => Keyword.get(opts, :character, @layer_filename),
+      "tolerance" => Keyword.get(opts, :tolerance, @default_tolerance),
+      "soft_edges" => Keyword.get(opts, :soft_edges, @default_soft_edges),
+      "edge_cleanup" => Keyword.get(opts, :edge_cleanup, @default_edge_cleanup),
+      "auto_ranges" => Keyword.get(opts, :auto_ranges, true)
+    }
+
+    Map.put(rig, @layers_key, layers)
+  end
+
+  @doc """
+  Update the mask settings of an already split rig.
+
+  Changing a setting invalidates the materialised layer, so the recorded
+  character path is dropped and the engine recomputes the cut-out from the still.
+  """
+  def set_layer_settings(rig, opts) do
+    if split?(rig) do
+      layers =
+        rig
+        |> layers()
+        |> Map.drop(["character"])
+        |> then(&put_layer_settings(&1, opts))
+
+      Map.put(rig, @layers_key, layers)
+    else
+      rig
+    end
+  end
+
+  @doc "Record the character-layer path a split rig materialised."
+  def set_character_layer(rig, path) when is_binary(path) and path != "" do
+    if split?(rig) do
+      Map.update!(rig, @layers_key, &Map.put(&1, "character", path))
+    else
+      rig
+    end
+  end
+
+  @doc "Turn the layer split off, returning the rig to a single-picture document."
+  def clear_layers(rig), do: Map.delete(rig, @layers_key)
+
+  defp put_layer_settings(layers, opts) do
+    Enum.reduce(@layer_setting_options, layers, fn {option, key}, acc ->
+      case Keyword.get(opts, option) do
+        nil -> acc
+        value -> Map.put(acc, key, value)
+      end
+    end)
+  end
+
+  defp validate_layers(rig, nil), do: validate_layers_shape(rig)
+
+  defp validate_layers(rig, project_dir) do
+    with {:ok, _} <- validate_layers_shape(rig) do
+      validate_character_layer(rig, project_dir)
+    end
+  end
+
+  defp validate_layers_shape(rig) do
+    case rig[@layers_key] do
+      nil ->
+        {:ok, nil}
+
+      layers when not is_map(layers) ->
+        {:error, "rig.layers must be an object"}
+
+      layers ->
+        cond do
+          not is_boolean(layers["split"] || false) ->
+            {:error, "rig.layers.split must be a boolean"}
+
+          not valid_character_declaration?(layers["character"]) ->
+            {:error, "rig.layers.character must be a non-empty string"}
+
+          not Enum.all?(@layer_settings, &valid_layer_setting?(layers, &1)) ->
+            {:error, "rig.layers settings must be a plain JSON value"}
+
+          true ->
+            {:ok, layers}
+        end
+    end
+  end
+
+  defp valid_character_declaration?(nil), do: true
+  defp valid_character_declaration?(value), do: is_binary(value) and value != ""
+
+  # Every mask setting must hold the JSON type the engine's validator expects:
+  # integers for the numeric keys, booleans for the flags, and a [B, G, R]
+  # triple for the colour.
+  defp valid_layer_setting?(layers, "color"), do: color_setting?(layers)
+  defp valid_layer_setting?(layers, "auto_ranges"), do: boolean_setting?(layers, "auto_ranges")
+  defp valid_layer_setting?(layers, "adaptive_bg"), do: boolean_setting?(layers, "adaptive_bg")
+
+  defp valid_layer_setting?(layers, key) do
+    case layers[key] do
+      nil -> true
+      value -> is_integer(value)
+    end
+  end
+
+  defp color_setting?(layers) do
+    case layers["color"] do
+      nil -> true
+      [b, g, r] -> is_number(b) and is_number(g) and is_number(r)
+      _ -> false
+    end
+  end
+
+  defp boolean_setting?(layers, key) do
+    case layers[key] do
+      nil -> true
+      value -> is_boolean(value)
+    end
+  end
+
+  defp validate_character_layer(rig, project_dir) do
+    case character_layer(rig) do
+      nil ->
+        {:ok, nil}
+
+      path ->
+        case confine_to_project(path, project_dir) do
+          {:ok, _} ->
+            {:ok, nil}
+
+          {:error, :escaping_path} ->
+            {:error, "rig.layers.character must stay within the project directory"}
+        end
     end
   end
 

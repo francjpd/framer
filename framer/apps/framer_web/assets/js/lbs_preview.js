@@ -12,6 +12,7 @@
 
 import {
   applyMatrix,
+  compositeLayers,
   computeBackwardMap,
   computeDenseWeights,
   computeVertexWeights,
@@ -42,6 +43,12 @@ const LINK_STROKE = "#6d28d9"; // violet-700 outline
 // resolution, and the fit floor means we never shrink below the contain-fit.
 const ZOOM_STEP = 1.2;
 const NATIVE_SCALE = 1;
+
+// A forced reload re-requests a layer file behind an unchanged URL, so the
+// cache-busting query it appends is not part of the URL's identity.
+function layerName(url) {
+  return url ? url.split("?")[0] : null;
+}
 
 function parsePoint(value) {
   if (!Array.isArray(value)) return [0, 0];
@@ -95,7 +102,12 @@ export const LbsPreview = {
   mounted() {
     this.rig = null;
     this.sourceImage = null;
+    this.characterImage = null;
+    this.backgroundImage = null;
     this.sourceUrl = this.el.dataset.sourceUrl;
+    this.characterUrl = null;
+    this.backgroundUrl = null;
+    this.layerSettingsKey = null;
     this.frame = Number(this.el.dataset.frame || 0);
     this.tool = this.el.dataset.tool || "bones";
     this.selected = this.el.dataset.selected || null;
@@ -121,6 +133,8 @@ export const LbsPreview = {
     this.buildDom();
     this.bindPointer();
     this.loadSource();
+    this.loadCharacterLayer(this.el.dataset.characterUrl || null);
+    this.loadBackgroundLayer(this.el.dataset.backgroundUrl || null);
     this.setCursor(this.tool === "bones" ? "crosshair" : "default");
 
     this.handleEvent("rig", ({ rig }) => this.setRig(rig));
@@ -186,6 +200,19 @@ export const LbsPreview = {
       return;
     }
 
+    // A split rig's layers appear (and change) as the editor extracts them, so
+    // the preview follows the URLs rather than caching them.
+    const characterUrl = this.el.dataset.characterUrl || null;
+    const backgroundUrl = this.el.dataset.backgroundUrl || null;
+    if (
+      characterUrl !== layerName(this.characterUrl) ||
+      backgroundUrl !== layerName(this.backgroundUrl)
+    ) {
+      this.loadCharacterLayer(characterUrl);
+      this.loadBackgroundLayer(backgroundUrl);
+      return;
+    }
+
     this.draw();
   },
 
@@ -248,6 +275,61 @@ export const LbsPreview = {
     image.src = url;
   },
 
+  // The character layer of a split rig: the cut-out whose alpha is the
+  // character mask. Without it the preview renders the whole still, which is
+  // exactly the unsplit behaviour - so a rig that is not layered, or whose
+  // layer has not been materialised yet, simply shows the source.
+  loadCharacterLayer(url) {
+    this.characterUrl = url || null;
+
+    if (!url) {
+      this.characterImage = null;
+      this.invalidate();
+      this.draw();
+      return;
+    }
+
+    const image = new Image();
+    image.onload = () => {
+      this.characterImage = image;
+      this.invalidate();
+      this.draw();
+    };
+    image.onerror = () => {
+      this.characterImage = null;
+      this.setStatus("Could not load the character layer");
+    };
+    image.src = url;
+  },
+
+  // The opaque background plate a split rig composites the character over: a
+  // full copy of the still whose character area the engine reconstructed, so
+  // the background the rig never touches is covered everywhere. The engine
+  // materialises it beside the cut-out at split time, so the preview only ever
+  // reads the same bytes the export is composited with.
+  loadBackgroundLayer(url) {
+    this.backgroundUrl = url || null;
+
+    if (!url) {
+      this.backgroundImage = null;
+      this.invalidate();
+      this.draw();
+      return;
+    }
+
+    const image = new Image();
+    image.onload = () => {
+      this.backgroundImage = image;
+      this.invalidate();
+      this.draw();
+    };
+    image.onerror = () => {
+      this.backgroundImage = null;
+      this.setStatus("Could not load the background layer");
+    };
+    image.src = url;
+  },
+
   setRig(rig) {
     const previous = this.rig;
     this.rig = rig;
@@ -256,6 +338,26 @@ export const LbsPreview = {
       this.resetZoom();
     }
     this.selected = this.el.dataset.selected || null;
+
+    // A re-extraction rewrites the layer files behind the same URLs, so the
+    // settings recorded on the rig document are what tells the preview to drop
+    // the decoded bitmaps it holds and re-request them.
+    const settingsKey = JSON.stringify(rig.layers || null);
+    if (this.layerSettingsKey !== null && settingsKey !== this.layerSettingsKey) {
+      const query = `?key=${encodeURIComponent(settingsKey)}`;
+      const characterUrl = this.el.dataset.characterUrl || null;
+      const backgroundUrl = this.el.dataset.backgroundUrl || null;
+
+      // A layer that only just appeared was already fetched by `updated()`.
+      if (characterUrl && layerName(this.characterUrl) === characterUrl) {
+        this.loadCharacterLayer(characterUrl + query);
+      }
+      if (backgroundUrl && layerName(this.backgroundUrl) === backgroundUrl) {
+        this.loadBackgroundLayer(backgroundUrl + query);
+      }
+    }
+    this.layerSettingsKey = settingsKey;
+
     this.invalidate();
     this.draw();
   },
@@ -437,15 +539,33 @@ export const LbsPreview = {
       bind: rig.bind,
     });
 
-    if (bindKey === this.cache.bindKey) return true;
+    // The two layers are part of what the proxy cache is built from: a
+    // different cut-out or plate (or none at all) means the proxy has to be
+    // rebuilt.
+    const layerKey = `${this.characterUrl || ""}|${this.backgroundUrl || ""}`;
+    if (bindKey === this.cache.bindKey && layerKey === (this.cache.layerKey || "")) return true;
 
     const baseScale = Math.min(1, PROXY_MAX / Math.max(rig.canvas.width, rig.canvas.height));
     const proxyRig = scaleRig(rig, baseScale);
     const proxy = { width: proxyRig.canvas.width, height: proxyRig.canvas.height, scale: baseScale };
     proxy.source = this.downscale(proxy.width, proxy.height);
 
+    // A split rig deforms only the character layer; the background plate is
+    // proxied at the same size and composited underneath, exactly as the
+    // engine composites the two materialised layers.
+    const layered = Boolean(
+      rig.layers && rig.layers.split && this.characterImage && this.backgroundImage
+    );
+    proxy.character = layered
+      ? this.downscaleImage(this.characterImage, proxy.width, proxy.height)
+      : null;
+    proxy.background = layered
+      ? this.downscaleImage(this.backgroundImage, proxy.width, proxy.height)
+      : null;
+
     this.cache = {
       bindKey,
+      layerKey,
       scale: baseScale,
       proxy,
       weights: computeDenseWeights(proxyRig, proxy.width, proxy.height),
@@ -458,13 +578,17 @@ export const LbsPreview = {
   },
 
   downscale(width, height) {
+    return this.downscaleImage(this.sourceImage, width, height);
+  },
+
+  downscaleImage(image, width, height) {
     const scratch = document.createElement("canvas");
     scratch.width = width;
     scratch.height = height;
     const context = scratch.getContext("2d");
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = "high";
-    context.drawImage(this.sourceImage, 0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
     return context.getImageData(0, 0, width, height);
   },
 
@@ -494,10 +618,10 @@ export const LbsPreview = {
 
     this.ensureViewportCanvas();
     const iterations = 5;
+    const { mapX, mapY } = computeBackwardMap(A, T, proxy.width, proxy.height, iterations);
 
     if (this.gl) {
       try {
-        const { mapX, mapY } = computeBackwardMap(A, T, proxy.width, proxy.height, iterations);
         this.drawWebgl(proxy, mapX, mapY);
         return;
       } catch (error) {
@@ -506,7 +630,14 @@ export const LbsPreview = {
       }
     }
 
-    const { mapX, mapY } = computeBackwardMap(A, T, proxy.width, proxy.height, iterations);
+    // A split rig deforms only the character layer and composites the untouched
+    // background plate underneath - the same two steps the engine runs.
+    if (proxy.character) {
+      const warped = remapBilinear(proxy.character.data, proxy.width, proxy.height, mapX, mapY);
+      this.drawCanvas(compositeLayers(warped, proxy.background.data));
+      return;
+    }
+
     const rgba = remapBilinear(proxy.source.data, proxy.width, proxy.height, mapX, mapY);
     this.drawCanvas(rgba);
   },
@@ -549,13 +680,22 @@ export const LbsPreview = {
       if (!gl) throw new Error("WebGL2 unavailable");
 
       const program = createProgram(gl);
+      const composite = createCompositeProgram(gl);
       this.gl = gl;
       this.glProgram = program;
+      this.glCompositeProgram = composite;
       this.glLocations = {
         pos: gl.getAttribLocation(program, "a_pos"),
         source: gl.getUniformLocation(program, "u_source"),
         map: gl.getUniformLocation(program, "u_map"),
         size: gl.getUniformLocation(program, "u_size"),
+      };
+      this.glCompositeLocations = {
+        pos: gl.getAttribLocation(composite, "a_pos"),
+        character: gl.getUniformLocation(composite, "u_character"),
+        background: gl.getUniformLocation(composite, "u_background"),
+        map: gl.getUniformLocation(composite, "u_map"),
+        size: gl.getUniformLocation(composite, "u_size"),
       };
 
       this.glBuffer = gl.createBuffer();
@@ -563,9 +703,16 @@ export const LbsPreview = {
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
 
       this.glSourceTex = gl.createTexture();
+      this.glBackgroundTex = gl.createTexture();
       this.glMapTex = gl.createTexture();
 
       gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+      gl.bindTexture(gl.TEXTURE_2D, this.glBackgroundTex);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -589,33 +736,52 @@ export const LbsPreview = {
   drawWebgl(proxy, mapX, mapY) {
     const gl = this.gl;
     gl.viewport(0, 0, proxy.width, proxy.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // A split rig deforms only the character layer and composites the untouched
+    // background plate underneath with a plain source-over, exactly as the
+    // engine's `core.layers.composite` does. One fragment shader reads both
+    // layers and the backward map so the per-pixel alpha weighting stays exact.
+    if (proxy.character) {
+      gl.disable(gl.BLEND);
+      this.drawCompositeQuad(proxy.character, proxy.background, proxy.width, proxy.height, mapX, mapY);
+      return;
+    }
+
+    gl.disable(gl.BLEND);
+    this.drawSampledQuad(proxy.source, proxy.width, proxy.height, mapX, mapY);
+  },
+
+  drawSampledQuad(layer, width, height, mapX, mapY) {
+    const gl = this.gl;
 
     gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
     gl.texImage2D(
       gl.TEXTURE_2D,
       0,
       gl.RGBA,
-      proxy.width,
-      proxy.height,
+      width,
+      height,
       0,
       gl.RGBA,
       gl.UNSIGNED_BYTE,
-      new Uint8Array(proxy.source.data.buffer)
+      new Uint8Array(layer.data.buffer)
     );
 
-    const map = new Float32Array(proxy.width * proxy.height * 2);
+    const map = new Float32Array(width * height * 2);
     for (let i = 0; i < mapX.length; i++) {
       map[i * 2] = mapX[i];
       map[i * 2 + 1] = mapY[i];
     }
 
     gl.bindTexture(gl.TEXTURE_2D, this.glMapTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, proxy.width, proxy.height, 0, gl.RG, gl.FLOAT, map);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, width, height, 0, gl.RG, gl.FLOAT, map);
 
     gl.useProgram(this.glProgram);
     gl.uniform1i(this.glLocations.source, 0);
     gl.uniform1i(this.glLocations.map, 1);
-    gl.uniform2f(this.glLocations.size, proxy.width, proxy.height);
+    gl.uniform2f(this.glLocations.size, width, height);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
@@ -629,19 +795,85 @@ export const LbsPreview = {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   },
 
+  // Composite the warped character over the untouched background plate in one
+  // pass, matching `core.layers.composite`: out_alpha = fg.a + bg.a *
+  // (1 - fg.a), out_rgb = (fg.rgb * fg.a + bg.rgb * bg.a * (1 - fg.a)) /
+  // out_alpha.
+  drawCompositeQuad(character, background, width, height, mapX, mapY) {
+    const gl = this.gl;
+
+    gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array(character.data.buffer)
+    );
+
+    gl.bindTexture(gl.TEXTURE_2D, this.glBackgroundTex);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array(background.data.buffer)
+    );
+
+    const map = new Float32Array(width * height * 2);
+    for (let i = 0; i < mapX.length; i++) {
+      map[i * 2] = mapX[i];
+      map[i * 2 + 1] = mapY[i];
+    }
+
+    gl.bindTexture(gl.TEXTURE_2D, this.glMapTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, width, height, 0, gl.RG, gl.FLOAT, map);
+
+    gl.useProgram(this.glCompositeProgram);
+    gl.uniform1i(this.glCompositeLocations.character, 0);
+    gl.uniform1i(this.glCompositeLocations.background, 1);
+    gl.uniform1i(this.glCompositeLocations.map, 2);
+    gl.uniform2f(this.glCompositeLocations.size, width, height);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.glBackgroundTex);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.glMapTex);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.glBuffer);
+    gl.enableVertexAttribArray(this.glCompositeLocations.pos);
+    gl.vertexAttribPointer(this.glCompositeLocations.pos, 2, gl.FLOAT, false, 0, 0);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  },
+
   releaseGl() {
     if (this.gl) {
       const gl = this.gl;
       if (this.glBuffer) gl.deleteBuffer(this.glBuffer);
       if (this.glSourceTex) gl.deleteTexture(this.glSourceTex);
+      if (this.glBackgroundTex) gl.deleteTexture(this.glBackgroundTex);
       if (this.glMapTex) gl.deleteTexture(this.glMapTex);
       if (this.glProgram) gl.deleteProgram(this.glProgram);
+      if (this.glCompositeProgram) gl.deleteProgram(this.glCompositeProgram);
     }
     this.gl = null;
     this.glBuffer = null;
     this.glSourceTex = null;
+    this.glBackgroundTex = null;
     this.glMapTex = null;
     this.glProgram = null;
+    this.glCompositeProgram = null;
   },
 
   // --- WebGL context loss / restore ----------------------------------------
@@ -1432,6 +1664,50 @@ void main() {
 }
 `;
 
+// Composites the warped character over the untouched background plate in one
+// pass, mirroring `core.layers.composite`: out_alpha = fg.a + bg.a *
+// (1 - fg.a), out_rgb = (fg.rgb * fg.a + bg.rgb * bg.a * (1 - fg.a)) /
+// out_alpha. The plate is read straight through (never remapped), the
+// character is sampled through the backward map.
+const COMPOSITE_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D u_character;
+uniform sampler2D u_background;
+uniform sampler2D u_map;
+uniform vec2 u_size;
+out vec4 outColor;
+
+vec4 characterTexel(int x, int y) {
+  if (x < 0 || y < 0 || x >= int(u_size.x) || y >= int(u_size.y)) return vec4(0.0);
+  return texelFetch(u_character, ivec2(x, y), 0);
+}
+
+vec4 sampleCharacter(vec2 p) {
+  float x0 = floor(p.x);
+  float y0 = floor(p.y);
+  float ax = p.x - x0;
+  float ay = p.y - y0;
+  int ix = int(x0);
+  int iy = int(y0);
+  return characterTexel(ix, iy) * (1.0 - ax) * (1.0 - ay)
+       + characterTexel(ix + 1, iy) * ax * (1.0 - ay)
+       + characterTexel(ix, iy + 1) * (1.0 - ax) * ay
+       + characterTexel(ix + 1, iy + 1) * ax * ay;
+}
+
+void main() {
+  int x = int(floor(gl_FragCoord.x));
+  int y = int(u_size.y) - 1 - int(floor(gl_FragCoord.y));
+  vec2 p = texelFetch(u_map, ivec2(x, y), 0).xy;
+  vec4 fg = sampleCharacter(p);
+  vec4 bg = texelFetch(u_background, ivec2(x, y), 0);
+  float outAlpha = fg.a + bg.a * (1.0 - fg.a);
+  vec3 colour = fg.rgb * fg.a + bg.rgb * bg.a * (1.0 - fg.a);
+  colour = colour / max(outAlpha, 1.0 / 255.0);
+  outColor = vec4(colour, outAlpha);
+}
+`;
+
 function compile(gl, type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -1457,6 +1733,23 @@ function createProgram(gl) {
     const log = gl.getProgramInfoLog(program);
     gl.deleteProgram(program);
     throw new Error(`program link failed: ${log}`);
+  }
+  return program;
+}
+
+function createCompositeProgram(gl) {
+  const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
+  const fragment = compile(gl, gl.FRAGMENT_SHADER, COMPOSITE_FRAGMENT_SHADER);
+  const program = gl.createProgram();
+  gl.attachShader(program, vertex);
+  gl.attachShader(program, fragment);
+  gl.linkProgram(program);
+  gl.deleteShader(vertex);
+  gl.deleteShader(fragment);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    const log = gl.getProgramInfoLog(program);
+    gl.deleteProgram(program);
+    throw new Error(`composite program link failed: ${log}`);
   }
   return program;
 }

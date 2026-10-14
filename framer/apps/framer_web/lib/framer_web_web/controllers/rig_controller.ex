@@ -11,6 +11,8 @@ defmodule FramerWebWeb.RigController do
     * `POST   /api/rigs/:id/render` - render one full-quality frame (PNG)
     * `POST   /api/rigs/:id/export` - submit a chunked deform export
     * `GET    /api/rigs/:id/source` - the source still
+    * `GET    /api/rigs/:id/character` - the materialised character layer
+    * `GET    /api/rigs/:id/background` - the materialised background plate
     * `GET    /api/rigs/:id/result` - the merged export (download)
 
   The BEAM never receives pixel data here either: the still is written to disk
@@ -122,6 +124,46 @@ defmodule FramerWebWeb.RigController do
       path ->
         conn
         |> put_resp_content_type(MIME.type(path) || "application/octet-stream")
+        |> send_file(200, path)
+    end
+  end
+
+  @doc """
+  The materialised character layer of a split rig.
+
+  Serves the project's character layer, the cut-out whose alpha is the character
+  mask. The preview fetches it to deform the character alone.
+  """
+  def character(conn, %{"id" => id}) do
+    case RigStore.character_layer_path(id) do
+      nil ->
+        conn |> put_status(:not_found) |> json(%{error: "no character layer for #{id}"})
+
+      path ->
+        conn
+        |> put_resp_content_type(MIME.type(path) || "application/octet-stream")
+        |> put_resp_header("cache-control", "no-store")
+        |> send_file(200, path)
+    end
+  end
+
+  @doc """
+  The opaque background plate of a split rig.
+
+  Serves the project's background layer: a full copy of the still whose
+  character area the engine reconstructed at split time. The preview fetches it
+  and composites the character over it with a plain source-over, the same
+  composite the engine renders and exports with.
+  """
+  def background(conn, %{"id" => id}) do
+    case RigStore.plate_path(id) do
+      nil ->
+        conn |> put_status(:not_found) |> json(%{error: "no background layer for #{id}"})
+
+      path ->
+        conn
+        |> put_resp_content_type(MIME.type(path) || "application/octet-stream")
+        |> put_resp_header("cache-control", "no-store")
         |> send_file(200, path)
     end
   end

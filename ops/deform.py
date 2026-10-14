@@ -22,6 +22,7 @@ from core.deform import (
     load_rig,
     load_source,
 )
+from core.layers import is_split, resolve_character_layer
 from core.video import VideoStreamWriter
 
 
@@ -49,8 +50,7 @@ def _resolve_frame_range(
         frames = duration.get("frames")
         if not frames:
             raise RigError(
-                "end_frame was not supplied and the rig has no duration.frames "
-                "to loop a still over"
+                "end_frame was not supplied and the rig has no duration.frames to loop a still over"
             )
         end = int(frames) - 1
 
@@ -84,6 +84,10 @@ def deform_video(
     When ``output_path`` is an image extension a single PNG (the ``start_frame``
     pose) is written instead of a video, which is the editor's "render one frame"
     path and the golden-image test path.
+
+    A rig document that declares ``layers.split`` renders split: the character
+    layer is deformed and the untouched background plate is composited under it,
+    so the background is identical in every frame.
     """
     try:
         rig_document = _resolve_rig(rig)
@@ -103,12 +107,20 @@ def deform_video(
         width = int(rig_document["canvas"]["width"])
         height = int(rig_document["canvas"]["height"])
 
+        character_layer = None
+        materialised = None
+        if is_split(rig_document):
+            character_layer, materialised = resolve_character_layer(
+                rig_document, source, input_path
+            )
+
         renderer = DeformRenderer(
             rig_document,
             source,
             iterations=iterations,
             weights_cache=weights,
             still=still,
+            character=character_layer,
         )
 
         output = Path(output_path)
@@ -116,7 +128,7 @@ def deform_video(
 
         if output.suffix.lower() in IMAGE_EXTENSIONS:
             renderer.render_to_png(start, output)
-            return {
+            result = {
                 "success": True,
                 "output_path": str(output),
                 "frames": 1,
@@ -124,19 +136,33 @@ def deform_video(
                 "end_frame": start,
                 "fps": resolved_fps,
             }
+            if materialised is not None:
+                result["character"] = str(materialised)
+            return result
 
-        if output.suffix.lower() == ".mp4" and _has_transparency(renderer.source):
+        # MP4 drops alpha on encode, so the *rendered* frame is what decides
+        # whether the format can carry the output: a split rig composites over
+        # an opaque plate and never needs alpha, but a deformation that pulls
+        # transparency in from outside the canvas still cannot be encoded.
+        frames = 0
+        is_mp4 = output.suffix.lower() == ".mp4"
+        alpha_error = False
+        with VideoStreamWriter(output_path, resolved_fps, width, height, has_alpha=True) as writer:
+            for frame in range(start, end + 1):
+                rendered = renderer.render(frame)
+                if is_mp4 and _has_transparency(rendered):
+                    alpha_error = True
+                    break
+                writer.write_frame(rendered)
+                frames += 1
+
+        if alpha_error:
+            output.unlink(missing_ok=True)
             return {
                 "success": False,
                 "output_path": None,
                 "error": "MP4 does not support alpha; use .webm or .mov for a transparent rig",
             }
-
-        frames = 0
-        with VideoStreamWriter(output_path, resolved_fps, width, height, has_alpha=True) as writer:
-            for frame in range(start, end + 1):
-                writer.write_frame(renderer.render(frame))
-                frames += 1
 
         if frames == 0:
             return {
@@ -152,6 +178,7 @@ def deform_video(
             "start_frame": start,
             "end_frame": end,
             "fps": resolved_fps,
+            **({"character": str(materialised)} if materialised is not None else {}),
         }
 
     except (RigError, cv2.error, OSError, ValueError) as exc:

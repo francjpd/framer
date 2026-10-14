@@ -46,7 +46,19 @@ normal Port error; a document that does not validate never renders.
     { "frame": 30, "pose": { "b0": { "rot": 0.4, "tx": 0, "ty": 0 } } }
   ],
 
-  "playback": { "loop": true }
+  "playback": { "loop": true },
+
+  "layers": {
+    "split": true,
+    "character": "character.png",
+    "color": null,
+    "tolerance": 40,
+    "auto_ranges": true,
+    "num_ranges": 5,
+    "adaptive_bg": false,
+    "edge_cleanup": 3,
+    "soft_edges": 5
+  }
 }
 ```
 
@@ -67,6 +79,7 @@ normal Port error; a document that does not validate never renders.
 | `keyframes[]` | no | each `{frame, pose}` with a per-bone `{rot, tx, ty}` local pose |
 | `duration.frames` / `duration.fps` | no | used to loop a still when the request omits a range |
 | `mesh`, `source`, `playback`, `id` | no | written by the editor (`FramerWeb.Rig.new`, `FramerWeb.Rig.auto_bind`); the engine ignores them |
+| `layers` | no | the optional character/background split; absent means the legacy single-picture render, which is how a rig saved before the split existed keeps loading and rendering unchanged. `layers.split` (boolean) turns it on; `layers.character` names the materialised character-layer file (resolved against the still's directory, default `character.png`); the remaining keys record the background-removal settings the mask was built with (`color`, `tolerance`, `auto_ranges`, `num_ranges`, `adaptive_bg`, `edge_cleanup`, `soft_edges`). See [Layered deformation](#layered-deformation) |
 
 The editor's auto-radius is deliberate, not a divergence to align away: at the
 engine default of 10 px a fresh bone's influence is tiny, so the nearest-bone
@@ -95,6 +108,27 @@ the engine.
   with a fixed-point iteration (`iterations`, default `5`) and sampled with
   `cv2.remap`, preserving alpha.
 
+## Layered deformation
+
+A document with `layers.split` true is rendered split: the still is separated
+into a **character layer** (the still's colour with the background-removal
+mask as its alpha) and a **background layer** - an opaque *plate*, a full copy
+of the still whose character area is reconstructed from the surrounding
+background, so no pixel is left uncovered.  Only the character layer is
+resampled; the plate is composited underneath it untouched, so the background is
+identical in every frame.  The two files (`layers.character`, default
+`character.png` beside the still, and `background.png`) are materialised once
+with the engine's existing background-removal segmentation and reused by later
+renders, exports and the editor's preview.
+
+The composite is a plain source-over, so an opaque character pixel wins
+outright wherever it moves - including over background it did not occupy at
+rest.  Where the character moves away from, the plate shows through: the
+vacated region carries the reconstructed background, never the character's
+original pixels, and because the plate is opaque the composited frame is opaque
+too.  The preview (`assets/js/lbs.mjs`) mirrors the split and the composite
+exactly, and `tests/test_preview_parity.py` keeps the two in agreement.
+
 ## Request options
 
 The operation travels through the normal Port contract
@@ -103,7 +137,7 @@ The operation travels through the normal Port contract
 ```jsonc
 {
   "op": "deform",
-  "input": "/abs/project/character.png",
+  "input": "/abs/project/source.png",
   "output": "/abs/tmp/chunk_3.webm",
   "start_frame": 72, "end_frame": 95, "fps": 24.0,
   "options": {
@@ -123,6 +157,8 @@ The operation travels through the normal Port contract
 * `output` keeps the chunk extension.  An image extension (`.png`, `.jpg`, ...)
   renders a single frame instead of a video.
 * `options.weights` is an optional dense-weight `.npz` cache path.
+* The response reports the materialised character-layer path when the engine
+  wrote it (the plate is written beside it under its own fixed name).
 * The renderer is stateless per chunk: it reloads the rig/weights from disk, so
   a failed chunk can be retried on any worker.
 

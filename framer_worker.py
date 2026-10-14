@@ -335,6 +335,10 @@ def op_deform(req: dict[str, Any]) -> dict[str, Any]:
     end_frame]``) or a video (its first frame is used); either way the chunk
     writes an alpha-capable frame range and the BEAM only ever sends paths,
     the range and the rig/options - never pixel data.
+
+    A rig document declaring ``layers.split`` deforms only its character layer
+    and composites the untouched background layer underneath, so the background
+    is byte-identical in every frame.
     """
     from ops.deform import deform_video
 
@@ -360,7 +364,10 @@ def op_deform(req: dict[str, Any]) -> dict[str, Any]:
     if not result.get("success"):
         raise RuntimeError(result.get("error") or "deform operation failed")
 
-    return {"output": result["output_path"], "frames": result.get("frames", 0)}
+    response = {"output": result["output_path"], "frames": result.get("frames", 0)}
+    if result.get("character"):
+        response["character"] = result["character"]
+    return response
 
 
 def op_merge(req: dict[str, Any]) -> dict[str, Any]:
