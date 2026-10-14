@@ -1149,6 +1149,17 @@ defmodule FramerWebWeb.BrowserPreviewTest do
           waitForSelector: "button[phx-click=\"select_bone\"]"
         },
         %{name: "let the bone overlay draw", sleep: 500},
+        # Arm the shared overlay measurements, and record what every rig event
+        # the server pushes draws. The hook registered its `rig` handler first,
+        # so this listener runs after `setRig` has redrawn: each entry is the
+        # pose the user saw for that acknowledgement - the intermediate frames
+        # a final-state-only proof cannot see.
+        %{
+          name: "record the pose every pushed rig event draws",
+          evaluate:
+            "() => { const overlay = document.querySelector('#viewport canvas.framer-viewport-overlay'); const ctx = overlay.getContext('2d'); const metrics = () => { const rect = overlay.getBoundingClientRect(); return { scale: rect.width / 200, dpr: window.devicePixelRatio || 1 }; }; const jointDrift = (ix, iy) => { const { scale, dpr } = metrics(); const tx = ix * scale * dpr, ty = iy * scale * dpr; const data = ctx.getImageData(0, 0, overlay.width, overlay.height).data; let sx = 0, sy = 0, n = 0; for (let y = 0; y < overlay.height; y++) { for (let x = 0; x < overlay.width; x++) { const i = (y * overlay.width + x) * 4; if (data[i] >= 200 && data[i + 1] >= 175 && data[i + 2] <= 120 && data[i + 3] >= 200 && Math.hypot(x - tx, y - ty) <= #{@alignment_window}) { sx += x; sy += y; n++; } } } if (n < #{@joint_min}) return 999999; return Math.hypot(sx / n - tx, sy / n - ty); }; const greenNear = (ix, iy) => { const { scale, dpr } = metrics(); const tx = ix * scale * dpr, ty = iy * scale * dpr; const data = ctx.getImageData(0, 0, overlay.width, overlay.height).data; let green = 0; for (let i = 0; i < data.length; i += 4) { const p = i / 4; const x = p % overlay.width; const y = (p - x) / overlay.width; if (data[i] <= 60 && data[i + 1] >= 170 && data[i + 2] <= 120 && data[i + 3] >= 200 && Math.hypot(x - tx, y - ty) <= #{@alignment_window}) green++; } return green; }; window.__jointDrift = jointDrift; window.__greenNear = greenNear; window.__rigDraws = []; window.addEventListener('phx:rig', () => { window.__rigDraws.push({ dropped: jointDrift(120, 100), passed: jointDrift(100, 100) }); }); return true; }",
+          expect: %{truthy: true}
+        },
         # First drag: translate the whole bone by (+40,0). The drawn bone now
         # spans image (100,100)-(180,100) while the committed rest still spans
         # (60,100)-(140,100).
@@ -1167,7 +1178,7 @@ defmodule FramerWebWeb.BrowserPreviewTest do
         %{
           name: "release, press the drawn body and hold-drag - all inside the window",
           evaluate:
-            "() => { const vp = document.querySelector('#viewport'); const overlay = vp.querySelector('canvas.framer-viewport-overlay'); const rect = overlay.getBoundingClientRect(); const scale = rect.width / 200; const dpr = window.devicePixelRatio || 1; const at = (ix, iy) => [rect.left + ix * scale, rect.top + iy * scale]; const ctx = overlay.getContext('2d'); const fire = (type, ix, iy) => { const [x, y] = at(ix, iy); window.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, bubbles: true })); }; const press = (ix, iy) => { const [x, y] = at(ix, iy); vp.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, button: 0, bubbles: true })); }; const jointDrift = (ix, iy) => { const tx = ix * scale * dpr, ty = iy * scale * dpr; const data = ctx.getImageData(0, 0, overlay.width, overlay.height).data; let sx = 0, sy = 0, n = 0; for (let y = 0; y < overlay.height; y++) { for (let x = 0; x < overlay.width; x++) { const i = (y * overlay.width + x) * 4; if (data[i] >= 200 && data[i + 1] >= 175 && data[i + 2] <= 120 && data[i + 3] >= 200 && Math.hypot(x - tx, y - ty) <= #{@alignment_window}) { sx += x; sy += y; n++; } } } if (n < #{@joint_min}) return 999999; return Math.hypot(sx / n - tx, sy / n - ty); }; const greenNear = (ix, iy) => { const tx = ix * scale * dpr, ty = iy * scale * dpr; const data = ctx.getImageData(0, 0, overlay.width, overlay.height).data; let green = 0; for (let i = 0; i < data.length; i += 4) { const p = i / 4; const x = p % overlay.width; const y = (p - x) / overlay.width; if (data[i] <= 60 && data[i + 1] >= 170 && data[i + 2] <= 120 && data[i + 3] >= 200 && Math.hypot(x - tx, y - ty) <= #{@alignment_window}) green++; } return green; }; fire('pointerup', 120, 100); const afterRelease = jointDrift(100, 100); press(160, 100); fire('pointermove', 180, 100); const createBand = greenNear(170, 100); const afterSecondDrag = jointDrift(120, 100); fire('pointerup', 180, 100); press(10, 10); const duringIdlePress = jointDrift(120, 100); fire('pointerup', 10, 10); const afterIdlePress = jointDrift(120, 100); window.__heldRelease = { release: afterRelease, createBand: createBand, secondDrag: afterSecondDrag, idlePress: duringIdlePress, idleRelease: afterIdlePress }; return true; }"
+            "() => { const vp = document.querySelector('#viewport'); const overlay = vp.querySelector('canvas.framer-viewport-overlay'); const rect = overlay.getBoundingClientRect(); const scale = rect.width / 200; const at = (ix, iy) => [rect.left + ix * scale, rect.top + iy * scale]; const fire = (type, ix, iy) => { const [x, y] = at(ix, iy); window.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, bubbles: true })); }; const press = (ix, iy) => { const [x, y] = at(ix, iy); vp.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, button: 0, bubbles: true })); }; const jointDrift = window.__jointDrift; const greenNear = window.__greenNear; fire('pointerup', 120, 100); const afterRelease = jointDrift(100, 100); press(160, 100); fire('pointermove', 180, 100); const createBand = greenNear(170, 100); const afterSecondDrag = jointDrift(120, 100); fire('pointerup', 180, 100); press(10, 10); const duringIdlePress = jointDrift(120, 100); fire('pointerup', 10, 10); const afterIdlePress = jointDrift(120, 100); window.__heldRelease = { release: afterRelease, createBand: createBand, secondDrag: afterSecondDrag, idlePress: duringIdlePress, idleRelease: afterIdlePress }; return true; }"
         },
         # The release draw keeps the dropped pose: the joint stays on the head
         # the first drag dropped, with no rest-pose frame in between.
@@ -1207,6 +1218,28 @@ defmodule FramerWebWeb.BrowserPreviewTest do
         },
         %{name: "finish the release and let the commits settle", pointerUp: %{settleMs: 300}},
         %{name: "let both rig round trips settle", sleep: 1_000},
+        # Both releases ran inside one in-page turn, so both edits were in
+        # flight together: the recorder saw one draw per acknowledgement.
+        %{
+          name: "the recorder observed both acknowledgements",
+          evaluate: "() => window.__rigDraws.length",
+          expect: %{gte: 2}
+        },
+        # The first acknowledgement carries only the first edit, so rebasing on
+        # it draws the head back through (100,100) - the pose the second
+        # release had already passed. No acknowledged rig may draw it there.
+        %{
+          name: "no acknowledgement drew the bone back through the pose it had passed",
+          evaluate: "() => Math.max(...window.__rigDraws.map((draw) => draw.passed))",
+          expect: %{gte: @alignment_tolerance}
+        },
+        # Every acknowledged rig kept the head the second release dropped, so
+        # the burst never showed a pose the user had not committed to.
+        %{
+          name: "every acknowledgement kept the dropped pose drawn",
+          evaluate: "() => Math.max(...window.__rigDraws.map((draw) => draw.dropped))",
+          expect: %{lt: @alignment_tolerance}
+        },
         # Both edits are on the document: the bone sits where the second drag
         # drew it, and nothing extra was created.
         bone_joint_error(0, "head", 120, 100),

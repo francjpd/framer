@@ -77,6 +77,36 @@ function distanceToSegment(px, py, ax, ay, bx, by) {
   return Math.hypot(wx - t * vx, wy - t * vy);
 }
 
+// The document quantises every bone coordinate to three decimals, so a pose
+// drawn locally and the one the server pushes back for it agree to that
+// precision and no further.
+const REST_TOLERANCE = 1e-3;
+
+function sameRigRest(a, b) {
+  const ah = parsePoint(a.head);
+  const at = parsePoint(a.tail);
+  const bh = parsePoint(b.head);
+  const bt = parsePoint(b.tail);
+  return (
+    Math.abs(ah[0] - bh[0]) <= REST_TOLERANCE &&
+    Math.abs(ah[1] - bh[1]) <= REST_TOLERANCE &&
+    Math.abs(at[0] - bt[0]) <= REST_TOLERANCE &&
+    Math.abs(at[1] - bt[1]) <= REST_TOLERANCE
+  );
+}
+
+// Whether the pushed rig `rig` carries the pose `held` draws: every bone the
+// held pose spans that the pushed rig still has must rest where the held pose
+// put it. A bone the pushed rig no longer has was deleted meanwhile, so it
+// holds nothing left to rebase onto.
+function rigCarriesPose(rig, held) {
+  if (!rig || !held) return true;
+  return held.bones.every((bone) => {
+    const committed = rig.bones.find((candidate) => candidate.id === bone.id);
+    return !committed || sameRigRest(committed.rest, bone.rest);
+  });
+}
+
 function scaleRig(rig, scale) {
   return {
     canvas: { width: Math.round(rig.canvas.width * scale), height: Math.round(rig.canvas.height * scale) },
@@ -337,6 +367,7 @@ export const LbsPreview = {
     if (!previous || previous.id !== rig.id) {
       this.overrides = {};
       this.resetZoom();
+      this.heldRig = null;
     }
     this.selected = this.el.dataset.selected || null;
     // A re-extraction rewrites the layer files behind the same URLs, so the
@@ -358,7 +389,12 @@ export const LbsPreview = {
     }
     this.layerSettingsKey = settingsKey;
 
-    this.heldRig = null;
+    // A pushed rig that does not carry the held pose still leaves an edit in
+    // flight: the burst's earlier commits are acknowledged first, so rebasing
+    // on the first of them would draw the bone back through a pose it has
+    // already passed. The held pose is dropped once the pushed rig carries it,
+    // which is the server having caught up with every edit the client pushed.
+    if (rigCarriesPose(rig, this.heldRig)) this.heldRig = null;
     this.invalidate();
     this.draw();
   },
@@ -973,8 +1009,10 @@ export const LbsPreview = {
   // create drag's rubber band in `drawDrag`, and pose drags (which retarget the
   // world through `this.overrides`) - need no rig change of their own, so with
   // no move/translate drag in flight the dropped pose is what stays on screen
-  // until `setRig` confirms it. `heldRig` is nil whenever no edit is waiting
-  // on the server, so a settled viewport is exactly `this.rig`.
+  // until `setRig` confirms it. That confirmation is a pushed rig carrying the
+  // held pose, so a burst of edits keeps the last dropped pose on screen until
+  // the server has caught up with all of them. `heldRig` is nil whenever no
+  // edit is waiting on the server, so a settled viewport is exactly `this.rig`.
   dragRig() {
     const drag = this.drag;
     if (!this.rig || !drag || (drag.type !== "move" && drag.type !== "translate")) {
