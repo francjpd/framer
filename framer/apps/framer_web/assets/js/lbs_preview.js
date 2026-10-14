@@ -991,7 +991,7 @@ export const LbsPreview = {
     this.drawBones(world, rig);
     if (this.tool === "bones") this.drawLinkHandles(world, rig);
     this.drawHandles(world, rig);
-    this.drawDrag(world);
+    this.drawDrag(world, rig);
   },
 
   // The rig as the in-progress drag will commit it: a joint drag replaces the
@@ -1208,7 +1208,8 @@ export const LbsPreview = {
     ctx.restore();
   },
 
-  drawDrag(world) {
+  drawDrag(world, rig = this.dragRig()) {
+    const currentRig = rig || this.rig;
     const ctx = this.ctx;
 
     if (this.drag && this.drag.type === "link") {
@@ -1217,13 +1218,13 @@ export const LbsPreview = {
       // following the pointer itself when no bone is under it. Styled like the
       // create-drag line so a drag in progress reads as pending, not committed.
       const index = this.drag.index;
-      const bone = this.rig.bones[index];
+      const bone = currentRig ? currentRig.bones[index] : null;
       const from = this.project(
         bone ? applyMatrix(world[index], parsePoint(bone.rest.head)) : this.drag.pointer
       );
 
-      const target = this.boneById(this.drag.target);
-      const targetIndex = target ? this.rig.bones.indexOf(target) : -1;
+      const target = this.boneById(this.drag.target, currentRig);
+      const targetIndex = target && currentRig ? currentRig.bones.indexOf(target) : -1;
       const to = this.project(
         targetIndex >= 0
           ? applyMatrix(world[targetIndex], parsePoint(target.rest.tail))
@@ -1266,8 +1267,9 @@ export const LbsPreview = {
     ctx.restore();
   },
 
-  boneById(id) {
-    return this.rig.bones.find((candidate) => candidate.id === id) || null;
+  boneById(id, rig = this.dragRig()) {
+    const currentRig = rig || this.rig;
+    return (currentRig && currentRig.bones.find((candidate) => candidate.id === id)) || null;
   },
 
   // Image coordinates -> overlay canvas coordinates.
@@ -1334,14 +1336,7 @@ export const LbsPreview = {
     const index = rig.bones.findIndex((bone) => bone.id === this.selected);
     if (index < 0) return null;
 
-    const bone = rig.bones[index];
-    const head = applyMatrix(world[index], parsePoint(bone.rest.head));
-    const tail = applyMatrix(world[index], parsePoint(bone.rest.tail));
-    const dx = tail[0] - head[0];
-    const dy = tail[1] - head[1];
-    const length = Math.hypot(dx, dy) || 1;
-    const ux = dx / length;
-    const uy = dy / length;
+    const { head, tail, ux, uy } = this.boneAxis(world, index, rig);
     const offset = HANDLE_OFFSET / this.view.scale;
     const midX = (head[0] + tail[0]) / 2;
     const midY = (head[1] + tail[1]) / 2;
