@@ -43,6 +43,12 @@
 //        "from": {"fx": 0.5, "fy": 0.35},          // fraction of the box, or
 //        "to":   {"x": 640, "y": 500},             // absolute page coords
 //        "steps": 8, "settleMs": 300}},
+//     {"name": "...", "pointerDown": {                            // press & hold
+//        "at": [60, 100], "imgW": 200, "imgH": 200,  // image coords
+//        "settleMs": 300}},
+//     {"name": "...", "pointerMove": {"at": [100, 100],           // drag while
+//        "imgW": 200, "imgH": 200}},                 // the button stays down
+//     {"name": "...", "pointerUp": {"settleMs": 300}},            // release
 //     {"name": "...", "dragImage": {                               // image coords
 //        "from": [100, 50], "to": [140, 70],          // [ix, iy] in the image
 //        "imgW": 200, "imgH": 100,                     // image dimensions
@@ -168,6 +174,30 @@ function resolveUrl(url) {
   return /^https?:\/\//.test(substituted) ? substituted : spec.baseUrl + substituted;
 }
 
+// Map an image point to page coordinates through the live overlay canvas rect,
+// which the hook positions exactly on the scaled still - at the contain-fit AND
+// at any zoom (a zoom only rescales that rectangle). This is the exact inverse
+// of the hook's own toImage at every zoom level, so a drag or a pointer gesture
+// aimed at an image point lands there whatever the current zoom; assuming a
+// contain-fit here would break the zoom proofs.
+async function imageToPage(selector, at, imgW) {
+  return page.evaluate(
+    ({ selector, at, imgW }) => {
+      const canvas = document.querySelector(selector).querySelector(".framer-viewport-overlay");
+      const c = canvas.getBoundingClientRect();
+      const scale = c.width / imgW;
+      return [c.left + at[0] * scale, c.top + at[1] * scale];
+    },
+    { selector, at, imgW }
+  );
+}
+
+// The target of a pointer-gesture step: the image point
+// (`{at: [ix, iy], imgW, imgH}`) mapped through the #viewport letterbox.
+async function gestureTarget(gesture) {
+  return imageToPage("#viewport", gesture.at, gesture.imgW);
+}
+
 function checkExpect(expect, value, label) {
   if (expect === undefined || expect === null) return;
   const [[op, target]] = Object.entries(expect);
@@ -289,38 +319,45 @@ async function runStep(step, index, total) {
     if (drag.settleMs) await page.waitForTimeout(drag.settleMs);
   } else if (step.dragImage) {
     // Drag between two *image* coordinates (not page/fraction coordinates).
-    // The step computes the viewport's letterbox mapping in-page so a scenario
-    // can click a known image point and assert the bone lands exactly there -
-    // the click-precision regression the offset report demands.
+    // The step resolves both endpoints through the viewport's letterbox mapping
+    // so a scenario can click a known image point and assert the bone lands
+    // exactly there - the click-precision regression the offset report demands.
     const drag = step.dragImage;
     const selector = drag.selector || "#viewport";
-    const pts = await page.evaluate(
-      ({ selector, from, to, imgW }) => {
-        // Derive the image->client map from the live overlay canvas rect, which
-        // the hook positions exactly on the scaled still - at the contain-fit
-        // AND at any zoom (a zoom only rescales that rectangle). This is the
-        // exact inverse of the hook's own toImage at every zoom level, so a
-        // drag aimed at an image point lands there whatever the current zoom.
-        // Assuming a contain-fit here would break the zoom proofs.
-        const canvas = document.querySelector(selector).querySelector(".framer-viewport-overlay");
-        const c = canvas.getBoundingClientRect();
-        const scale = c.width / imgW;
-        const toClient = ([ix, iy]) => [c.left + ix * scale, c.top + iy * scale];
-        return { from: toClient(from), to: toClient(to) };
-      },
-      { selector, from: drag.from, to: drag.to, imgW: drag.imgW }
-    );
+    const from = await imageToPage(selector, drag.from, drag.imgW);
+    const to = await imageToPage(selector, drag.to, drag.imgW);
     const steps = drag.steps || 8;
-    await page.mouse.move(pts.from[0], pts.from[1]);
+    await page.mouse.move(from[0], from[1]);
     await page.mouse.down();
     for (let i = 1; i <= steps; i++) {
       await page.mouse.move(
-        pts.from[0] + ((pts.to[0] - pts.from[0]) * i) / steps,
-        pts.from[1] + ((pts.to[1] - pts.from[1]) * i) / steps
+        from[0] + ((to[0] - from[0]) * i) / steps,
+        from[1] + ((to[1] - from[1]) * i) / steps
       );
     }
     await page.mouse.up();
     if (drag.settleMs) await page.waitForTimeout(drag.settleMs);
+  } else if (
+    step.pointerDown !== undefined ||
+    step.pointerMove !== undefined ||
+    step.pointerUp !== undefined
+  ) {
+    // A pointer gesture split across steps: press, move and release are
+    // separate steps so a scenario can screenshot or assert the viewport
+    // *while* the pointer is still down - the only place an in-progress drag
+    // can be observed, since drag/dragImage/dragHandle always end with
+    // mouse.up before the next step runs.
+    const gesture = step.pointerDown || step.pointerMove || step.pointerUp || {};
+
+    if (step.pointerUp !== undefined) {
+      await page.mouse.up();
+    } else {
+      const [x, y] = await gestureTarget(gesture);
+      await page.mouse.move(x, y);
+      if (step.pointerDown !== undefined) await page.mouse.down();
+    }
+
+    if (gesture.settleMs) await page.waitForTimeout(gesture.settleMs);
   } else if (step.dragHandle) {
     // Drag one of the CTA handles (move / rotate) beside the selected bone.
     // The step computes the handle's on-screen centre from the bone's image

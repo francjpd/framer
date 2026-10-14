@@ -86,8 +86,16 @@ path, a frame range and JSON options - exactly the existing Port contract.
     joint to move it; drag the body to translate it; dropping near another
     bone's tip parents to it (chains); drag a link dot onto another bone to
     re-parent it. The move handle translates the bone and the rotate handle
-    moves its tail. Structural edits are pushed to LiveView on pointer-up and
-    persisted.
+    moves its tail. A drag on a placed bone renders live: the bone, its
+    joint, its CTA handles and any parent link are drawn where they will
+    land on every pointer move, like the create drag's rubber band. The
+    drawn bone is also the one that responds: the dropped pose stays on screen
+    until the server's rig event carries that same pose, so a second press
+    between the pointer-up that commits an edit and that event lands on the
+    drawn geometry and its drag on top of that edit, never on the rest the
+    server still has stored, and a burst of edits keeps the last dropped pose
+    drawn until every edit in it has landed. Structural edits are pushed to
+    LiveView on pointer-up and persisted.
   * **Pose tool** - drag a joint to rotate about the bone's rest head, drag the
     body to translate. The move handle translates and the rotate handle rotates
     the pending pose. The pose stays local until **Record keyframe** writes it
@@ -326,7 +334,15 @@ call-to-action handles (the move handle posing rather than mutating rest
 geometry, the rotate handle dragging the tail without a start jump), and
 viewport zoom (the `Ctrl`/`Cmd`+wheel shortcut and the in/out/fit controls
 rescaling the still while a bone placed after a zoom still lands exactly under
-the pointer). It also drives the link handle end to end: dragging one bone's
+the pointer). It also proves a drag renders live: pressing a placed bone's
+joint or body and moving the pointer draws the joint under the pointer before
+the release that commits it, and that pressing the drawn bone inside the
+window that release holds (before the server's rig event lands) hits the drawn
+bone rather than creating one and commits the next edit on top of that one. It
+also proves that window outlives a burst of edits: every acknowledgement the
+server pushes while two edits are in flight is recorded with the pose it drew,
+so the bone can never be drawn back through a pose it had already passed. It
+also drives the link handle end to end: dragging one bone's
 link dot onto another sets the parent on the persisted rig and paints the
 dotted parent link on the overlay canvas, a drag that would cycle the
 hierarchy is refused with the same inline error the dropdown shows, and the
