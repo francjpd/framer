@@ -92,8 +92,9 @@ path, a frame range and JSON options - exactly the existing Port contract.
     drawn bone is also the one that responds: between the pointer-up that
     commits an edit and the server's rig event, a second press lands on the
     drawn geometry and its drag on top of that edit, never on the rest the
-    server still has stored. Structural edits are pushed to LiveView on
-    pointer-up and persisted.
+    server still has stored, and the dropped pose stays drawn until that event
+    lands whatever the next gesture commits. Structural edits are pushed to
+    LiveView on pointer-up and persisted.
   * **Pose tool** - drag a joint to rotate about the bone's rest head, drag the
     body to translate. The move handle translates and the rotate handle rotates
     the pending pose. The pose stays local until **Record keyframe** writes it

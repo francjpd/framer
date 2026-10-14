@@ -115,6 +115,7 @@ export const LbsPreview = {
     this.labelsVisible = this.el.dataset.labels === "true";
     this.overrides = {};
     this.drag = null;
+    this.heldRig = null;
     this.hover = null;
     this.view = null;
     this.zoom = 1; // >= 1; 1 is the contain-fit. Never below fit, never past 1:1.
@@ -357,7 +358,7 @@ export const LbsPreview = {
     }
     this.layerSettingsKey = settingsKey;
 
-    if (this.drag && this.drag.released) this.drag = null;
+    this.heldRig = null;
     this.invalidate();
     this.draw();
   },
@@ -963,22 +964,26 @@ export const LbsPreview = {
   // (bone, joint, handles, parent link, children) re-derives from this rig, so
   // the live overlay is exactly the document `bone_moved`/`bone_translated`
   // commits on pointer-up. The drag renders against the rig it started from
-  // (`drag.base`), never against `this.rig`: inside the held-release window the
-  // next drag starts on top of a pose the previous drag already drew but the
-  // server has not pushed yet, so only the base keeps that earlier edit on
-  // screen (and in the joint seeds) until the push lands, instead of silently
+  // (`drag.base`), never against `this.rig`: inside the held-release window
+  // (`this.heldRig` still holding the previous drag's dropped pose) the next
+  // drag starts on top of a pose the previous drag already drew but the server
+  // has not pushed yet, so only the base keeps that earlier edit on screen
+  // (and in the joint seeds) until the push lands, instead of silently
   // reverting it to the committed rest. Drags that already render live - the
   // create drag's rubber band in `drawDrag`, and pose drags (which retarget the
-  // world through `this.overrides`) - need no rig change and keep `this.rig`.
+  // world through `this.overrides`) - need no rig change of their own, so with
+  // no move/translate drag in flight the dropped pose is what stays on screen
+  // until `setRig` confirms it. `heldRig` is nil whenever no edit is waiting
+  // on the server, so a settled viewport is exactly `this.rig`.
   dragRig() {
     const drag = this.drag;
     if (!this.rig || !drag || (drag.type !== "move" && drag.type !== "translate")) {
-      return this.rig;
+      return this.heldRig || this.rig;
     }
 
     const base = drag.base || this.rig;
     const index = base.bones.findIndex((bone) => bone.id === drag.id);
-    if (index < 0) return this.rig;
+    if (index < 0) return base;
 
     const rest = base.bones[index].rest;
     let head = parsePoint(rest.head);
@@ -1005,10 +1010,11 @@ export const LbsPreview = {
   // will land it on release; reading it for hit-testing and for every drag seed
   // is what makes the drawn geometry the geometry that responds and the geometry
   // that commits - the shared boundary where a press during the held-release
-  // window (drag held until `setRig` confirms the pushed rig) seeds from the
-  // pose already on screen instead of the stale committed rest, so no edit is
-  // silently reverted and nothing falls through to the create path. Outside a
-  // move/translate drag it is simply `this.rig`.
+  // window (the dropped pose held in `heldRig` until `setRig` confirms the
+  // pushed rig) seeds from the pose already on screen instead of the stale
+  // committed rest, so no edit is silently reverted and nothing falls through
+  // to the create path. Outside a move/translate drag it is that held pose,
+  // and `this.rig` once the server has confirmed it.
   interactionWorld() {
     const rig = this.dragRig();
     return { rig, world: evaluateBones(rig, this.frame, this.poses()) };
@@ -1504,7 +1510,7 @@ export const LbsPreview = {
   },
 
   pointerMove(event) {
-    if (!this.drag || this.drag.released) {
+    if (!this.drag) {
       this.updateHover(event);
       return;
     }
@@ -1554,15 +1560,14 @@ export const LbsPreview = {
   },
 
   pointerUp() {
-    if (!this.drag || this.drag.released) return;
+    if (!this.drag) return;
     const drag = this.drag;
     this.setCursor(this.tool === "bones" ? "crosshair" : "default");
 
     if (drag.type === "move" || (drag.type === "translate" && drag.offset)) {
-      drag.released = true;
-    } else {
-      this.drag = null;
+      this.heldRig = this.dragRig();
     }
+    this.drag = null;
 
     if (drag.type === "link") {
       // Dropping on a bone parents the dragged bone onto it; dropping on empty
