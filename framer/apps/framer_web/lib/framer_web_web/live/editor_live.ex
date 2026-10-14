@@ -248,6 +248,20 @@ defmodule FramerWebWeb.EditorLive do
      end)}
   end
 
+  # The viewport's link-handle drag: parent `id` onto the bone it was dropped
+  # on. Same `Rig.set_parent/3` semantics as the dropdown (cycles refused), so
+  # the drag is a shortcut for the precise control, never a second notion of
+  # parenting. The dropped bone becomes the selection so the properties panel
+  # shows the link that was just made.
+  def handle_event("bone_linked", %{"id" => id, "parent" => parent}, socket) when is_binary(id) do
+    {:noreply,
+     socket
+     |> mutate(fn rig -> Rig.set_parent(rig, id, blank_to_nil(parent)) end)
+     |> assign(:selected_bone, id)}
+  end
+
+  def handle_event("bone_linked", _params, socket), do: {:noreply, socket}
+
   def handle_event("set_bone_name", %{"name" => name}, socket) do
     name = if is_binary(name), do: String.trim(name), else: nil
 
@@ -705,7 +719,8 @@ defmodule FramerWebWeb.EditorLive do
         </div>
         <p class="mt-2 opacity-60">
           <span :if={@tool == "bones"}>
-            Drag empty canvas to create a bone, a joint to move it, the body to translate.
+            Drag empty canvas to create a bone, a joint to move it, the body to
+            translate, or a violet link dot onto another bone to parent it.
           </span>
           <span :if={@tool == "pose"}>
             Drag a joint to rotate and the body to translate, then record a keyframe.

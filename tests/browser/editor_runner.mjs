@@ -47,13 +47,17 @@
 //        "from": [100, 50], "to": [140, 70],          // [ix, iy] in the image
 //        "imgW": 200, "imgH": 100,                     // image dimensions
 //        "steps": 8, "settleMs": 300}},
-    //     {"name": "...", "resize": {"width": 1600, "height": 1000}},
-    //     {"name": "...", "wheel": {                                   // wheel event
-    //        "at": {"fx": 0.5, "fy": 0.5},                   // pointer pos, optional
-    //        "deltaY": -100,                                // <0 zoom in, >0 out
-    //        "ctrlKey": true,                               // default true (Cmd/Ctrl+wheel)
-    //        "settleMs": 300}},
-    //     {"name": "...", "screenshot": {"path": "/abs/out.png", "selector": "#viewport"}}
+//     {"name": "...", "dragLink": {                                // link dot
+//        "head": [350, 300], "tail": [450, 300],  // source bone image coords
+//        "to": [200, 300],                       // drop point, image coords
+//        "imgW": 600, "steps": 8, "settleMs": 300}},
+//     {"name": "...", "resize": {"width": 1600, "height": 1000}},
+//     {"name": "...", "wheel": {                                   // wheel event
+//        "at": {"fx": 0.5, "fy": 0.5},                   // pointer pos, optional
+//        "deltaY": -100,                                // <0 zoom in, >0 out
+//        "ctrlKey": true,                               // default true (Cmd/Ctrl+wheel)
+//        "settleMs": 300}},
+//     {"name": "...", "screenshot": {"path": "/abs/out.png", "selector": "#viewport"}}
 //   ]
 // }
 //
@@ -410,6 +414,45 @@ async function runStep(step, index, total) {
       }
     );
     if (w.settleMs) await page.waitForTimeout(w.settleMs);
+  } else if (step.dragLink) {
+    // Drag a bone's link dot (the violet dot behind its head) and drop it on
+    // `to`, an image coordinate on the target bone. Like dragHandle, the step
+    // computes the dot's on-screen centre from the bone's image coordinates and
+    // the live canvas transform, so a scenario drives the exact pointer path
+    // the hook's linkHit/pointerDown logic follows.
+    const dl = step.dragLink;
+    const selector = dl.selector || "#viewport";
+    const pts = await page.evaluate(
+      ({ selector, head, tail, to, imgW }) => {
+        const el = document.querySelector(selector);
+        const canvas = el.querySelector("canvas");
+        const cr = canvas.getBoundingClientRect();
+        const scale = cr.width / imgW;
+        const dxv = tail[0] - head[0];
+        const dyv = tail[1] - head[1];
+        const len = Math.hypot(dxv, dyv) || 1;
+        const ux = dxv / len;
+        const uy = dyv / len;
+        const offset = 16 / scale;
+        const lx = head[0] - ux * offset;
+        const ly = head[1] - uy * offset;
+        const from = [cr.left + lx * scale, cr.top + ly * scale];
+        const drop = [cr.left + to[0] * scale, cr.top + to[1] * scale];
+        return { from, to: drop };
+      },
+      { selector, head: dl.head, tail: dl.tail, to: dl.to, imgW: dl.imgW }
+    );
+    const steps = dl.steps || 8;
+    await page.mouse.move(pts.from[0], pts.from[1]);
+    await page.mouse.down();
+    for (let i = 1; i <= steps; i++) {
+      await page.mouse.move(
+        pts.from[0] + ((pts.to[0] - pts.from[0]) * i) / steps,
+        pts.from[1] + ((pts.to[1] - pts.from[1]) * i) / steps
+      );
+    }
+    await page.mouse.up();
+    if (dl.settleMs) await page.waitForTimeout(dl.settleMs);
   } else if (step.resize) {
     await page.setViewportSize({ width: step.resize.width, height: step.resize.height });
   } else if (step.screenshot) {
