@@ -359,7 +359,6 @@ def op_deform(req: dict[str, Any]) -> dict[str, Any]:
         weights=opts.get("weights"),
         still=opts.get("still"),
         radius_scale=opts.get("radius_scale"),
-        character=opts.get("character"),
     )
 
     if not result.get("success"):
