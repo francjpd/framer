@@ -989,7 +989,7 @@ export const LbsPreview = {
 
     if (this.meshVisible) this.drawMesh(world, rig);
     this.drawBones(world, rig);
-    if (this.tool === "bones") this.drawLinkHandles(world);
+    if (this.tool === "bones") this.drawLinkHandles(world, rig);
     this.drawHandles(world, rig);
     this.drawDrag(world);
   },
@@ -1187,8 +1187,8 @@ export const LbsPreview = {
   // parents this bone onto the one it is dropped on. Drawn for every bone (not
   // just the selection) because any bone can start a link, and only in the
   // Bones tool where structural edits live.
-  drawLinkHandles(world) {
-    const centers = this.linkCenters(world);
+  drawLinkHandles(world, rig = this.dragRig()) {
+    const centers = this.linkCenters(world, rig);
     if (!centers.length) return;
 
     const ctx = this.ctx;
@@ -1313,8 +1313,9 @@ export const LbsPreview = {
   // World-space endpoints and unit direction of one bone - the single source
   // both handle families derive their offsets from, so the move/rotate
   // handles and the link dots are guaranteed to agree on the bone direction.
-  boneAxis(world, index) {
-    const bone = this.rig.bones[index];
+  boneAxis(world, index, rig = this.dragRig()) {
+    const currentRig = rig || this.rig;
+    const bone = currentRig.bones[index];
     const head = applyMatrix(world[index], parsePoint(bone.rest.head));
     const tail = applyMatrix(world[index], parsePoint(bone.rest.tail));
     const dx = tail[0] - head[0];
@@ -1374,22 +1375,23 @@ export const LbsPreview = {
   // Image-coordinate centres of the link dots: one per bone, a LINK_HANDLE_OFFSET
   // standoff behind its head along the reversed bone direction - the "root" side
   // of the joint, where a parent link attaches.
-  linkCenters(world) {
-    if (!this.rig) return [];
+  linkCenters(world, rig = this.dragRig()) {
+    const currentRig = rig || this.rig;
+    if (!currentRig) return [];
     const offset = LINK_HANDLE_OFFSET / this.view.scale;
 
-    return this.rig.bones.map((bone, index) => {
-      const { head, ux, uy } = this.boneAxis(world, index);
+    return currentRig.bones.map((bone, index) => {
+      const { head, ux, uy } = this.boneAxis(world, index, currentRig);
       return { id: bone.id, index, center: [head[0] - ux * offset, head[1] - uy * offset] };
     });
   },
 
-  linkHit(point, world) {
+  linkHit(point, world, rig = this.dragRig()) {
     const threshold = (LINK_HANDLE_RADIUS + 4) / this.view.scale;
     const [x, y] = point;
     let best = null;
 
-    for (const link of this.linkCenters(world)) {
+    for (const link of this.linkCenters(world, rig)) {
       const distance = Math.hypot(x - link.center[0], y - link.center[1]);
       if (distance <= threshold && (!best || distance < best.distance)) {
         best = { type: "link", id: link.id, index: link.index, distance };
@@ -1559,8 +1561,8 @@ export const LbsPreview = {
       // it. The source can never be its own parent, so its own body is not a
       // valid drop target.
       this.drag.pointer = point;
-      const world = evaluateBones(this.rig, this.frame, this.poses());
-      const hit = this.hitTest(point, world);
+      const { rig, world } = this.interactionWorld();
+      const hit = this.hitTest(point, world, rig);
       this.drag.target = hit && hit.id !== this.drag.id ? hit.id : null;
     } else if (this.drag.type === "create") {
       this.drag.tail = snap(point, this.drag.head, event.shiftKey);
