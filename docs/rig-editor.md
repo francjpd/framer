@@ -341,7 +341,8 @@ window that release holds (before the server's rig event lands) hits the drawn
 bone rather than creating one and commits the next edit on top of that one. It
 also proves that window outlives a burst of edits: every acknowledgement the
 server pushes while two edits are in flight is recorded with the pose it drew,
-so the bone can never be drawn back through a pose it had already passed. It also drives the link handle end to end: dragging one bone's
+so the bone can never be drawn back through a pose it had already passed. It
+also drives the link handle end to end: dragging one bone's
 link dot onto another sets the parent on the persisted rig and paints the
 dotted parent link on the overlay canvas, a drag that would cycle the
 hierarchy is refused with the same inline error the dropdown shows, and the
