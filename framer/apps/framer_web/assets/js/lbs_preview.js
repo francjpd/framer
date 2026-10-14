@@ -794,19 +794,18 @@ export const LbsPreview = {
       }
 
       // parent link
-      if (bone.parent) {
-        const parentIndex = this.rig.bones.findIndex((candidate) => candidate.id === bone.parent);
-        if (parentIndex >= 0) {
-          const parent = this.project(applyMatrix(world[parentIndex], parsePoint(this.rig.bones[parentIndex].rest.tail)));
-          ctx.strokeStyle = "rgba(148, 163, 184, 0.6)";
-          ctx.lineWidth = 1;
-          ctx.setLineDash([3, 3]);
-          ctx.beginPath();
-          ctx.moveTo(parent[0], parent[1]);
-          ctx.lineTo(head[0], head[1]);
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
+      const parentBone = bone.parent ? this.boneById(bone.parent) : null;
+      if (parentBone) {
+        const parentIndex = this.rig.bones.indexOf(parentBone);
+        const parent = this.project(applyMatrix(world[parentIndex], parsePoint(parentBone.rest.tail)));
+        ctx.strokeStyle = "rgba(148, 163, 184, 0.6)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(parent[0], parent[1]);
+        ctx.lineTo(head[0], head[1]);
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
     });
 
@@ -977,6 +976,19 @@ export const LbsPreview = {
     return best;
   },
 
+  // World-space endpoints and unit direction of one bone - the single source
+  // both handle families derive their offsets from, so the move/rotate
+  // handles and the link dots are guaranteed to agree on the bone direction.
+  boneAxis(world, index) {
+    const bone = this.rig.bones[index];
+    const head = applyMatrix(world[index], parsePoint(bone.rest.head));
+    const tail = applyMatrix(world[index], parsePoint(bone.rest.tail));
+    const dx = tail[0] - head[0];
+    const dy = tail[1] - head[1];
+    const length = Math.hypot(dx, dy) || 1;
+    return { head, tail, ux: dx / length, uy: dy / length };
+  },
+
   // Image-coordinate centres of the two call-to-action handles on the selected
   // bone: a move handle beside the midpoint and a rotate handle just beyond the
   // tail. They are affordances only - dragging them drives the existing
@@ -987,14 +999,7 @@ export const LbsPreview = {
     const index = this.rig.bones.findIndex((bone) => bone.id === this.selected);
     if (index < 0) return null;
 
-    const bone = this.rig.bones[index];
-    const head = applyMatrix(world[index], parsePoint(bone.rest.head));
-    const tail = applyMatrix(world[index], parsePoint(bone.rest.tail));
-    const dx = tail[0] - head[0];
-    const dy = tail[1] - head[1];
-    const length = Math.hypot(dx, dy) || 1;
-    const ux = dx / length;
-    const uy = dy / length;
+    const { head, tail, ux, uy } = this.boneAxis(world, index);
     const offset = HANDLE_OFFSET / this.view.scale;
     const midX = (head[0] + tail[0]) / 2;
     const midY = (head[1] + tail[1]) / 2;
@@ -1030,13 +1035,7 @@ export const LbsPreview = {
     const offset = LINK_HANDLE_OFFSET / this.view.scale;
 
     return this.rig.bones.map((bone, index) => {
-      const head = applyMatrix(world[index], parsePoint(bone.rest.head));
-      const tail = applyMatrix(world[index], parsePoint(bone.rest.tail));
-      const dx = tail[0] - head[0];
-      const dy = tail[1] - head[1];
-      const length = Math.hypot(dx, dy) || 1;
-      const ux = dx / length;
-      const uy = dy / length;
+      const { head, ux, uy } = this.boneAxis(world, index);
       return { id: bone.id, index, center: [head[0] - ux * offset, head[1] - uy * offset] };
     });
   },
@@ -1044,13 +1043,15 @@ export const LbsPreview = {
   linkHit(point, world) {
     const threshold = (LINK_HANDLE_RADIUS + 4) / this.view.scale;
     const [x, y] = point;
+    let best = null;
 
     for (const link of this.linkCenters(world)) {
-      if (Math.hypot(x - link.center[0], y - link.center[1]) <= threshold) {
-        return { type: "link", id: link.id, index: link.index };
+      const distance = Math.hypot(x - link.center[0], y - link.center[1]);
+      if (distance <= threshold && (!best || distance < best.distance)) {
+        best = { type: "link", id: link.id, index: link.index, distance };
       }
     }
-    return null;
+    return best;
   },
 
   // Reflect what is under the cursor: a grab cursor over a handle or the bone
@@ -1075,12 +1076,14 @@ export const LbsPreview = {
       return;
     }
 
-    if (this.tool === "bones" && this.linkHit(point, world)) {
+    const link = this.tool === "bones" ? this.linkHit(point, world) : null;
+    const hit = this.hitTest(point, world);
+
+    if (link && (!hit || link.distance < hit.distance)) {
       this.setCursor("alias");
       return;
     }
 
-    const hit = this.hitTest(point, world);
     if (hit) {
       this.setCursor(hit.kind === "body" ? "grab" : "pointer");
       return;
@@ -1146,10 +1149,14 @@ export const LbsPreview = {
     // The link dot: dragged from a bone's root-side dot onto another bone to
     // parent it (the drag shortcut for the parent dropdown). The drop target
     // is resolved live in pointerMove and committed - through the same
-    // set_parent semantics - on pointer-up.
+    // set_parent semantics - on pointer-up. The nearest affordance wins: the
+    // dot claims the grab only when no nearer bone body or joint exists, so a
+    // dot drawn over another bone's barrel never steals that bone's grab.
+    const hit = this.hitTest(point, world);
+
     if (this.tool === "bones") {
       const link = this.linkHit(point, world);
-      if (link) {
+      if (link && (!hit || link.distance < hit.distance)) {
         this.selectBone(link.id);
         this.drag = { type: "link", id: link.id, index: link.index, pointer: point, target: null };
         this.setCursor("grabbing");
@@ -1157,8 +1164,6 @@ export const LbsPreview = {
         return;
       }
     }
-
-    const hit = this.hitTest(point, world);
 
     if (this.tool === "pose") {
       if (hit) {

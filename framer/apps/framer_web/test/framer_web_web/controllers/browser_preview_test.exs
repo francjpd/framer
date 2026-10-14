@@ -1318,6 +1318,90 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     assert run_scenario(spec, root) == :ok
   end
 
+  # The chain case for the nearest-affordance-wins invariant: b1's head sits on
+  # b0's tail, so b1's link dot is drawn directly over b0's barrel. A grab
+  # there must move/select b0 (the nearer bone body) instead of starting a
+  # link, and a mis-grab released over a third bone must leave b1's persisted
+  # parent unchanged - the silent re-parent an absolute-priority link hit
+  # caused.
+  test "bones tool: a grab on a link dot over a bone body moves that bone", %{root: root} do
+    shots = Path.join(root, "link_chain")
+    File.mkdir_p!(shots)
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps:
+        two_bone_steps("browser-link-chain", [150, 300], [250, 300], [350, 300], [450, 300]) ++
+          [
+            %{
+              name: "parent b1 onto b0 with its link dot (chain setup)",
+              dragLink: %{
+                head: [350, 300],
+                tail: [450, 300],
+                to: [200, 300],
+                imgW: 600,
+                settleMs: 500
+              }
+            },
+            %{
+              name: "b1 is parented to b0 before the chain forms",
+              evaluate:
+                "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; return rig.bones[1].parent; }",
+              expect: %{eq: "b0"}
+            },
+            %{
+              name: "slide b1's head onto b0's tail so its link dot lands on b0's barrel",
+              dragImage: %{from: [350, 300], to: [250, 300], imgW: 600, imgH: 600, settleMs: 500}
+            },
+            %{
+              name: "draw b3 as the mis-grab drop target",
+              dragImage: %{from: [150, 450], to: [250, 450], imgW: 600, imgH: 600, settleMs: 300}
+            },
+            %{
+              name: "b3 reaches the editor hierarchy",
+              waitForFunction:
+                "() => document.querySelectorAll('button[phx-click=\"select_bone\"]').length >= 3"
+            },
+            %{
+              name: "grab b1's link dot (over b0's barrel) and release it over b3",
+              dragLink: %{
+                head: [250, 300],
+                tail: [450, 300],
+                to: [200, 450],
+                imgW: 600,
+                settleMs: 500
+              }
+            },
+            %{
+              name: "the grab selected b0, the nearer bone body",
+              waitForFunction:
+                "() => document.querySelector('#viewport').dataset.selected === 'b0'"
+            },
+            %{
+              name: "the mis-grab left b1's persisted parent unchanged",
+              evaluate:
+                "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; return rig.bones[1].parent; }",
+              expect: %{eq: "b0"}
+            },
+            %{
+              name: "b0's body moved with the mis-grab instead of a link starting",
+              evaluate:
+                "async () => { const vp = document.querySelector('#viewport'); const id = vp.dataset.sourceUrl.split('/')[3]; const j = await (await fetch('/api/rigs/' + id)).json(); const rig = j.rig || j; return Math.abs(rig.bones[0].rest.tail[1] - 450); }",
+              expect: %{lt: 2}
+            },
+            %{
+              name: "zero page errors",
+              evaluate: "() => window.__framerErrors.length",
+              expect: %{eq: 0}
+            }
+          ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+  end
+
   # Counts the slate parent-link pixels the overlay canvas paints inside an
   # image-coordinate band. The link line is the only slate element in the
   # overlay (bones are sky, joints ivory, handles amber, link dots violet, mesh
