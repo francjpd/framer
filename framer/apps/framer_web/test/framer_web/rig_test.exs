@@ -519,6 +519,65 @@ defmodule FramerWeb.RigTest do
         assert message =~ "rig.layers.character must stay within the project directory"
       end
     end
+
+    test "background_layer and has_background_layer? report default and explicit state" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      refute Rig.has_background_layer?(rig)
+      assert Rig.background_layer(rig) == nil
+
+      split = Rig.enable_split(rig)
+      assert Rig.has_background_layer?(split)
+      assert Rig.background_layer(split) == Rig.plate_filename()
+
+      custom = Rig.set_background_layer(split, "backdrop.png")
+      assert Rig.has_background_layer?(custom)
+      assert Rig.background_layer(custom) == "backdrop.png"
+
+      removed = Rig.remove_layer(split, :background)
+      refute Rig.has_background_layer?(removed)
+      assert Rig.background_layer(removed) == nil
+
+      restored = Rig.keep_layer(removed, :background)
+      assert Rig.has_background_layer?(restored)
+      assert Rig.background_layer(restored) == Rig.plate_filename()
+    end
+
+    test "remove_layer and keep_layer manage character layer" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+      split = Rig.enable_split(rig)
+
+      assert Rig.has_character_layer?(split)
+      assert Rig.character_layer(split) == Rig.layer_filename()
+
+      removed = Rig.remove_layer(split, :character)
+      refute Rig.has_character_layer?(removed)
+      assert Rig.character_layer(removed) == nil
+
+      restored = Rig.keep_layer(removed, :character)
+      assert Rig.has_character_layer?(restored)
+      assert Rig.character_layer(restored) == Rig.layer_filename()
+    end
+
+    test "rejects an invalid background declaration or escaping path" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      assert {:error, message} =
+               Rig.validate(put_in(rig, ["layers"], %{"split" => true, "background" => 123}),
+                 project_dir: "/tmp/project"
+               )
+
+      assert message =~ "rig.layers.background must be a non-empty string or false"
+
+      for path <- ["/etc/bg.png", "../bg.png"] do
+        escaping = put_in(rig, ["layers"], %{"split" => true, "background" => path})
+
+        assert {:error, message} =
+                 Rig.validate(escaping, project_dir: "/tmp/project")
+
+        assert message =~ "rig.layers.background must stay within the project directory"
+      end
+    end
   end
 
   describe "geometry helpers" do

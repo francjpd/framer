@@ -299,6 +299,59 @@ defmodule FramerWebWeb.RigE2ETest do
     assert byte_size(output) > 0
   end
 
+  test "removing the background layer leaves only the character with transparent background in render and export",
+       %{conn: conn} do
+    id = upload_keyable_still(conn)
+    {:ok, rig} = RigStore.load(id)
+
+    {rig, _bone} = Rig.add_bone(rig, [16, 48], [16, 32], radius: 64)
+
+    rig =
+      rig
+      |> Map.put("duration", %{"fps" => @fps, "frames" => @frames})
+      |> Rig.record_keyframe(0, %{"b0" => %{"rot" => 0.0, "tx" => 0, "ty" => 0}})
+      |> Rig.record_keyframe(@frames - 1, %{"b0" => %{"rot" => 0.0, "tx" => 20, "ty" => 0}})
+      |> Rig.auto_bind()
+      |> Rig.enable_split(tolerance: 40, soft_edges: 0, edge_cleanup: 0)
+
+    assert {:ok, saved} = RigStore.save(rig)
+    assert {:ok, layer_path} = Renderer.split_character(saved)
+
+    no_bg =
+      saved
+      |> Rig.set_character_layer(Path.basename(layer_path))
+      |> Rig.remove_layer("background")
+
+    assert {:ok, _recorded} = RigStore.save(no_bg)
+    assert {:ok, reloaded} = RigStore.load(id)
+    assert FramerWeb.Rig.split?(reloaded)
+    assert FramerWeb.Rig.has_character_layer?(reloaded)
+    refute FramerWeb.Rig.has_background_layer?(reloaded)
+
+    # 1. Render frame: background region must be fully transparent (alpha 0)
+    rendered = conn |> post(~p"/api/rigs/#{id}/render", %{"frame" => 0}) |> response(200)
+    assert <<0x89, "PNG", _::binary>> = rendered
+    rendered_pixels = decode_png(rendered)
+
+    # Check background pixel outside character has alpha = 0
+    assert alpha_at(rendered_pixels, 10, 10) == 0
+    # Check character pixel has alpha = 255
+    assert alpha_at(rendered_pixels, 16, 40) == 255
+
+    # 2. Export webm: background must also be transparent in the VP9 video
+    export = conn |> post(~p"/api/rigs/#{id}/export", %{"format" => "webm"}) |> json_response(202)
+    state = await_job(export["job_id"])
+    assert state.job.status == :completed
+    assert state.failed_chunks == []
+
+    output = await_result(conn, id)
+    assert byte_size(output) > 0
+
+    assert {:ok, first} = decode_frame(Path.join(RigStore.project_dir(id), "output.webm"), 0)
+    assert alpha_at(first, 10, 10) == 0
+    assert alpha_at(first, 16, 40) == 255
+  end
+
   # --- layered helpers ---
 
   # Rows of the still no part of the character reaches, so they are pure

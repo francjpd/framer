@@ -18,6 +18,7 @@ operation for the final render and export.
 │ Hierarchy    │                                                 │
 │ Properties   │                                                 │
 │ Bind         │                                                 │
+│ Layers       │                                                 │
 ├──────────────┴────────────────────────────────────────────────┤
 │ timeline: ruler · transport · keyframe rows · value/velocity  │
 │ graph · render/export                                          │
@@ -49,10 +50,11 @@ path, a frame range and JSON options - exactly the existing Port contract.
     the radius when the bone is created; the slider then adjusts it.
   * **Bind** - the global bind **power** / **radius scale** and `Auto-bind
     mesh`, which rebuilds the control mesh and per-vertex weights.
-  * **Layers** - the character/background split: **Extract the character**
-    keys the background out of the still and from then on only the character
-    layer is deformed, plus a **Background tolerance** slider for the key and a
-    **Remove the character layer** button to go back to one still. See
+  * **Layers panel** - lists the project's layers (source still, character layer,
+    and background layer) with their active state and file paths. Each layer provides
+    actions to **Keep**, **Remove**, or **Change** (upload replacement image). Removing
+    the background layer drops the background entirely, leaving only the character
+    layer rendered and exported with transparency (the no-background outcome). See
     [Character and background layers](#character-and-background-layers).
 * **Centre viewport.** A `phx-hook="LbsPreview"` element with a small toolbar:
   **Mesh** (toggle the wireframe), **Labels** (toggle bone names), a **zoom**
@@ -201,16 +203,26 @@ carries none of the background:
   `background.png` beside the cut-out, and never resampled, so it is identical
   in every frame.
 
+### Layers panel and per-layer actions
+
+The Layers panel (`#layers-panel`) lists every layer belonging to the project:
+1. **Source still** (`#layer-row-source`) - the original uploaded image. Can be replaced with **Change** to point the rig at an updated source.
+2. **Character layer** (`#layer-row-character`) - the segmented character cut-out. Shows whether it is extracted, kept, or removed. Can be removed, restored with **Keep**, or replaced with **Change**.
+3. **Background layer** (`#layer-row-background`) - the background plate. Can be removed, restored with **Keep**, or replaced with **Change**. On an unsplit rig, clicking **Remove** on the background layer extracts the character and drops the background in a single step.
+
+**No-background outcome**: When the background layer is removed (`layers.background: false`), the deformed character layer renders alone against a transparent background. The viewport preview, frame render, and video export (WebM with alpha) all reflect this transparent outcome.
+
 ### Fill of a vacated region
 
-The two layers are recomposited with a plain source-over (the character over the
+When the background layer is kept, the two layers are recomposited with a plain source-over (the character over the
 plate), so an opaque character pixel wins outright wherever it moves - including
 over background it did not occupy at rest, where no blending happens. Where the
 character moves away from, the plate shows through: the vacated region is never
 transparent and never the character's original pixels, it is the reconstructed
-background. Because the plate is opaque, a split rig's frames are opaque too, so
+background. Because the plate is opaque when kept, a split rig's frames are opaque too, so
 an MP4 export encodes that region as the reconstructed background rather than
-flattening a hole to black.
+flattening a hole to black (when the background layer is removed, the frames carry
+transparency and export to an alpha-capable format such as WebM).
 
 ### Limits of the split
 
@@ -237,9 +249,9 @@ default `apps/framer_web/priv/projects`):
 
 ```
 <root>/<rig-id>/
-  source.png      # uploaded still
-  character.png   # the materialised character layer, once the rig is split
-  background.png  # the materialised background plate, once the rig is split
+  source.png      # uploaded still (or source_replaced.<ext> when changed)
+  character.png   # the materialised character layer, once split (or character_replaced.<ext>)
+  background.png  # the materialised background plate, once split (or background_replaced.<ext>)
   rig.json        # framer.rig v1 - the engine-facing contract
   output.webm     # merged export, once rendered
 ```

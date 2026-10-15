@@ -757,7 +757,9 @@ defmodule FramerWebWeb.EditorLiveTest do
 
     test "set_layer_tolerance with no rig returns error and does not crash", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/editor")
-      assert render_change(view, "set_layer_tolerance", %{"tolerance" => "40"}) =~ "Load a rig first"
+
+      assert render_change(view, "set_layer_tolerance", %{"tolerance" => "40"}) =~
+               "Load a rig first"
     end
 
     test "changing tolerance on a split rig preserves declared layer settings", %{conn: conn} do
@@ -775,6 +777,136 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert get_in(saved, ["layers", "tolerance"]) == 45
       assert get_in(saved, ["layers", "soft_edges"]) == 8
       assert get_in(saved, ["layers", "edge_cleanup"]) == 2
+    end
+  end
+
+  describe "layers panel and per-layer actions" do
+    test "panel lists project layers (source still, character, background)", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      assert has_element?(view, "#layers-panel")
+      assert has_element?(view, "#project-layers-list")
+      assert has_element?(view, "#layer-row-source")
+      assert has_element?(view, "#layer-row-character")
+      assert has_element?(view, "#layer-row-background")
+
+      assert render(view) =~ "Source still"
+      assert render(view) =~ "Character layer"
+      assert render(view) =~ "Background layer"
+    end
+
+    test "removing the background layer leaves character alone (no-background outcome)", %{
+      conn: conn
+    } do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      # First extract character
+      render_click(view, "toggle_background_layer", %{})
+      assert has_element?(view, "#viewport[data-character-url]")
+      assert has_element?(view, "#viewport[data-background-url]")
+
+      # Now remove the background
+      render_click(view, "remove_layer", %{"layer" => "background"})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.has_character_layer?(saved)
+      refute FramerWeb.Rig.has_background_layer?(saved)
+      assert get_in(saved, ["layers", "background"]) == false
+
+      # Viewport reflects no background: character URL present, background URL gone
+      assert has_element?(view, "#viewport[data-character-url]")
+      refute has_element?(view, "#viewport[data-background-url]")
+
+      # Row displays removed badge and keep button
+      assert has_element?(view, "#keep-background-btn")
+      refute has_element?(view, "#remove-background-btn")
+
+      # Restoring / keeping the background puts it back
+      render_click(view, "keep_layer", %{"layer" => "background"})
+      {:ok, restored} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.has_background_layer?(restored)
+      assert has_element?(view, "#viewport[data-background-url]")
+    end
+
+    test "one-click background removal on unsplit rig extracts character and removes background",
+         %{
+           conn: conn
+         } do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      # On unsplit rig, remove background directly
+      render_click(view, "remove_background_initial", %{})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.split?(saved)
+      assert FramerWeb.Rig.has_character_layer?(saved)
+      refute FramerWeb.Rig.has_background_layer?(saved)
+
+      assert has_element?(view, "#viewport[data-character-url]")
+      refute has_element?(view, "#viewport[data-background-url]")
+      assert has_element?(view, "#keep-background-btn")
+    end
+
+    test "removing and keeping the character layer", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      assert has_element?(view, "#viewport[data-character-url]")
+
+      # Remove character
+      render_click(view, "remove_layer", %{"layer" => "character"})
+      {:ok, saved} = RigStore.load(rig["id"])
+      refute FramerWeb.Rig.has_character_layer?(saved)
+      refute has_element?(view, "#viewport[data-character-url]")
+      assert has_element?(view, "#keep-character-btn")
+
+      # Keep character
+      render_click(view, "keep_layer", %{"layer" => "character"})
+      {:ok, restored} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.has_character_layer?(restored)
+      assert has_element?(view, "#viewport[data-character-url]")
+    end
+
+    test "replacing character and background layers via upload", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # Replace character
+      char_upload =
+        file_input(view, "#replace-layer-character-form", :replace_character, [
+          %{name: "custom_hero.png", content: Fixtures.png(16, 16), type: "image/png"}
+        ])
+
+      render_upload(char_upload, "custom_hero.png")
+      view |> form("#replace-layer-character-form") |> render_submit()
+
+      {:ok, after_char} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.character_layer(after_char) =~ "character_replaced"
+      assert File.exists?(RigStore.character_layer_path(rig["id"]))
+
+      # Replace background
+      bg_upload =
+        file_input(view, "#replace-layer-background-form", :replace_background, [
+          %{name: "custom_bg.png", content: Fixtures.png(16, 16), type: "image/png"}
+        ])
+
+      render_upload(bg_upload, "custom_bg.png")
+      view |> form("#replace-layer-background-form") |> render_submit()
+
+      {:ok, after_bg} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.background_layer(after_bg) =~ "background_replaced"
+      assert File.exists?(RigStore.plate_path(rig["id"]))
     end
   end
 end

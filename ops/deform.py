@@ -86,8 +86,9 @@ def deform_video(
     path and the golden-image test path.
 
     A rig document that declares ``layers.split`` renders split: the character
-    layer is deformed and the untouched background plate is composited under it,
-    so the background is identical in every frame.
+    layer is deformed and the untouched background plate is composited under it
+    when present (or omitted when the background layer is removed, rendering
+    with transparency).
     """
     try:
         rig_document = _resolve_rig(rig)

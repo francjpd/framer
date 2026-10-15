@@ -391,8 +391,50 @@ defmodule FramerWeb.Rig do
   @doc "The character-layer path the rig document declares, or `nil`."
   def character_layer(rig) do
     case layers(rig)["character"] do
+      false -> nil
       path when is_binary(path) and path != "" -> path
       _ -> nil
+    end
+  end
+
+  @doc "The background-layer path the rig document declares, or `nil`."
+  def background_layer(rig) do
+    if split?(rig) do
+      case Map.get(layers(rig), "background", :default) do
+        false -> nil
+        nil -> nil
+        path when is_binary(path) and path != "" -> path
+        :default -> @plate_filename
+        _ -> nil
+      end
+    else
+      nil
+    end
+  end
+
+  @doc "Whether the layered rig includes the character layer."
+  def has_character_layer?(rig) do
+    if split?(rig) do
+      case Map.get(layers(rig), "character", :default) do
+        false -> false
+        nil -> false
+        _ -> true
+      end
+    else
+      false
+    end
+  end
+
+  @doc "Whether the layered rig includes the background layer."
+  def has_background_layer?(rig) do
+    if split?(rig) do
+      case Map.get(layers(rig), "background", :default) do
+        false -> false
+        nil -> false
+        _ -> true
+      end
+    else
+      false
     end
   end
 
@@ -406,6 +448,12 @@ defmodule FramerWeb.Rig do
       "edge_cleanup" => Keyword.get(opts, :edge_cleanup, @default_edge_cleanup),
       "auto_ranges" => Keyword.get(opts, :auto_ranges, true)
     }
+
+    layers =
+      case Keyword.fetch(opts, :background) do
+        {:ok, bg} -> Map.put(layers, "background", bg)
+        :error -> layers
+      end
 
     Map.put(rig, @layers_key, layers)
   end
@@ -439,6 +487,59 @@ defmodule FramerWeb.Rig do
     end
   end
 
+  @doc "Record the background-layer path for a split rig."
+  def set_background_layer(rig, path) when is_binary(path) and path != "" do
+    if split?(rig) do
+      Map.update!(rig, @layers_key, &Map.put(&1, "background", path))
+    else
+      rig
+    end
+  end
+
+  @doc "Remove a layer from the rig (:character or :background)."
+  def remove_layer(rig, :background), do: remove_layer(rig, "background")
+
+  def remove_layer(rig, "background") do
+    rig = if split?(rig), do: rig, else: enable_split(rig)
+    Map.update!(rig, @layers_key, &Map.put(&1, "background", false))
+  end
+
+  def remove_layer(rig, :character), do: remove_layer(rig, "character")
+
+  def remove_layer(rig, "character") do
+    rig = if split?(rig), do: rig, else: enable_split(rig)
+    Map.update!(rig, @layers_key, &Map.put(&1, "character", false))
+  end
+
+  @doc "Keep / restore a layer in the rig (:character or :background)."
+  def keep_layer(rig, :background), do: keep_layer(rig, "background")
+
+  def keep_layer(rig, "background") do
+    rig = if split?(rig), do: rig, else: enable_split(rig)
+
+    case get_in(rig, [@layers_key, "background"]) do
+      val when val in [false, nil] ->
+        Map.update!(rig, @layers_key, &Map.put(&1, "background", @plate_filename))
+
+      _ ->
+        rig
+    end
+  end
+
+  def keep_layer(rig, :character), do: keep_layer(rig, "character")
+
+  def keep_layer(rig, "character") do
+    rig = if split?(rig), do: rig, else: enable_split(rig)
+
+    case get_in(rig, [@layers_key, "character"]) do
+      val when val in [false, nil] ->
+        Map.update!(rig, @layers_key, &Map.put(&1, "character", @layer_filename))
+
+      _ ->
+        rig
+    end
+  end
+
   @doc "Turn the layer split off, returning the rig to a single-picture document."
   def clear_layers(rig), do: Map.delete(rig, @layers_key)
 
@@ -454,8 +555,10 @@ defmodule FramerWeb.Rig do
   defp validate_layers(rig, nil), do: validate_layers_shape(rig)
 
   defp validate_layers(rig, project_dir) do
-    with {:ok, _} <- validate_layers_shape(rig) do
-      validate_character_layer(rig, project_dir)
+    with {:ok, _} <- validate_layers_shape(rig),
+         {:ok, _} <- validate_character_layer(rig, project_dir),
+         {:ok, _} <- validate_background_layer(rig, project_dir) do
+      {:ok, rig}
     end
   end
 
@@ -473,7 +576,10 @@ defmodule FramerWeb.Rig do
             {:error, "rig.layers.split must be a boolean"}
 
           not valid_character_declaration?(layers["character"]) ->
-            {:error, "rig.layers.character must be a non-empty string"}
+            {:error, "rig.layers.character must be a non-empty string or false"}
+
+          not valid_background_declaration?(layers["background"]) ->
+            {:error, "rig.layers.background must be a non-empty string or false"}
 
           not Enum.all?(@layer_settings, &valid_layer_setting?(layers, &1)) ->
             {:error, "rig.layers settings must be a plain JSON value"}
@@ -485,7 +591,12 @@ defmodule FramerWeb.Rig do
   end
 
   defp valid_character_declaration?(nil), do: true
+  defp valid_character_declaration?(false), do: true
   defp valid_character_declaration?(value), do: is_binary(value) and value != ""
+
+  defp valid_background_declaration?(nil), do: true
+  defp valid_background_declaration?(false), do: true
+  defp valid_background_declaration?(value), do: is_binary(value) and value != ""
 
   # Every mask setting must hold the JSON type the engine's validator expects:
   # integers for the numeric keys, booleans for the flags, and a [B, G, R]
@@ -528,6 +639,22 @@ defmodule FramerWeb.Rig do
 
           {:error, :escaping_path} ->
             {:error, "rig.layers.character must stay within the project directory"}
+        end
+    end
+  end
+
+  defp validate_background_layer(rig, project_dir) do
+    case background_layer(rig) do
+      nil ->
+        {:ok, nil}
+
+      path ->
+        case confine_to_project(path, project_dir) do
+          {:ok, _} ->
+            {:ok, nil}
+
+          {:error, :escaping_path} ->
+            {:error, "rig.layers.background must stay within the project directory"}
         end
     end
   end

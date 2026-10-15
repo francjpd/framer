@@ -42,13 +42,22 @@ defmodule FramerWeb.RigStore do
 
   The engine writes this when a split rig first renders; it is the cut-out the
   rig deforms. The path is the one the rig document declares, falling back to
-  the default name.
+  the default name. Returns `nil` when the layer is removed (`false`) or does
+  not exist.
   """
   def character_layer_path(id) do
-    with :ok <- validate_id(id),
-         {:ok, rig} <- load(id) do
-      path = character_layer_for(rig, id)
-      if File.exists?(path), do: path
+    with :ok <- validate_id(id) do
+      case load(id) do
+        {:ok, rig} ->
+          if get_in(rig, ["layers", "character"]) != false do
+            path = character_layer_for(rig, id)
+            if File.exists?(path), do: path
+          end
+
+        {:error, _} ->
+          path = Path.join(project_dir(id), Rig.layer_filename())
+          if File.exists?(path), do: path
+      end
     else
       _ -> nil
     end
@@ -61,14 +70,90 @@ defmodule FramerWeb.RigStore do
   the still whose character area is reconstructed from the surrounding
   background, so the layer the rig never warps covers every pixel. The character
   layer is composited over it with a plain source-over, which is what the
-  editor's preview fetches to agree with the export.
+  editor's preview fetches to agree with the export. Returns `nil` when the layer
+  is removed (`false`) or does not exist.
   """
   def plate_path(id) do
     with :ok <- validate_id(id) do
-      path = Path.join(project_dir(id), Rig.plate_filename())
-      if File.exists?(path), do: path
+      case load(id) do
+        {:ok, rig} ->
+          if get_in(rig, ["layers", "background"]) != false do
+            bg = Rig.background_layer(rig) || Rig.plate_filename()
+            path = Path.join(project_dir(id), bg)
+            if File.exists?(path), do: path
+          end
+
+        {:error, _} ->
+          path = Path.join(project_dir(id), Rig.plate_filename())
+          if File.exists?(path), do: path
+      end
     else
       _ -> nil
+    end
+  end
+
+  @doc "Replace a project's layer (:source, :character, or :background) with a new image."
+  def replace_layer(id, :source, binary, filename),
+    do: replace_layer(id, "source", binary, filename)
+
+  def replace_layer(id, :character, binary, filename),
+    do: replace_layer(id, "character", binary, filename)
+
+  def replace_layer(id, :background, binary, filename),
+    do: replace_layer(id, "background", binary, filename)
+
+  def replace_layer(id, "source", binary, filename) when is_binary(binary) do
+    with :ok <- validate_id(id),
+         {:ok, info} <- ImageInfo.read(binary),
+         {:ok, rig} <- load(id) do
+      ext = extension(filename, binary, info.format)
+      dest_name = "source_replaced.#{ext}"
+      dest_path = Path.join(project_dir(id), dest_name)
+      File.write!(dest_path, binary)
+
+      rig =
+        rig
+        |> put_in(["source", "path"], dest_name)
+        |> put_in(["canvas", "width"], info.width)
+        |> put_in(["canvas", "height"], info.height)
+
+      save(rig)
+    end
+  end
+
+  def replace_layer(id, "character", binary, filename) when is_binary(binary) do
+    with :ok <- validate_id(id),
+         {:ok, info} <- ImageInfo.read(binary),
+         {:ok, rig} <- load(id) do
+      ext = extension(filename, binary, info.format)
+      dest_name = "character_replaced.#{ext}"
+      dest_path = Path.join(project_dir(id), dest_name)
+      File.write!(dest_path, binary)
+
+      rig =
+        rig
+        |> then(fn r -> if Rig.split?(r), do: r, else: Rig.enable_split(r) end)
+        |> Rig.set_character_layer(dest_name)
+
+      save(rig)
+    end
+  end
+
+  def replace_layer(id, "background", binary, filename) when is_binary(binary) do
+    with :ok <- validate_id(id),
+         {:ok, info} <- ImageInfo.read(binary),
+         {:ok, rig} <- load(id) do
+      ext = extension(filename, binary, info.format)
+      dest_name = "background_replaced.#{ext}"
+      dest_path = Path.join(project_dir(id), dest_name)
+      File.write!(dest_path, binary)
+
+      rig =
+        rig
+        |> then(fn r -> if Rig.split?(r), do: r, else: Rig.enable_split(r) end)
+        |> Rig.set_background_layer(dest_name)
+
+      save(rig)
     end
   end
 

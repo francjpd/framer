@@ -216,4 +216,59 @@ defmodule FramerWeb.RigStoreTest do
     assert RigStore.load(cleared["id"]) == {:ok, cleared}
     refute Rig.split?(elem(RigStore.load(cleared["id"]), 1))
   end
+
+  test "character_layer_path and plate_path respect layer removal in rig document" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+    dir = RigStore.project_dir(id)
+
+    char_file = Path.join(dir, Rig.layer_filename())
+    plate_file = Path.join(dir, Rig.plate_filename())
+    File.write!(char_file, "cutout")
+    File.write!(plate_file, "plate")
+
+    # Before removal, both paths exist
+    assert RigStore.character_layer_path(id) == char_file
+    assert RigStore.plate_path(id) == plate_file
+
+    # Remove background
+    removed_bg = rig |> Rig.enable_split() |> Rig.remove_layer("background")
+    assert {:ok, _} = RigStore.save(removed_bg)
+    assert RigStore.plate_path(id) == nil
+    assert RigStore.character_layer_path(id) == char_file
+
+    # Remove character
+    removed_char = removed_bg |> Rig.remove_layer("character")
+    assert {:ok, _} = RigStore.save(removed_char)
+    assert RigStore.character_layer_path(id) == nil
+    assert RigStore.plate_path(id) == nil
+
+    # Keep background again
+    kept_bg = Rig.keep_layer(removed_char, "background")
+    assert {:ok, _} = RigStore.save(kept_bg)
+    assert RigStore.plate_path(id) == plate_file
+  end
+
+  test "replace_layer updates source, character, and background layers" do
+    {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+    id = rig["id"]
+
+    new_img = Fixtures.png(16, 16)
+
+    # Replace character
+    assert {:ok, updated_char} = RigStore.replace_layer(id, :character, new_img, "new_char.png")
+    assert Rig.has_character_layer?(updated_char)
+    assert Rig.character_layer(updated_char) == "character_replaced.png"
+    assert File.exists?(RigStore.character_layer_path(id))
+
+    # Replace background
+    assert {:ok, updated_bg} = RigStore.replace_layer(id, :background, new_img, "new_bg.png")
+    assert Rig.has_background_layer?(updated_bg)
+    assert Rig.background_layer(updated_bg) == "background_replaced.png"
+    assert File.exists?(RigStore.plate_path(id))
+
+    # Replace source
+    assert {:ok, updated_src} = RigStore.replace_layer(id, :source, new_img, "new_src.png")
+    assert get_in(updated_src, ["source", "path"]) == "source_replaced.png"
+  end
 end

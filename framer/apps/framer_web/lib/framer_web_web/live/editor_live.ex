@@ -89,6 +89,21 @@ defmodule FramerWebWeb.EditorLive do
        accept: ~w(.png .jpg .jpeg .webp .bmp .gif),
        max_entries: 1,
        max_file_size: 25_000_000
+     )
+     |> allow_upload(:replace_source,
+       accept: ~w(.png .jpg .jpeg .webp .bmp .gif),
+       max_entries: 1,
+       max_file_size: 25_000_000
+     )
+     |> allow_upload(:replace_character,
+       accept: ~w(.png .jpg .jpeg .webp .bmp .gif),
+       max_entries: 1,
+       max_file_size: 25_000_000
+     )
+     |> allow_upload(:replace_background,
+       accept: ~w(.png .jpg .jpeg .webp .bmp .gif),
+       max_entries: 1,
+       max_file_size: 25_000_000
      )}
   end
 
@@ -331,6 +346,99 @@ defmodule FramerWebWeb.EditorLive do
     end
   end
 
+  def handle_event("extract_character", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("extract_character", _params, socket) do
+    socket = maybe_push_undo(socket, [])
+    {:noreply, extract_character(socket, socket.assigns.rig)}
+  end
+
+  def handle_event("remove_layer", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("remove_layer", %{"layer" => "background"}, socket) do
+    socket = maybe_push_undo(socket, [])
+    rig = Rig.remove_layer(socket.assigns.rig, "background")
+
+    {:noreply,
+     socket
+     |> finalize_mutation(rig, undo: false, status: "Background layer removed - character only")}
+  end
+
+  def handle_event("remove_layer", %{"layer" => "character"}, socket) do
+    socket = maybe_push_undo(socket, [])
+    rig = Rig.remove_layer(socket.assigns.rig, "character")
+
+    {:noreply,
+     socket
+     |> finalize_mutation(rig, undo: false, status: "Character layer removed")}
+  end
+
+  def handle_event("remove_layer", _params, socket), do: {:noreply, socket}
+
+  def handle_event("keep_layer", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("keep_layer", %{"layer" => "background"}, socket) do
+    socket = maybe_push_undo(socket, [])
+    rig = Rig.keep_layer(socket.assigns.rig, "background")
+
+    {:noreply,
+     socket
+     |> finalize_mutation(rig, undo: false, status: "Background layer kept")}
+  end
+
+  def handle_event("keep_layer", %{"layer" => "character"}, socket) do
+    socket = maybe_push_undo(socket, [])
+    rig = Rig.keep_layer(socket.assigns.rig, "character")
+
+    {:noreply,
+     socket
+     |> finalize_mutation(rig, undo: false, status: "Character layer kept")}
+  end
+
+  def handle_event("keep_layer", _params, socket), do: {:noreply, socket}
+
+  def handle_event("remove_background_initial", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("remove_background_initial", _params, socket) do
+    socket = maybe_push_undo(socket, [])
+    rig = socket.assigns.rig
+
+    socket =
+      socket
+      |> assign(:status, "Extracting the character and removing the background...")
+
+    case extract_character_and_remove_background(socket, rig) do
+      {:ok, socket} ->
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:error, "Could not remove background: #{format_reason(reason)}")
+         |> assign(:status, nil)}
+    end
+  end
+
+  def handle_event("validate_replace_source", _params, socket), do: {:noreply, socket}
+  def handle_event("validate_replace_character", _params, socket), do: {:noreply, socket}
+  def handle_event("validate_replace_background", _params, socket), do: {:noreply, socket}
+
+  def handle_event("save_replace_source", _params, socket) do
+    {:noreply, consume_replace(socket, :replace_source, "source")}
+  end
+
+  def handle_event("save_replace_character", _params, socket) do
+    {:noreply, consume_replace(socket, :replace_character, "character")}
+  end
+
+  def handle_event("save_replace_background", _params, socket) do
+    {:noreply, consume_replace(socket, :replace_background, "background")}
+  end
+
   def handle_event("set_layer_tolerance", _params, %{assigns: %{rig: nil}} = socket),
     do: {:noreply, assign(socket, :error, "Load a rig first")}
 
@@ -530,6 +638,83 @@ defmodule FramerWebWeb.EditorLive do
     end
   end
 
+  defp extract_character_and_remove_background(socket, rig, opts \\ []) do
+    tolerance = Keyword.get(opts, :tolerance, layer_tolerance(rig))
+
+    rig =
+      if Rig.split?(rig) do
+        rig
+        |> Rig.set_layer_settings(tolerance: tolerance)
+        |> Rig.remove_layer("background")
+      else
+        rig
+        |> Rig.enable_split(tolerance: tolerance)
+        |> Rig.remove_layer("background")
+      end
+
+    RigStore.remove_character_layer(rig["id"])
+
+    case Renderer.split_character(rig) do
+      {:ok, path} ->
+        rig =
+          rig
+          |> Rig.set_character_layer(Path.basename(path))
+          |> Rig.remove_layer("background")
+
+        socket =
+          finalize_mutation(socket, rig,
+            undo: false,
+            status: "Background removed - character only"
+          )
+
+        {:ok, socket}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp consume_replace(socket, upload_name, layer) do
+    rig = socket.assigns.rig
+
+    if rig == nil do
+      assign(socket, :error, "Load a rig first")
+    else
+      case consume_uploaded_entries(socket, upload_name, fn %{path: path}, entry ->
+             result =
+               with {:ok, binary} <- File.read(path) do
+                 RigStore.replace_layer(rig["id"], layer, binary, entry.client_name)
+               end
+
+             {:ok, result}
+           end) do
+        [{:ok, updated_rig}] ->
+          socket = maybe_push_undo(socket, [])
+
+          finalize_mutation(socket, updated_rig,
+            undo: false,
+            status: "#{String.capitalize(layer)} layer updated"
+          )
+
+        [{:error, reason}] ->
+          assign(socket, :error, "Could not replace layer: #{format_reason(reason)}")
+
+        [] ->
+          assign(socket, :error, "Choose an image first")
+
+        other ->
+          assign(socket, :error, "Could not replace layer: #{inspect(other)}")
+      end
+    end
+  end
+
+  defp source_layer_name(rig) do
+    case get_in(rig, ["source", "path"]) do
+      path when is_binary(path) and path != "" -> Path.basename(path)
+      _ -> "source.png"
+    end
+  end
+
   # --- timers / pubsub -----------------------------------------------------
 
   @impl true
@@ -626,6 +811,7 @@ defmodule FramerWebWeb.EditorLive do
           rig={@rig}
           projects={@projects}
           upload={@uploads.source}
+          uploads={@uploads}
           tool={@tool}
           pending_delete={@pending_delete}
           selected={selected_bone(@rig, @selected_bone)}
@@ -734,6 +920,7 @@ defmodule FramerWebWeb.EditorLive do
   attr :rig, :map, default: nil
   attr :projects, :list, default: []
   attr :upload, :any, required: true
+  attr :uploads, :any, default: %{}
   attr :tool, :string, required: true
   attr :pending_delete, :string, default: nil
   attr :selected, :map, default: nil
@@ -954,10 +1141,13 @@ defmodule FramerWebWeb.EditorLive do
         </button>
       </section>
 
-      <section>
-        <h2 class="mb-2 font-semibold uppercase tracking-wide opacity-70">Layers</h2>
-        <p :if={@rig == nil} class="opacity-60">Load a rig to split its layers.</p>
-        <div :if={@rig}>
+      <section id="layers-panel">
+        <div class="mb-2 flex items-center justify-between">
+          <h2 class="font-semibold uppercase tracking-wide opacity-70">Layers</h2>
+          <span :if={@rig && Rig.split?(@rig)} class="badge badge-secondary badge-xs">layered</span>
+        </div>
+        <p :if={@rig == nil} class="opacity-60">Load a rig to view and manage its layers.</p>
+        <div :if={@rig} class="flex flex-col gap-2">
           <p class="opacity-60">
             <%= if Rig.split?(@rig) do %>
               The character is on its own layer: posing moves it and the background stays put.
@@ -969,10 +1159,200 @@ defmodule FramerWebWeb.EditorLive do
           <button
             id="toggle-background-layer"
             phx-click="toggle_background_layer"
-            class={["btn btn-xs mt-2 w-full", Rig.split?(@rig) && "btn-primary"]}
+            class={["btn btn-xs w-full", Rig.split?(@rig) && "btn-primary"]}
           >
             {if Rig.split?(@rig), do: "Remove the character layer", else: "Extract the character"}
           </button>
+
+          <div
+            id="project-layers-list"
+            class="flex flex-col divide-y divide-base-300 rounded border border-base-300 bg-base-200"
+          >
+            <!-- 1. Source still row -->
+            <div id="layer-row-source" class="flex flex-col gap-1 p-2">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold">Source still</span>
+                <span class="badge badge-neutral badge-xs">source</span>
+              </div>
+              <div class="flex items-center justify-between opacity-70 text-[11px]">
+                <span class="truncate max-w-[130px]" title={source_layer_name(@rig)}>
+                  {source_layer_name(@rig)}
+                </span>
+                <span class="badge badge-ghost badge-xs">kept</span>
+              </div>
+              <div class="mt-1">
+                <form
+                  id="replace-layer-source-form"
+                  phx-change="validate_replace_source"
+                  phx-submit="save_replace_source"
+                >
+                  <label class="btn btn-xs btn-outline w-full cursor-pointer">
+                    Change <.live_file_input upload={@uploads.replace_source} class="hidden" />
+                  </label>
+                  <button
+                    :if={@uploads.replace_source.entries != []}
+                    type="submit"
+                    class="btn btn-xs btn-primary w-full mt-1"
+                  >
+                    Apply source change
+                  </button>
+                </form>
+              </div>
+            </div>
+            
+    <!-- 2. Character layer row -->
+            <div id="layer-row-character" class="flex flex-col gap-1 p-2">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold">Character layer</span>
+                <span class="badge badge-primary badge-xs">character</span>
+              </div>
+              <div class="flex items-center justify-between opacity-70 text-[11px]">
+                <span class="truncate max-w-[130px]">
+                  <%= cond do %>
+                    <% not Rig.split?(@rig) -> %>
+                      Not extracted
+                    <% Rig.has_character_layer?(@rig) -> %>
+                      {Rig.character_layer(@rig) || "character.png"}
+                    <% true -> %>
+                      Removed
+                  <% end %>
+                </span>
+                <%= cond do %>
+                  <% not Rig.split?(@rig) -> %>
+                    <span class="badge badge-ghost badge-xs">unsplit</span>
+                  <% Rig.has_character_layer?(@rig) -> %>
+                    <span class="badge badge-success badge-xs">kept</span>
+                  <% true -> %>
+                    <span class="badge badge-error badge-xs">removed</span>
+                <% end %>
+              </div>
+              <div class="mt-1 flex items-center gap-1">
+                <%= if not Rig.split?(@rig) do %>
+                  <button
+                    id="extract-character-btn"
+                    phx-click="extract_character"
+                    class="btn btn-xs btn-primary flex-1"
+                  >
+                    Extract
+                  </button>
+                <% else %>
+                  <%= if Rig.has_character_layer?(@rig) do %>
+                    <button
+                      id="remove-character-btn"
+                      phx-click="remove_layer"
+                      phx-value-layer="character"
+                      class="btn btn-xs btn-error btn-outline flex-1"
+                    >
+                      Remove
+                    </button>
+                  <% else %>
+                    <button
+                      id="keep-character-btn"
+                      phx-click="keep_layer"
+                      phx-value-layer="character"
+                      class="btn btn-xs btn-success btn-outline flex-1"
+                    >
+                      Keep
+                    </button>
+                  <% end %>
+                  <form
+                    id="replace-layer-character-form"
+                    phx-change="validate_replace_character"
+                    phx-submit="save_replace_character"
+                    class="flex-1"
+                  >
+                    <label class="btn btn-xs btn-outline w-full cursor-pointer">
+                      Change <.live_file_input upload={@uploads.replace_character} class="hidden" />
+                    </label>
+                    <button
+                      :if={@uploads.replace_character.entries != []}
+                      type="submit"
+                      class="btn btn-xs btn-primary w-full mt-1"
+                    >
+                      Apply
+                    </button>
+                  </form>
+                <% end %>
+              </div>
+            </div>
+            
+    <!-- 3. Background layer row -->
+            <div id="layer-row-background" class="flex flex-col gap-1 p-2">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold">Background layer</span>
+                <span class="badge badge-secondary badge-xs">background</span>
+              </div>
+              <div class="flex items-center justify-between opacity-70 text-[11px]">
+                <span class="truncate max-w-[130px]">
+                  <%= cond do %>
+                    <% not Rig.split?(@rig) -> %>
+                      Not extracted
+                    <% Rig.has_background_layer?(@rig) -> %>
+                      {Rig.background_layer(@rig) || "background.png"}
+                    <% true -> %>
+                      Removed
+                  <% end %>
+                </span>
+                <%= cond do %>
+                  <% not Rig.split?(@rig) -> %>
+                    <span class="badge badge-ghost badge-xs">unsplit</span>
+                  <% Rig.has_background_layer?(@rig) -> %>
+                    <span class="badge badge-success badge-xs">kept</span>
+                  <% true -> %>
+                    <span class="badge badge-error badge-xs">removed</span>
+                <% end %>
+              </div>
+              <div class="mt-1 flex items-center gap-1">
+                <%= if not Rig.split?(@rig) do %>
+                  <button
+                    id="remove-background-btn"
+                    phx-click="remove_background_initial"
+                    class="btn btn-xs btn-error btn-outline flex-1"
+                    title="Remove background, extracting and keeping only the character"
+                  >
+                    Remove
+                  </button>
+                <% else %>
+                  <%= if Rig.has_background_layer?(@rig) do %>
+                    <button
+                      id="remove-background-btn"
+                      phx-click="remove_layer"
+                      phx-value-layer="background"
+                      class="btn btn-xs btn-error btn-outline flex-1"
+                    >
+                      Remove
+                    </button>
+                  <% else %>
+                    <button
+                      id="keep-background-btn"
+                      phx-click="keep_layer"
+                      phx-value-layer="background"
+                      class="btn btn-xs btn-success btn-outline flex-1"
+                    >
+                      Keep
+                    </button>
+                  <% end %>
+                  <form
+                    id="replace-layer-background-form"
+                    phx-change="validate_replace_background"
+                    phx-submit="save_replace_background"
+                    class="flex-1"
+                  >
+                    <label class="btn btn-xs btn-outline w-full cursor-pointer">
+                      Change <.live_file_input upload={@uploads.replace_background} class="hidden" />
+                    </label>
+                    <button
+                      :if={@uploads.replace_background.entries != []}
+                      type="submit"
+                      class="btn btn-xs btn-primary w-full mt-1"
+                    >
+                      Apply
+                    </button>
+                  </form>
+                <% end %>
+              </div>
+            </div>
+          </div>
 
           <form :if={Rig.split?(@rig)} id="layer-tolerance-form" class="mt-2">
             <label class="label-text" for="layer-tolerance">
@@ -1655,13 +2035,13 @@ defmodule FramerWebWeb.EditorLive do
   # deliberately yields no URL and the preview shows the still unchanged. Same
   # for the opaque background plate it composites the character over.
   defp character_layer_url(rig) do
-    if Rig.split?(rig) and is_binary(Rig.character_layer(rig)) do
+    if Rig.split?(rig) and Rig.has_character_layer?(rig) and is_binary(Rig.character_layer(rig)) do
       ~p"/api/rigs/#{rig["id"]}/character"
     end
   end
 
   defp background_layer_url(rig) do
-    if Rig.split?(rig) and is_binary(Rig.character_layer(rig)) do
+    if Rig.split?(rig) and Rig.has_background_layer?(rig) and is_binary(Rig.background_layer(rig)) do
       ~p"/api/rigs/#{rig["id"]}/background"
     end
   end

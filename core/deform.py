@@ -48,7 +48,15 @@ import cv2
 import numpy as np
 
 from core.errors import RigError
-from core.layers import background_plate, composite
+from core.layers import (
+    PLATE_FILENAME,
+    background_plate,
+    composite,
+    declared_background_path,
+    has_background_layer,
+    is_split,
+    load_layer,
+)
 
 # Re-exported so `from core.deform import RigError` keeps working for callers
 # that have no reason to know the error now lives in its own module.
@@ -232,8 +240,9 @@ def _validate_layers(rig: dict[str, Any]) -> None:
     Absent means the legacy single-picture render, which is exactly how a rig
     saved before layers existed keeps loading and rendering unchanged. A
     document that declares a split must name it as a boolean and may record the
-    character-layer path plus the background-removal settings used to build the
-    mask; the layer files themselves are resolved and materialised by
+    character-layer and background-layer paths (or false when removed) plus the
+    background-removal settings used to build the mask; the layer files
+    themselves are resolved and materialised by
     ``core.layers.resolve_character_layer``, so a missing file is a missing
     asset rather than a schema error.
     """
@@ -247,10 +256,17 @@ def _validate_layers(rig: dict[str, Any]) -> None:
     _require(isinstance(split, bool), "rig.layers.split must be a boolean")
 
     character = layers.get("character")
-    if character is not None:
+    if character is not None and character is not False:
         _require(
             isinstance(character, str) and character,
-            "rig.layers.character must be a non-empty string",
+            "rig.layers.character must be a non-empty string or false",
+        )
+
+    background = layers.get("background")
+    if background is not None and background is not False:
+        _require(
+            isinstance(background, str) and background,
+            "rig.layers.background must be a non-empty string or false",
         )
 
     for key in ("tolerance", "num_ranges", "edge_cleanup", "soft_edges"):
@@ -326,6 +342,7 @@ def rig_fingerprint(rig: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 # weights
 # ---------------------------------------------------------------------------
+
 
 def _bone_segments(rig: dict[str, Any]) -> list[tuple[float, float, float, float]]:
     segments = []
@@ -483,6 +500,7 @@ def _write_weights_atomic(path: Path, weights: np.ndarray) -> None:
 # control mesh (bind pose)
 # ---------------------------------------------------------------------------
 
+
 def build_grid_mesh(
     rig: dict[str, Any],
     cell_size: float | None = None,
@@ -559,14 +577,11 @@ def compute_vertex_weights(
     total = stacked.sum(axis=1, keepdims=True)
     normalized = np.where(total > 0.0, stacked / np.maximum(total, 1e-8), stacked)
 
-    missing = (total[:, 0] <= 0.0)
+    missing = total[:, 0] <= 0.0
     if np.any(missing):
         # fall back to the nearest bone for the unweighted vertices
         distances = np.stack(
-            [
-                _distance_to_segment(grid_x, grid_y, *segment)
-                for segment in _bone_segments(rig)
-            ],
+            [_distance_to_segment(grid_x, grid_y, *segment) for segment in _bone_segments(rig)],
             axis=1,
         )
         nearest = np.argmin(distances, axis=1)
@@ -579,6 +594,7 @@ def compute_vertex_weights(
 # ---------------------------------------------------------------------------
 # bone evaluation / keyframes
 # ---------------------------------------------------------------------------
+
 
 def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
@@ -695,6 +711,7 @@ def _bind_poses(rig: dict[str, Any]) -> dict[str, dict[str, float]]:
 # skinning / backward map
 # ---------------------------------------------------------------------------
 
+
 def skinning_fields(
     world: Sequence[np.ndarray],
     bind: Sequence[np.ndarray],
@@ -810,7 +827,7 @@ def _read_jpeg_exif_orientation(path: str | os.PathLike[str]) -> int:
     except OSError:
         return _EXIF_ORIENTATION_UPRIGHT
 
-    if not data.startswith(b"\xFF\xD8"):
+    if not data.startswith(b"\xff\xd8"):
         return _EXIF_ORIENTATION_UPRIGHT
 
     position = 2
@@ -970,10 +987,11 @@ class DeformRenderer:
     :meth:`render` only re-evaluates bones and runs the skinning, which is what
     makes chunked export cheap.
 
-    When a character layer is supplied the rig only ever warps that layer: the
-    background layer is derived from the still and the character's alpha and is
-    composited after the deformation without ever being resampled, so the
-    background is identical in every frame. Without one the renderer behaves
+    When a character layer is supplied the rig only ever warps that layer. If
+    the background layer is present, it is composited underneath the deformed
+    character without being resampled, keeping the background identical in every
+    frame. If the background layer is removed, only the character layer is
+    rendered, preserving transparency. Without layers the renderer behaves
     exactly as before and deforms the whole still.
     """
 
@@ -1004,13 +1022,34 @@ class DeformRenderer:
         self.background = None
         if character is not None:
             # Resize the character layer with the same call as the still so the
-            # two stay pixel-aligned at the canvas size, then build the opaque
-            # background plate from the still and the cut-out's own alpha.
+            # two stay pixel-aligned at the canvas size.
             if character.shape[1] != canvas_width or character.shape[0] != canvas_height:
                 character = cv2.resize(
                     character, (canvas_width, canvas_height), interpolation=cv2.INTER_LINEAR
                 )
             self.character = np.ascontiguousarray(character)
+
+        if is_split(self.rig):
+            if has_background_layer(self.rig):
+                bg_declared = declared_background_path(self.rig) or PLATE_FILENAME
+                bg_path = Path(bg_declared)
+                source_path = self.rig.get("source", {}).get("path") or ""
+                if not bg_path.is_absolute() and source_path:
+                    bg_path = Path(source_path).parent / bg_path
+                if bg_path.exists():
+                    bg = load_layer(bg_path)
+                elif self.character is not None:
+                    bg = background_plate(self.source, self.character[:, :, 3])
+                else:
+                    bg = None
+
+                if bg is not None:
+                    if bg.shape[1] != canvas_width or bg.shape[0] != canvas_height:
+                        bg = cv2.resize(
+                            bg, (canvas_width, canvas_height), interpolation=cv2.INTER_LINEAR
+                        )
+                    self.background = np.ascontiguousarray(bg)
+        elif character is not None:
             self.background = background_plate(self.source, self.character[:, :, 3])
 
         if weights is None:
@@ -1036,13 +1075,17 @@ class DeformRenderer:
         """Render one frame index to a BGRA image."""
         world = evaluate_bones(self.rig, int(frame))
 
-        if self.character is None:
+        if self.character is None and self.background is None:
             return apply_lbs(self.source, self.weights, world, self.bind, self.iterations)
 
-        # Only the character layer is resampled; the background layer is passed
-        # through untouched and composited underneath it.
-        warped = apply_lbs(self.character, self.weights, world, self.bind, self.iterations)
-        return composite(warped, self.background)
+        if self.character is not None and self.background is not None:
+            warped = apply_lbs(self.character, self.weights, world, self.bind, self.iterations)
+            return composite(warped, self.background)
+
+        if self.character is not None:
+            return apply_lbs(self.character, self.weights, world, self.bind, self.iterations)
+
+        return self.background
 
     def render_to_png(
         self,
