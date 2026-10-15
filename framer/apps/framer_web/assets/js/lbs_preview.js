@@ -1436,6 +1436,7 @@ export const LbsPreview = {
 
   pointerDown(event) {
     if (event.button !== 0 || !this.rig || !this.view) return;
+    if (document.getElementById("blocking-loader") || document.getElementById("client-blocking-loader")) return;
     event.preventDefault();
 
     const point = this.toImage(event);
@@ -1666,6 +1667,7 @@ export const TimelineScrub = {
   },
 
   start(event) {
+    if (document.getElementById("blocking-loader") || document.getElementById("client-blocking-loader")) return;
     event.preventDefault();
     this.dragging = true;
     this.move(event);
@@ -1693,6 +1695,7 @@ export const EditorKeys = {
   },
 
   keydown(event) {
+    if (document.getElementById("blocking-loader") || document.getElementById("client-blocking-loader")) return;
     const target = event.target || {};
     const tag = target.tagName || "";
 

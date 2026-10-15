@@ -126,6 +126,28 @@ command/catalog/MCP surface (already scoped as a separate future task) and a
 multi-track NLE timeline with trim algebra. Per-property (rot/tx/ty) keying
 would also need a rig-schema change, so the slice still keys the whole pose.
 
+## Action feedback and blocking loader
+
+The editor provides unambiguous visual feedback for every user action:
+
+* **Immediate acknowledgement.** Every interactive button and form carries
+  `phx-page-loading` to trigger top-bar activity immediately on click (0ms delay).
+  Buttons and forms display a per-action busy state via `.phx-click-loading`,
+  `.phx-submit-loading`, and `.phx-change-loading` with reduced opacity, spinning
+  indicator, and disabled pointer events so clicks register the moment they land.
+* **Blocking loader for long waits.** Actions that require background computation
+  (such as `Export`, `Render frame`, or character extraction / background removal)
+  display a blocking modal overlay (`#blocking-loader` or `#client-blocking-loader`).
+  This blocks viewport pointer interactions, timeline scrubbing, and keyboard
+  shortcuts, preventing the user from acting on stale state while the engine works.
+  * The loader names the exact operation being waited on.
+  * For jobs with progress tracking (like `Export`), an honest progress bar and
+    percentage readout are shown rather than an indeterminate spinner.
+* **Failure visibility.** Failures during background tasks or operations (such as
+  render errors, export encoding failures, or attempting rig operations without a
+  loaded rig) surface prominently in the `#editor-error` banner with a clear error
+  message and dismiss control rather than silently returning to idle.
+
 ## Workflow guide
 
 The left palette opens with a five-step workflow guide (`#step-guide`): upload

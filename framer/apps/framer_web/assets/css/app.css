@@ -102,6 +102,40 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
+/* Immediate per-action busy state for clicked controls */
+.phx-click-loading,
+.phx-submit-loading [type="submit"],
+.phx-change-loading {
+  opacity: 0.65 !important;
+  cursor: wait !important;
+  pointer-events: none !important;
+}
+
+/* Spinner indicator inside buttons during phx-click-loading and phx-submit-loading */
+.btn.phx-click-loading,
+.phx-submit-loading .btn[type="submit"] {
+  position: relative;
+}
+
+.btn.phx-click-loading::after,
+.phx-submit-loading .btn[type="submit"]::after {
+  content: "";
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-left: 0.35rem;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: phx-spin 0.6s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes phx-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* This file is for your main application CSS */
 
 /* Rig/bones editor viewport: the WebGL/2D preview plus its bone overlay. */
