@@ -439,36 +439,6 @@ defmodule FramerWebWeb.EditorLive do
     {:noreply, consume_replace(socket, :replace_background, "background")}
   end
 
-  def handle_event("replace_layer", %{"layer" => layer, "data_base64" => data} = params, socket) do
-    rig = socket.assigns.rig
-    filename = params["filename"] || "#{layer}.png"
-
-    if rig == nil do
-      {:noreply, assign(socket, :error, "Load a rig first")}
-    else
-      case Base.decode64(data) do
-        {:ok, binary} ->
-          case RigStore.replace_layer(rig["id"], layer, binary, filename) do
-            {:ok, updated_rig} ->
-              socket = maybe_push_undo(socket, [])
-
-              {:noreply,
-               finalize_mutation(socket, updated_rig,
-                 undo: false,
-                 status: "#{String.capitalize(layer)} layer updated"
-               )}
-
-            {:error, reason} ->
-              {:noreply,
-               assign(socket, :error, "Could not replace layer: #{format_reason(reason)}")}
-          end
-
-        :error ->
-          {:noreply, assign(socket, :error, "Invalid base64 image data")}
-      end
-    end
-  end
-
   def handle_event("set_layer_tolerance", _params, %{assigns: %{rig: nil}} = socket),
     do: {:noreply, assign(socket, :error, "Load a rig first")}
 
