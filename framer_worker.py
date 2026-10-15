@@ -336,9 +336,10 @@ def op_deform(req: dict[str, Any]) -> dict[str, Any]:
     writes an alpha-capable frame range and the BEAM only ever sends paths,
     the range and the rig/options - never pixel data.
 
-    A rig document declaring ``layers.split`` deforms only its character layer
-    and composites the untouched background layer underneath, so the background
-    is byte-identical in every frame.
+    A rig document declaring ``layers.split`` deforms only its character layer.
+    When the background layer is present, it composites the untouched background
+    layer underneath, so the background is byte-identical in every frame; when
+    removed, the character is rendered alone with transparency.
     """
     from ops.deform import deform_video
 

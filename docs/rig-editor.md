@@ -18,6 +18,7 @@ operation for the final render and export.
 │ Hierarchy    │                                                 │
 │ Properties   │                                                 │
 │ Bind         │                                                 │
+│ Layers       │                                                 │
 ├──────────────┴────────────────────────────────────────────────┤
 │ timeline: ruler · transport · keyframe rows · value/velocity  │
 │ graph · render/export                                          │
@@ -218,9 +219,10 @@ plate), so an opaque character pixel wins outright wherever it moves - including
 over background it did not occupy at rest, where no blending happens. Where the
 character moves away from, the plate shows through: the vacated region is never
 transparent and never the character's original pixels, it is the reconstructed
-background. Because the plate is opaque, a split rig's frames are opaque too, so
+background. Because the plate is opaque when kept, a split rig's frames are opaque too, so
 an MP4 export encodes that region as the reconstructed background rather than
-flattening a hole to black.
+flattening a hole to black (when the background layer is removed, the frames carry
+transparency and export to an alpha-capable format such as WebM).
 
 ### Limits of the split
 
@@ -247,9 +249,9 @@ default `apps/framer_web/priv/projects`):
 
 ```
 <root>/<rig-id>/
-  source.png      # uploaded still
-  character.png   # the materialised character layer, once the rig is split
-  background.png  # the materialised background plate, once the rig is split
+  source.png      # uploaded still (or source_replaced.<ext> when changed)
+  character.png   # the materialised character layer, once split (or character_replaced.<ext>)
+  background.png  # the materialised background plate, once split (or background_replaced.<ext>)
   rig.json        # framer.rig v1 - the engine-facing contract
   output.webm     # merged export, once rendered
 ```

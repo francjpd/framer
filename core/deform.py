@@ -240,8 +240,9 @@ def _validate_layers(rig: dict[str, Any]) -> None:
     Absent means the legacy single-picture render, which is exactly how a rig
     saved before layers existed keeps loading and rendering unchanged. A
     document that declares a split must name it as a boolean and may record the
-    character-layer path plus the background-removal settings used to build the
-    mask; the layer files themselves are resolved and materialised by
+    character-layer and background-layer paths (or false when removed) plus the
+    background-removal settings used to build the mask; the layer files
+    themselves are resolved and materialised by
     ``core.layers.resolve_character_layer``, so a missing file is a missing
     asset rather than a schema error.
     """
@@ -986,10 +987,11 @@ class DeformRenderer:
     :meth:`render` only re-evaluates bones and runs the skinning, which is what
     makes chunked export cheap.
 
-    When a character layer is supplied the rig only ever warps that layer: the
-    background layer is derived from the still and the character's alpha and is
-    composited after the deformation without ever being resampled, so the
-    background is identical in every frame. Without one the renderer behaves
+    When a character layer is supplied the rig only ever warps that layer. If
+    the background layer is present, it is composited underneath the deformed
+    character without being resampled, keeping the background identical in every
+    frame. If the background layer is removed, only the character layer is
+    rendered, preserving transparency. Without layers the renderer behaves
     exactly as before and deforms the whole still.
     """
 

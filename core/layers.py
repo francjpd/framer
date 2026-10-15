@@ -258,16 +258,16 @@ def resolve_character_layer(
 
     When the rig asks for a split but the layer file is not there yet, the
     character mask is computed from the still with the background-removal
-    segmentation and both layers are written beside it - the cut-out and the
-    opaque plate - so a later render, an export and the editor's preview all
-    read the same two layers. A plate that predates the current cut-out is
-    rewritten alongside it. Those writes are the only thing this function does
-    beyond returning pixels.
+    segmentation and both layers are written beside it (unless the background
+    layer is removed) - the cut-out and the opaque plate - so a later render,
+    an export and the editor's preview all read the same layers. A plate that
+    predates the current cut-out is rewritten alongside it. Those writes are the
+    only thing this function does beyond returning pixels.
 
     Returns:
         ``(character_layer, written_path)``; ``written_path`` is ``None`` when an
-        existing file was reused. A rig that does not ask for a split returns
-        ``(None, None)``.
+        existing file was reused. A rig that does not ask for a split or whose
+        character layer is removed returns ``(None, None)``.
     """
     if not is_split(rig) or not has_character_layer(rig):
         return None, None

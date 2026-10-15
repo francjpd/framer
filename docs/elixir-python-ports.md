@@ -104,10 +104,11 @@ schema is documented in `docs/rig-schema-v1.md`; no pixels cross the Port.
   therefore does not preserve an input alpha channel.
 - `deform` writes BGRA chunks, so its output must be `.webm` or `.mov` when any
   rendered frame has transparency; `.mp4` drops the alpha plane and the op
-  rejects it with an explicit error. (A split rig composites over an opaque plate,
-  so its frames are opaque and export to `.mp4` unless the deformation exposes
-  the canvas exterior). Decoding a VP9 `.webm` for verification still needs
-  `-c:v libvpx-vp9`.
+  rejects it with an explicit error. (A split rig with the background layer kept
+  composites over an opaque plate, so its frames are opaque and export to `.mp4`
+  unless the deformation exposes the canvas exterior; when the background layer
+  is removed, the character renders with transparency and requires an alpha-capable
+  container). Decoding a VP9 `.webm` for verification still needs `-c:v libvpx-vp9`.
 
 ## Distribution seam
 

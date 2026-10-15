@@ -21,7 +21,8 @@ defmodule FramerWeb.Renderer do
   as ever - the rig document tells the engine which character layer to deform -
   so the final render is authoritative for the layering exactly as it is for the
   math. The interactive preview is only a proxy of the same layering: it fetches
-  the engine-materialised cut-out and its opaque background plate.
+  the engine-materialised cut-out and its opaque background plate when present
+  (reflecting transparency when the background layer is removed).
   """
 
   require Logger

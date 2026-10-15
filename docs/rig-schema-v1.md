@@ -51,6 +51,7 @@ normal Port error; a document that does not validate never renders.
   "layers": {
     "split": true,
     "character": "character.png",
+    "background": "background.png",
     "color": null,
     "tolerance": 40,
     "auto_ranges": true,
@@ -117,7 +118,7 @@ of the still whose character area is reconstructed from the surrounding
 background, so no pixel is left uncovered. When both layers are present, only the character layer is
 resampled; the plate is composited underneath it untouched, so the background is
 identical in every frame. The two files (`layers.character`, default
-`character.png` beside the still, and `background.png`) are materialised once
+`character.png` beside the still, and `layers.background`, default `background.png`) are materialised once
 with the engine's existing background-removal segmentation and reused by later
 renders, exports and the editor's preview.
 

@@ -42,7 +42,8 @@ defmodule FramerWeb.RigStore do
 
   The engine writes this when a split rig first renders; it is the cut-out the
   rig deforms. The path is the one the rig document declares, falling back to
-  the default name.
+  the default name. Returns `nil` when the layer is removed (`false`) or does
+  not exist.
   """
   def character_layer_path(id) do
     with :ok <- validate_id(id) do
@@ -69,7 +70,8 @@ defmodule FramerWeb.RigStore do
   the still whose character area is reconstructed from the surrounding
   background, so the layer the rig never warps covers every pixel. The character
   layer is composited over it with a plain source-over, which is what the
-  editor's preview fetches to agree with the export.
+  editor's preview fetches to agree with the export. Returns `nil` when the layer
+  is removed (`false`) or does not exist.
   """
   def plate_path(id) do
     with :ok <- validate_id(id) do
