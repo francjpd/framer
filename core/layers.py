@@ -211,9 +211,35 @@ def is_split(rig: dict[str, Any]) -> bool:
     return bool((rig.get(LAYERS_KEY) or {}).get("split", False))
 
 
+def has_character_layer(rig: dict[str, Any]) -> bool:
+    """Whether the layered rig includes a character layer."""
+    if not is_split(rig):
+        return False
+    layers = rig.get(LAYERS_KEY) or {}
+    if "character" in layers:
+        return layers["character"] is not False and layers["character"] is not None
+    return True
+
+
+def has_background_layer(rig: dict[str, Any]) -> bool:
+    """Whether the layered rig includes a background layer."""
+    if not is_split(rig):
+        return False
+    layers = rig.get(LAYERS_KEY) or {}
+    if "background" in layers:
+        return layers["background"] is not False and layers["background"] is not None
+    return True
+
+
 def declared_character_path(rig: dict[str, Any]) -> str | None:
     """The character-layer path the rig document declares, if any."""
     declared = (rig.get(LAYERS_KEY) or {}).get("character")
+    return declared if isinstance(declared, str) and declared else None
+
+
+def declared_background_path(rig: dict[str, Any]) -> str | None:
+    """The background-layer path the rig document declares, if any."""
+    declared = (rig.get(LAYERS_KEY) or {}).get("background")
     return declared if isinstance(declared, str) and declared else None
 
 
@@ -221,7 +247,7 @@ def resolve_character_layer(
     rig: dict[str, Any],
     source: np.ndarray,
     source_path: str | Path,
-) -> tuple[np.ndarray, Path | None]:
+) -> tuple[np.ndarray | None, Path | None]:
     """
     Return the character layer for a rig, materialising it when needed.
 
@@ -243,7 +269,7 @@ def resolve_character_layer(
         existing file was reused. A rig that does not ask for a split returns
         ``(None, None)``.
     """
-    if not is_split(rig):
+    if not is_split(rig) or not has_character_layer(rig):
         return None, None
 
     declared = declared_character_path(rig) or LAYER_FILENAME
@@ -251,16 +277,23 @@ def resolve_character_layer(
     if not path.is_absolute():
         path = Path(source_path).parent / path
 
+    bg_declared = declared_background_path(rig) or PLATE_FILENAME
+    bg_path = Path(bg_declared)
+    if not bg_path.is_absolute():
+        bg_path = Path(source_path).parent / bg_path
+
     if path.exists():
         character = load_layer(path)
-        _plate = _ensure_plate(source, character, Path(source_path).parent / PLATE_FILENAME)
+        if has_background_layer(rig):
+            _plate = _ensure_plate(source, character, bg_path)
         return character, None
 
     settings = layer_settings(rig)
     alpha = character_alpha(source, **settings)
     character, plate = split_layers(source, alpha)
     write_layer(path, character)
-    write_layer(Path(source_path).parent / PLATE_FILENAME, plate)
+    if has_background_layer(rig):
+        write_layer(bg_path, plate)
     return character, path
 
 
@@ -290,7 +323,10 @@ __all__ = [
     "background_plate",
     "character_alpha",
     "composite",
+    "declared_background_path",
     "declared_character_path",
+    "has_background_layer",
+    "has_character_layer",
     "is_split",
     "layer_settings",
     "load_layer",

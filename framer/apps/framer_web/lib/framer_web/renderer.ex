@@ -311,28 +311,35 @@ defmodule FramerWeb.Renderer do
 
     if id do
       project_dir = RigStore.project_dir(id)
-      char_rel = Rig.character_layer(rig) || Rig.layer_filename()
-      char_src = RigStore.character_layer_path(id)
 
-      if char_src && File.exists?(char_src) do
-        char_dest = Path.join(export_dir, char_rel)
-        File.mkdir_p!(Path.dirname(char_dest))
-        File.cp!(char_src, char_dest)
+      if Rig.has_character_layer?(rig) do
+        char_rel = Rig.character_layer(rig) || Rig.layer_filename()
+        char_src = RigStore.character_layer_path(id)
+
+        if char_src && File.exists?(char_src) do
+          char_dest = Path.join(export_dir, char_rel)
+          File.mkdir_p!(Path.dirname(char_dest))
+          File.cp!(char_src, char_dest)
+        end
+
+        default_layer_src = Path.join(project_dir, Rig.layer_filename())
+
+        if File.exists?(default_layer_src) && default_layer_src != char_src do
+          default_dest = Path.join(export_dir, Rig.layer_filename())
+          File.mkdir_p!(Path.dirname(default_dest))
+          File.cp!(default_layer_src, default_dest)
+        end
       end
 
-      default_layer_src = Path.join(project_dir, Rig.layer_filename())
+      if Rig.has_background_layer?(rig) do
+        bg_rel = Rig.background_layer(rig) || Rig.plate_filename()
+        plate_src = RigStore.plate_path(id) || Path.join(project_dir, bg_rel)
 
-      if File.exists?(default_layer_src) && default_layer_src != char_src do
-        default_dest = Path.join(export_dir, Rig.layer_filename())
-        File.mkdir_p!(Path.dirname(default_dest))
-        File.cp!(default_layer_src, default_dest)
-      end
-
-      plate_src = RigStore.plate_path(id) || Path.join(project_dir, Rig.plate_filename())
-
-      if plate_src && File.exists?(plate_src) do
-        plate_dest = Path.join(export_dir, Rig.plate_filename())
-        File.cp!(plate_src, plate_dest)
+        if plate_src && File.exists?(plate_src) do
+          plate_dest = Path.join(export_dir, bg_rel)
+          File.mkdir_p!(Path.dirname(plate_dest))
+          File.cp!(plate_src, plate_dest)
+        end
       end
     end
   end

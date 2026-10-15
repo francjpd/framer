@@ -427,3 +427,31 @@ def _frame_decoder(ffmpeg: str, path: Path):
         return np.frombuffer(raw, dtype=np.uint8).reshape(SIZE, SIZE, 4)
 
     return decode
+
+
+def test_remove_the_background_leaves_character_alone_with_transparency(scene):
+    """
+    Removing the background layer leaves only the character layer.
+    The rendered frame outside the character area is transparent (alpha = 0).
+    """
+    rig, source = scene["rig"], scene["source"]
+    no_bg_rig = json.loads(json.dumps(rig))
+    no_bg_rig["layers"]["background"] = False
+
+    character, _plate = split_layers(
+        source, character_alpha(source, tolerance=40, soft_edges=0, edge_cleanup=0)
+    )
+    renderer = DeformRenderer(no_bg_rig, source, iterations=6, character=character)
+
+    assert renderer.background is None
+    assert renderer.character is not None
+
+    rest = renderer.render(0)
+    # Outside the character block (e.g. top rows), alpha is transparent (0)
+    assert (rest[: CHARACTER_ROWS.start, :, 3] == 0).all()
+    # Inside the character block, alpha is opaque (255)
+    assert (rest[CHARACTER_ROWS, CHARACTER_COLUMNS, 3] == 255).all()
+
+    posed = renderer.render(FRAMES - 1)
+    # The deformed character is also transparent outside the warped character
+    assert (posed[0:4, :, 3] == 0).all()

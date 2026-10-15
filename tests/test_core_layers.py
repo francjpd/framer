@@ -384,3 +384,38 @@ def test_layer_round_trips_through_disk(tmp_path):
 
     path = write_layer(tmp_path / "character.png", character)
     assert np.array_equal(load_layer(path), character)
+
+
+def test_layer_presence_and_declared_paths():
+    from core.layers import (
+        declared_background_path,
+        has_background_layer,
+        has_character_layer,
+    )
+
+    # Unsplit rig
+    unsplit = {}
+    assert not has_background_layer(unsplit)
+    assert not has_character_layer(unsplit)
+    assert declared_background_path(unsplit) is None
+
+    # Normal split defaults to both present
+    split_default = {"layers": {"split": True}}
+    assert has_background_layer(split_default)
+    assert has_character_layer(split_default)
+    assert declared_background_path(split_default) is None
+
+    # Background removed
+    split_no_bg = {"layers": {"split": True, "background": False}}
+    assert not has_background_layer(split_no_bg)
+    assert has_character_layer(split_no_bg)
+
+    # Background path declared
+    split_custom_bg = {"layers": {"split": True, "background": "bg_custom.png"}}
+    assert has_background_layer(split_custom_bg)
+    assert declared_background_path(split_custom_bg) == "bg_custom.png"
+
+    # Character removed
+    split_no_char = {"layers": {"split": True, "character": False}}
+    assert not has_character_layer(split_no_char)
+    assert has_background_layer(split_no_char)
