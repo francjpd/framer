@@ -33,10 +33,49 @@ const liveSocket = new LiveSocket("/live", Socket, {
   hooks: {...colocatedHooks, LbsPreview, TimelineScrub, EditorKeys},
 })
 
-// Show progress bar on live navigation and form submits
+// Show the progress bar for live navigation and for pushes that opt in with
+// page_loading: true; the matching stop event hides it.
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
-window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
-window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
+window.addEventListener("phx:page-loading-start", (e) => {
+  topbar.show()
+  if (e.detail?.kind === "initial") {
+    const clientLoader = document.getElementById("client-blocking-loader")
+    if (clientLoader) clientLoader.remove()
+  }
+})
+window.addEventListener("phx:page-loading-stop", _info => {
+  topbar.hide()
+  const clientLoader = document.getElementById("client-blocking-loader")
+  if (clientLoader) clientLoader.remove()
+})
+
+// Immediate blocking overlay for actions that wait on a server operation. The
+// control pushes with page_loading: true, so the matching phx:page-loading-stop
+// above removes this overlay when the reply lands - it can never outlive the op.
+window.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-wait-title], [data-wait-message]")
+  if (!trigger) return
+
+  const waitTitle = trigger.dataset.waitTitle
+  const waitMessage = trigger.dataset.waitMessage
+  if (!document.getElementById("blocking-loader") && !document.getElementById("client-blocking-loader")) {
+    const overlay = document.createElement("div")
+    overlay.id = "client-blocking-loader"
+    overlay.role = "dialog"
+    overlay.setAttribute("aria-modal", "true")
+    overlay.className = "fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs select-none"
+    overlay.innerHTML = `
+      <div class="card w-96 max-w-[90vw] border border-base-300 bg-base-100 p-6 shadow-2xl flex flex-col items-center gap-3 text-center">
+        <div class="flex items-center gap-2">
+          <span class="loading loading-spinner loading-md text-primary"></span>
+          <h3 class="text-sm font-semibold">${waitTitle || "Processing"}</h3>
+        </div>
+        <p class="text-xs opacity-75">${waitMessage || "Please wait..."}</p>
+      </div>
+    `
+    document.body.appendChild(overlay)
+  }
+}, true)
 
 // connect if there are any LiveViews on the page
 liveSocket.connect()

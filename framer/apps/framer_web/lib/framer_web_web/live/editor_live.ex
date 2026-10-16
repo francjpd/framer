@@ -83,6 +83,7 @@ defmodule FramerWebWeb.EditorLive do
      |> assign(:error, nil)
      |> assign(:pending_delete, nil)
      |> assign(:export, nil)
+     |> assign(:blocking_loader, nil)
      |> assign(:rendered, nil)
      |> assign(:rendered_frame, nil)
      |> allow_upload(:source,
@@ -313,6 +314,9 @@ defmodule FramerWebWeb.EditorLive do
     {:noreply, mutate(socket, fn rig -> Rig.set_bind(rig, opts) end)}
   end
 
+  def handle_event("auto_bind", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
   def handle_event("auto_bind", _params, socket) do
     {:noreply,
      mutate(socket, fn rig -> Rig.auto_bind(rig) end,
@@ -541,14 +545,22 @@ defmodule FramerWebWeb.EditorLive do
 
   def handle_event("render_frame", _params, socket) do
     frame = socket.assigns.playhead
+    rig = socket.assigns.rig
 
-    case Renderer.render_frame(socket.assigns.rig, frame) do
-      {:ok, binary} ->
-        {:noreply, assign(socket, rendered: binary, rendered_frame: frame, error: nil)}
+    socket =
+      socket
+      |> assign(:blocking_loader, %{
+        op: :render_frame,
+        title: "Rendering frame #{frame}",
+        message: "Rendering full-quality frame #{frame} at #{Rig.fps(rig)} fps...",
+        progress: nil
+      })
+      |> assign(:error, nil)
+      |> start_async(:render_frame, fn ->
+        Renderer.render_frame(rig, frame)
+      end)
 
-      {:error, reason} ->
-        {:noreply, assign(socket, :error, "Render failed: #{format_reason(reason)}")}
-    end
+    {:noreply, socket}
   end
 
   def handle_event("close_render", _params, socket) do
@@ -559,32 +571,72 @@ defmodule FramerWebWeb.EditorLive do
     do: {:noreply, assign(socket, :error, "Load a rig first")}
 
   def handle_event("export", params, socket) do
-    case Renderer.submit_export(socket.assigns.rig, format: params["format"] || "webm") do
+    format = params["format"] || "webm"
+
+    case Renderer.submit_export(socket.assigns.rig, format: format) do
       {:ok, export} ->
+        output = Path.basename(export.output)
+
         {:noreply,
          socket
          |> assign(:export, %{
            job_id: export.job_id,
            status: :processing,
            progress: 0.0,
-           output: Path.basename(export.output),
+           output: output,
            result_url: ~p"/api/rigs/#{socket.assigns.rig["id"]}/result"
+         })
+         |> assign(:blocking_loader, %{
+           op: :export,
+           title: "Exporting animation (#{format})",
+           message: "Rendering and encoding #{output}...",
+           progress: 0.0
          })
          |> assign(:error, nil)
          |> schedule_export_tick()}
 
       {:error, reason} ->
-        {:noreply, assign(socket, :error, "Export failed: #{format_reason(reason)}")}
+        {:noreply,
+         socket
+         |> assign(:blocking_loader, nil)
+         |> assign(:error, "Export failed: #{format_reason(reason)}")}
     end
   end
 
-  def handle_event("save_rig", _params, %{assigns: %{rig: nil}} = socket), do: {:noreply, socket}
+  def handle_event("save_rig", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
 
   def handle_event("save_rig", _params, socket) do
     {:noreply,
      socket
      |> finalize_mutation(socket.assigns.rig, [])
      |> assign(:status, "Saved")}
+  end
+
+  @impl true
+  def handle_async(:render_frame, {:ok, {:ok, binary}}, socket) do
+    frame = socket.assigns.playhead
+
+    {:noreply,
+     socket
+     |> assign(:blocking_loader, nil)
+     |> assign(:rendered, binary)
+     |> assign(:rendered_frame, frame)
+     |> assign(:error, nil)}
+  end
+
+  def handle_async(:render_frame, {:ok, {:error, reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:blocking_loader, nil)
+     |> assign(:error, "Render failed: #{format_reason(reason)}")}
+  end
+
+  def handle_async(:render_frame, {:exit, reason}, socket) do
+    {:noreply,
+     socket
+     |> assign(:blocking_loader, nil)
+     |> assign(:error, "Render failed: #{inspect(reason)}")}
   end
 
   # --- layer extraction -----------------------------------------------------
@@ -749,10 +801,13 @@ defmodule FramerWebWeb.EditorLive do
     export = socket.assigns.export
     progress = export_progress(FramerCore.Orchestrator.get_status(), export)
 
-    {:noreply,
-     socket
-     |> assign(:export, %{export | progress: progress})
-     |> schedule_export_tick()}
+    socket =
+      socket
+      |> assign(:export, %{export | progress: progress})
+      |> update_blocking_loader_progress(progress)
+      |> schedule_export_tick()
+
+    {:noreply, socket}
   end
 
   def handle_info({:export, payload}, socket) do
@@ -836,11 +891,55 @@ defmodule FramerWebWeb.EditorLive do
       />
       <.export_panel export={@export} />
       <.render_panel rendered={@rendered} frame={@rendered_frame} />
+      <.blocking_loader loader={@blocking_loader} />
     </div>
     """
   end
 
   # --- components ----------------------------------------------------------
+
+  attr :loader, :map, default: nil
+
+  defp blocking_loader(assigns) do
+    ~H"""
+    <div
+      :if={@loader}
+      id="blocking-loader"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="blocking-loader-title"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs select-none"
+    >
+      <div
+        id="blocking-loader-card"
+        class="card w-96 max-w-[90vw] border border-base-300 bg-base-100 p-6 shadow-2xl flex flex-col items-center gap-3 text-center"
+      >
+        <div class="flex items-center gap-2">
+          <span
+            :if={is_nil(@loader[:progress])}
+            id="blocking-loader-spinner"
+            class="loading loading-spinner loading-md text-primary"
+          >
+          </span>
+          <h3 id="blocking-loader-title" class="text-sm font-semibold">{@loader.title}</h3>
+        </div>
+
+        <p id="blocking-loader-message" class="text-xs opacity-75">{@loader.message}</p>
+
+        <div :if={not is_nil(@loader[:progress])} class="w-full flex flex-col gap-1 items-center mt-2">
+          <progress
+            id="blocking-loader-progress"
+            class="progress progress-primary w-full"
+            value={@loader.progress}
+            max="100"
+          >
+          </progress>
+          <span class="font-mono text-xs opacity-80">{@loader.progress}%</span>
+        </div>
+      </div>
+    </div>
+    """
+  end
 
   attr :rig, :map, default: nil
 
@@ -1158,7 +1257,17 @@ defmodule FramerWebWeb.EditorLive do
           </p>
           <button
             id="toggle-background-layer"
-            phx-click="toggle_background_layer"
+            phx-click={JS.push("toggle_background_layer", page_loading: true)}
+            data-wait-title={
+              if Rig.split?(@rig),
+                do: "Removing character layer",
+                else: "Extracting character"
+            }
+            data-wait-message={
+              if Rig.split?(@rig),
+                do: "Merging the character layer back into the background...",
+                else: "Extracting character and generating background plate..."
+            }
             class={["btn btn-xs w-full", Rig.split?(@rig) && "btn-primary"]}
           >
             {if Rig.split?(@rig), do: "Remove the character layer", else: "Extract the character"}
@@ -1230,7 +1339,9 @@ defmodule FramerWebWeb.EditorLive do
                 <%= if not Rig.split?(@rig) do %>
                   <button
                     id="extract-character-btn"
-                    phx-click="extract_character"
+                    phx-click={JS.push("extract_character", page_loading: true)}
+                    data-wait-title="Extracting character"
+                    data-wait-message="Extracting character layer..."
                     class="btn btn-xs btn-primary flex-1"
                   >
                     Extract
@@ -1306,7 +1417,9 @@ defmodule FramerWebWeb.EditorLive do
                 <%= if not Rig.split?(@rig) do %>
                   <button
                     id="remove-background-btn"
-                    phx-click="remove_background_initial"
+                    phx-click={JS.push("remove_background_initial", page_loading: true)}
+                    data-wait-title="Removing background"
+                    data-wait-message="Extracting character and removing background plate..."
                     class="btn btn-xs btn-error btn-outline flex-1"
                     title="Remove background, extracting and keeping only the character"
                   >
@@ -1561,7 +1674,11 @@ defmodule FramerWebWeb.EditorLive do
           >
             ◆ Record keyframe
           </button>
-          <button phx-click="delete_keyframe" class="btn btn-xs" title="Delete keyframe">
+          <button
+            phx-click="delete_keyframe"
+            class="btn btn-xs"
+            title="Delete keyframe"
+          >
             ◇ Delete keyframe
           </button>
 
@@ -1571,14 +1688,33 @@ defmodule FramerWebWeb.EditorLive do
           <span :if={map_size(@pending_pose) > 0} class="text-warning">pose pending</span>
 
           <span class="ml-auto flex items-center gap-2">
-            <button phx-click="render_frame" class="btn btn-xs">Render frame</button>
-            <form phx-submit="export" class="flex items-center gap-1">
+            <button
+              id="render-frame-btn"
+              phx-click={JS.push("render_frame", page_loading: true)}
+              data-wait-title="Rendering frame..."
+              data-wait-message="Please wait while the server renders the final frame."
+              class="btn btn-xs"
+            >
+              Render frame
+            </button>
+            <form
+              id="export-form"
+              phx-submit={JS.push("export", page_loading: true)}
+              class="flex items-center gap-1"
+            >
               <select name="format" class="select select-xs select-bordered">
                 <option value="webm">webm</option>
                 <option value="mp4">mp4</option>
                 <option value="gif">gif</option>
               </select>
-              <button type="submit" class="btn btn-xs btn-accent">Export</button>
+              <button
+                type="submit"
+                data-wait-title="Exporting animation..."
+                data-wait-message="Encoding animation frames..."
+                class="btn btn-xs btn-accent"
+              >
+                Export
+              </button>
             </form>
           </span>
         </div>
@@ -1895,6 +2031,7 @@ defmodule FramerWebWeb.EditorLive do
     |> assign(:graph_channel, "rot")
     |> assign(:undo, [])
     |> assign(:export, nil)
+    |> assign(:blocking_loader, nil)
     |> assign(:rendered, nil)
     |> assign(:rendered_frame, nil)
     |> assign(:error, nil)
@@ -1922,6 +2059,7 @@ defmodule FramerWebWeb.EditorLive do
     |> assign(:undo, [])
     |> assign(:error, nil)
     |> assign(:export, nil)
+    |> assign(:blocking_loader, nil)
     |> assign(:rendered, nil)
     |> push_rig()
   end
@@ -2021,10 +2159,28 @@ defmodule FramerWebWeb.EditorLive do
       socket.assigns.export ||
         %{output: payload[:output], result_url: nil, progress: 0.0, status: :processing}
 
-    socket
-    |> assign(:export, Map.merge(export, payload))
-    |> assign(:status, if(payload[:status] == :completed, do: "Export complete", else: nil))
+    socket =
+      socket
+      |> assign(:blocking_loader, nil)
+      |> assign(:export, Map.merge(export, payload))
+
+    if payload[:status] == :completed do
+      assign(socket, :status, "Export complete")
+    else
+      socket
+      |> assign(:status, nil)
+      |> assign(:error, "Export failed: #{format_reason(payload[:error] || "operation failed")}")
+    end
   end
+
+  defp update_blocking_loader_progress(
+         %{assigns: %{blocking_loader: %{op: :export} = loader}} = socket,
+         progress
+       ) do
+    assign(socket, :blocking_loader, %{loader | progress: progress})
+  end
+
+  defp update_blocking_loader_progress(socket, _progress), do: socket
 
   defp selected_bone(_rig, nil), do: nil
   defp selected_bone(nil, _id), do: nil
