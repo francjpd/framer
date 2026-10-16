@@ -35,7 +35,13 @@ const liveSocket = new LiveSocket("/live", Socket, {
 
 // Show progress bar immediately on live navigation, actions, and form submits
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
-window.addEventListener("phx:page-loading-start", _info => topbar.show())
+window.addEventListener("phx:page-loading-start", (e) => {
+  topbar.show()
+  if (e.detail?.kind === "initial") {
+    const clientLoader = document.getElementById("client-blocking-loader")
+    if (clientLoader) clientLoader.remove()
+  }
+})
 window.addEventListener("phx:page-loading-stop", _info => {
   topbar.hide()
   const clientLoader = document.getElementById("client-blocking-loader")
