@@ -532,8 +532,8 @@ defmodule FramerWebWeb.EditorLiveTest do
           "#palette button[phx-click='select_tool'][phx-value-tool='pose']",
           "#palette button[phx-click='auto_bind']",
           "button[phx-click='record_keyframe']",
-          "button[phx-click='render_frame']",
-          "form[phx-submit='export'] button[type='submit']"
+          "#render-frame-btn",
+          "#export-form button[type='submit']"
         ] do
       assert has_element?(view, selector)
       refute has_element?(view, selector <> "[disabled]")
@@ -911,34 +911,6 @@ defmodule FramerWebWeb.EditorLiveTest do
   end
 
   describe "action feedback and blocking loader" do
-    test "action elements have phx-page-loading attribute for immediate acknowledgement", %{conn: conn} do
-      {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
-      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
-
-      selectors = [
-        "button[phx-click='undo'][phx-page-loading]",
-        "button[phx-click='save_rig'][phx-page-loading]",
-        "button[phx-click='auto_bind'][phx-page-loading]",
-        "button[phx-click='toggle_background_layer'][phx-page-loading]",
-        "button[phx-click='render_frame'][phx-page-loading]",
-        "form[phx-submit='export'][phx-page-loading]",
-        "form[phx-submit='export'] button[type='submit'][phx-page-loading]",
-        "button[phx-click='record_keyframe'][phx-page-loading]",
-        "button[phx-click='delete_keyframe'][phx-page-loading]",
-        "button[phx-click='toggle_play'][phx-page-loading]",
-        "button[phx-click='toggle_loop'][phx-page-loading]",
-        "button[phx-click='step_frame'][phx-page-loading]",
-        "button[phx-click='set_playhead'][phx-page-loading]",
-        "button[phx-click='toggle_mesh'][phx-page-loading]",
-        "button[phx-click='toggle_labels'][phx-page-loading]",
-        "button[phx-click='zoom'][phx-page-loading]"
-      ]
-
-      for selector <- selectors do
-        assert has_element?(view, selector), "Expected element matching #{selector}"
-      end
-    end
-
     test "actions without a loaded rig surface error instead of silently failing", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/editor")
 
@@ -970,7 +942,9 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert render(view) =~ "Load a rig first"
     end
 
-    test "render_frame displays blocking loader and opens rendered modal on completion", %{conn: conn} do
+    test "render_frame displays blocking loader and opens rendered modal on completion", %{
+      conn: conn
+    } do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
       _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
       {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
@@ -994,19 +968,23 @@ defmodule FramerWebWeb.EditorLiveTest do
       refute has_element?(view, "#render-panel")
     end
 
-    test "render_frame failure dismisses blocking loader and surfaces error in #editor-error", %{conn: conn} do
+    test "render_frame failure dismisses blocking loader and surfaces error in #editor-error", %{
+      conn: conn
+    } do
       {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
       id = rig["id"]
       {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
 
       # Triggering render_frame without source fails and surfaces error while clearing loader
       render_click(view, "render_frame")
+      render_async(view, 5000)
       refute has_element?(view, "#blocking-loader")
       assert has_element?(view, "#editor-error")
       assert render(view) =~ "Render failed"
     end
 
-    test "export triggers blocking loader with honest progress, unblocks on completion, and surfaces failure", %{conn: conn} do
+    test "export triggers blocking loader with honest progress, unblocks on completion, and surfaces failure",
+         %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
       _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
       id = rig["id"]
@@ -1015,7 +993,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       refute has_element?(view, "#blocking-loader")
 
       # Submit export
-      render_submit(form(view, "form[phx-submit='export']"), %{"format" => "webm"})
+      render_submit(form(view, "#export-form"), %{"format" => "webm"})
       assert has_element?(view, "#blocking-loader")
       assert has_element?(view, "#blocking-loader-progress")
       assert render(view) =~ "Exporting animation"
@@ -1032,7 +1010,12 @@ defmodule FramerWebWeb.EditorLiveTest do
         progress: 100.0,
         result_url: "/api/rigs/#{id}/result"
       }
-      Phoenix.PubSub.broadcast(FramerWeb.PubSub, FramerWeb.Renderer.topic(id), {:export, completed_payload})
+
+      Phoenix.PubSub.broadcast(
+        FramerWeb.PubSub,
+        FramerWeb.Renderer.topic(id),
+        {:export, completed_payload}
+      )
 
       refute has_element?(view, "#blocking-loader")
       assert has_element?(view, "a[download]")
@@ -1045,7 +1028,12 @@ defmodule FramerWebWeb.EditorLiveTest do
         output: "/projects/#{id}/output.webm",
         error: "Encoding failed: out of memory"
       }
-      Phoenix.PubSub.broadcast(FramerWeb.PubSub, FramerWeb.Renderer.topic(id), {:export, failed_payload})
+
+      Phoenix.PubSub.broadcast(
+        FramerWeb.PubSub,
+        FramerWeb.Renderer.topic(id),
+        {:export, failed_payload}
+      )
 
       refute has_element?(view, "#blocking-loader")
       assert has_element?(view, "#editor-error")
@@ -1055,6 +1043,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       if Process.whereis(FramerCore.Orchestrator) do
         try do
           state = FramerCore.Orchestrator.get_status()
+
           if state.job && state.job.status == :processing do
             GenServer.stop(FramerCore.Orchestrator, :shutdown, 2000)
           end

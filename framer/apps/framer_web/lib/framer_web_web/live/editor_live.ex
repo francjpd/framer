@@ -845,8 +845,8 @@ defmodule FramerWebWeb.EditorLive do
           <span :if={@rig} class="hidden font-mono text-xs opacity-70 sm:inline">
             {@rig["name"]} · {Rig.frame_count(@rig)}f @ {Rig.fps(@rig)}fps
           </span>
-          <button phx-click="undo" phx-page-loading class="btn btn-xs" disabled={@undo == []}>Undo</button>
-          <button phx-click="save_rig" phx-page-loading class="btn btn-xs">Save</button>
+          <button phx-click="undo" class="btn btn-xs" disabled={@undo == []}>Undo</button>
+          <button phx-click="save_rig" class="btn btn-xs">Save</button>
         </div>
       </header>
 
@@ -858,7 +858,7 @@ defmodule FramerWebWeb.EditorLive do
       >
         <span class="font-semibold">!</span>
         <span>{@error}</span>
-        <button phx-click="clear_error" phx-page-loading class="btn btn-ghost btn-xs ml-auto">dismiss</button>
+        <button phx-click="clear_error" class="btn btn-ghost btn-xs ml-auto">dismiss</button>
       </div>
 
       <div class="flex min-h-0 flex-1">
@@ -915,7 +915,12 @@ defmodule FramerWebWeb.EditorLive do
         class="card w-96 max-w-[90vw] border border-base-300 bg-base-100 p-6 shadow-2xl flex flex-col items-center gap-3 text-center"
       >
         <div class="flex items-center gap-2">
-          <span :if={is_nil(@loader[:progress])} id="blocking-loader-spinner" class="loading loading-spinner loading-md text-primary"></span>
+          <span
+            :if={is_nil(@loader[:progress])}
+            id="blocking-loader-spinner"
+            class="loading loading-spinner loading-md text-primary"
+          >
+          </span>
           <h3 id="blocking-loader-title" class="text-sm font-semibold">{@loader.title}</h3>
         </div>
 
@@ -980,7 +985,6 @@ defmodule FramerWebWeb.EditorLive do
             :if={step.done && step.tool}
             phx-click="select_tool"
             phx-value-tool={step.tool}
-            phx-page-loading
             title={"Focus the #{step.tool} tool"}
             class="flex cursor-pointer items-center gap-1.5"
           >
@@ -1035,7 +1039,6 @@ defmodule FramerWebWeb.EditorLive do
             <button
               phx-click="select_project"
               phx-value-id={project.id}
-              phx-page-loading
               class={[
                 "btn btn-xs min-w-0 flex-1 justify-start gap-2",
                 @rig && @rig["id"] == project.id && "btn-active"
@@ -1049,7 +1052,6 @@ defmodule FramerWebWeb.EditorLive do
               :if={@pending_delete != project.id}
               phx-click="request_delete_project"
               phx-value-id={project.id}
-              phx-page-loading
               class="btn btn-ghost btn-xs"
               title={"Remove #{project.name}"}
               aria-label={"Remove #{project.name}"}
@@ -1061,13 +1063,12 @@ defmodule FramerWebWeb.EditorLive do
               <button
                 phx-click="delete_project"
                 phx-value-id={project.id}
-                phx-page-loading
                 class="btn btn-error btn-xs"
                 title={"Confirm removing #{project.name}"}
               >
                 Remove
               </button>
-              <button phx-click="cancel_delete_project" phx-page-loading class="btn btn-ghost btn-xs">
+              <button phx-click="cancel_delete_project" class="btn btn-ghost btn-xs">
                 Cancel
               </button>
             </div>
@@ -1082,7 +1083,6 @@ defmodule FramerWebWeb.EditorLive do
           <button
             phx-click="select_tool"
             phx-value-tool="bones"
-            phx-page-loading
             class={["btn btn-xs justify-start gap-2", @tool == "bones" && "btn-primary"]}
           >
             Bones
@@ -1090,7 +1090,6 @@ defmodule FramerWebWeb.EditorLive do
           <button
             phx-click="select_tool"
             phx-value-tool="pose"
-            phx-page-loading
             class={["btn btn-xs justify-start gap-2", @tool == "pose" && "btn-primary"]}
           >
             Pose
@@ -1121,14 +1120,13 @@ defmodule FramerWebWeb.EditorLive do
               <button
                 phx-click="select_bone"
                 phx-value-id={bone["id"]}
-                phx-page-loading
                 class="flex-1 truncate text-left"
                 title={bone["id"]}
               >
                 <span :if={depth > 0} class="opacity-40">└ </span>{bone["name"] || bone["id"]}
               </button>
               <span class="opacity-50">r{trunc(bone["radius"] || 0)}</span>
-              <button phx-click="bone_deleted" phx-value-id={bone["id"]} phx-page-loading class="btn btn-ghost btn-xs">
+              <button phx-click="bone_deleted" phx-value-id={bone["id"]} class="btn btn-ghost btn-xs">
                 ×
               </button>
             </div>
@@ -1235,7 +1233,6 @@ defmodule FramerWebWeb.EditorLive do
         </div>
         <button
           phx-click="auto_bind"
-          phx-page-loading
           class="btn btn-xs mt-2 w-full"
           disabled={@rig == nil}
         >
@@ -1260,8 +1257,7 @@ defmodule FramerWebWeb.EditorLive do
           </p>
           <button
             id="toggle-background-layer"
-            phx-click="toggle_background_layer"
-            phx-page-loading
+            phx-click={JS.push("toggle_background_layer", page_loading: true)}
             data-wait-title={
               if Rig.split?(@rig),
                 do: "Removing character layer",
@@ -1298,7 +1294,6 @@ defmodule FramerWebWeb.EditorLive do
                   id="replace-layer-source-form"
                   phx-change="validate_replace_source"
                   phx-submit="save_replace_source"
-                  phx-page-loading
                 >
                   <label class="btn btn-xs btn-outline w-full cursor-pointer">
                     Change <.live_file_input upload={@uploads.replace_source} class="hidden" />
@@ -1306,7 +1301,6 @@ defmodule FramerWebWeb.EditorLive do
                   <button
                     :if={@uploads.replace_source.entries != []}
                     type="submit"
-                    phx-page-loading
                     class="btn btn-xs btn-primary w-full mt-1"
                   >
                     Apply source change
@@ -1345,8 +1339,7 @@ defmodule FramerWebWeb.EditorLive do
                 <%= if not Rig.split?(@rig) do %>
                   <button
                     id="extract-character-btn"
-                    phx-click="extract_character"
-                    phx-page-loading
+                    phx-click={JS.push("extract_character", page_loading: true)}
                     data-wait-title="Extracting character"
                     data-wait-message="Extracting character layer..."
                     class="btn btn-xs btn-primary flex-1"
@@ -1359,7 +1352,6 @@ defmodule FramerWebWeb.EditorLive do
                       id="remove-character-btn"
                       phx-click="remove_layer"
                       phx-value-layer="character"
-                      phx-page-loading
                       class="btn btn-xs btn-error btn-outline flex-1"
                     >
                       Remove
@@ -1369,7 +1361,6 @@ defmodule FramerWebWeb.EditorLive do
                       id="keep-character-btn"
                       phx-click="keep_layer"
                       phx-value-layer="character"
-                      phx-page-loading
                       class="btn btn-xs btn-success btn-outline flex-1"
                     >
                       Keep
@@ -1379,7 +1370,6 @@ defmodule FramerWebWeb.EditorLive do
                     id="replace-layer-character-form"
                     phx-change="validate_replace_character"
                     phx-submit="save_replace_character"
-                    phx-page-loading
                     class="flex-1"
                   >
                     <label class="btn btn-xs btn-outline w-full cursor-pointer">
@@ -1388,7 +1378,6 @@ defmodule FramerWebWeb.EditorLive do
                     <button
                       :if={@uploads.replace_character.entries != []}
                       type="submit"
-                      phx-page-loading
                       class="btn btn-xs btn-primary w-full mt-1"
                     >
                       Apply
@@ -1428,8 +1417,7 @@ defmodule FramerWebWeb.EditorLive do
                 <%= if not Rig.split?(@rig) do %>
                   <button
                     id="remove-background-btn"
-                    phx-click="remove_background_initial"
-                    phx-page-loading
+                    phx-click={JS.push("remove_background_initial", page_loading: true)}
                     data-wait-title="Removing background"
                     data-wait-message="Extracting character and removing background plate..."
                     class="btn btn-xs btn-error btn-outline flex-1"
@@ -1443,7 +1431,6 @@ defmodule FramerWebWeb.EditorLive do
                       id="remove-background-btn"
                       phx-click="remove_layer"
                       phx-value-layer="background"
-                      phx-page-loading
                       class="btn btn-xs btn-error btn-outline flex-1"
                     >
                       Remove
@@ -1453,7 +1440,6 @@ defmodule FramerWebWeb.EditorLive do
                       id="keep-background-btn"
                       phx-click="keep_layer"
                       phx-value-layer="background"
-                      phx-page-loading
                       class="btn btn-xs btn-success btn-outline flex-1"
                     >
                       Keep
@@ -1463,7 +1449,6 @@ defmodule FramerWebWeb.EditorLive do
                     id="replace-layer-background-form"
                     phx-change="validate_replace_background"
                     phx-submit="save_replace_background"
-                    phx-page-loading
                     class="flex-1"
                   >
                     <label class="btn btn-xs btn-outline w-full cursor-pointer">
@@ -1472,7 +1457,6 @@ defmodule FramerWebWeb.EditorLive do
                     <button
                       :if={@uploads.replace_background.entries != []}
                       type="submit"
-                      phx-page-loading
                       class="btn btn-xs btn-primary w-full mt-1"
                     >
                       Apply
@@ -1515,11 +1499,10 @@ defmodule FramerWebWeb.EditorLive do
       id="upload-form"
       phx-change="validate_source"
       phx-submit="save_source"
-      phx-page-loading
       class="flex flex-col gap-1"
     >
       <.live_file_input upload={@upload} class="file-input file-input-xs file-input-bordered w-full" />
-      <button type="submit" phx-page-loading class="btn btn-xs btn-primary w-full">Load image</button>
+      <button type="submit" class="btn btn-xs btn-primary w-full">Load image</button>
     </form>
     """
   end
@@ -1537,7 +1520,6 @@ defmodule FramerWebWeb.EditorLive do
       <div class="absolute left-2 top-2 z-10 flex items-center gap-1">
         <button
           phx-click="toggle_mesh"
-          phx-page-loading
           class={["btn btn-xs", @mesh_visible && "btn-active"]}
           title="Show or hide the control mesh"
         >
@@ -1545,7 +1527,6 @@ defmodule FramerWebWeb.EditorLive do
         </button>
         <button
           phx-click="toggle_labels"
-          phx-page-loading
           class={["btn btn-xs", @labels_visible && "btn-active"]}
           title="Show or hide bone names"
         >
@@ -1556,7 +1537,6 @@ defmodule FramerWebWeb.EditorLive do
           :if={@rig}
           phx-click="zoom"
           phx-value-action="out"
-          phx-page-loading
           class="btn btn-ghost btn-xs w-6 px-0"
           title="Zoom out (Ctrl/Cmd + wheel)"
           aria-label="Zoom out"
@@ -1567,7 +1547,6 @@ defmodule FramerWebWeb.EditorLive do
           :if={@rig}
           phx-click="zoom"
           phx-value-action="in"
-          phx-page-loading
           class="btn btn-ghost btn-xs w-6 px-0"
           title="Zoom in (Ctrl/Cmd + wheel)"
           aria-label="Zoom in"
@@ -1578,7 +1557,6 @@ defmodule FramerWebWeb.EditorLive do
           :if={@rig}
           phx-click="zoom"
           phx-value-action="fit"
-          phx-page-loading
           class="btn btn-ghost btn-xs"
           title="Fit the whole still to the viewport"
         >
@@ -1644,7 +1622,6 @@ defmodule FramerWebWeb.EditorLive do
             <button
               phx-click="set_playhead"
               phx-value-frame="0"
-              phx-page-loading
               class="btn btn-xs join-item"
               title="Jump to start (Home)"
             >
@@ -1653,7 +1630,6 @@ defmodule FramerWebWeb.EditorLive do
             <button
               phx-click="step_frame"
               phx-value-delta="-1"
-              phx-page-loading
               class="btn btn-xs join-item"
               title="Previous frame (←)"
             >
@@ -1661,7 +1637,6 @@ defmodule FramerWebWeb.EditorLive do
             </button>
             <button
               phx-click="toggle_play"
-              phx-page-loading
               class="btn btn-xs join-item w-20"
               title="Play / pause (space)"
             >
@@ -1670,7 +1645,6 @@ defmodule FramerWebWeb.EditorLive do
             <button
               phx-click="step_frame"
               phx-value-delta="1"
-              phx-page-loading
               class="btn btn-xs join-item"
               title="Next frame (→)"
             >
@@ -1679,7 +1653,6 @@ defmodule FramerWebWeb.EditorLive do
             <button
               phx-click="set_playhead"
               phx-value-frame={Rig.frame_count(@rig) - 1}
-              phx-page-loading
               class="btn btn-xs join-item"
               title="Jump to end (End)"
             >
@@ -1687,7 +1660,6 @@ defmodule FramerWebWeb.EditorLive do
             </button>
             <button
               phx-click="toggle_loop"
-              phx-page-loading
               class={["btn btn-xs join-item", loop?(@rig) && "btn-active"]}
               title="Loop playback"
             >
@@ -1697,7 +1669,6 @@ defmodule FramerWebWeb.EditorLive do
 
           <button
             phx-click="record_keyframe"
-            phx-page-loading
             class="btn btn-xs btn-primary"
             title="Record keyframe (K)"
           >
@@ -1705,7 +1676,6 @@ defmodule FramerWebWeb.EditorLive do
           </button>
           <button
             phx-click="delete_keyframe"
-            phx-page-loading
             class="btn btn-xs"
             title="Delete keyframe"
           >
@@ -1719,15 +1689,19 @@ defmodule FramerWebWeb.EditorLive do
 
           <span class="ml-auto flex items-center gap-2">
             <button
-              phx-click="render_frame"
-              phx-page-loading
+              id="render-frame-btn"
+              phx-click={JS.push("render_frame", page_loading: true)}
               data-wait-title="Rendering frame..."
               data-wait-message="Please wait while the server renders the final frame."
               class="btn btn-xs"
             >
               Render frame
             </button>
-            <form phx-submit="export" phx-page-loading class="flex items-center gap-1">
+            <form
+              id="export-form"
+              phx-submit={JS.push("export", page_loading: true)}
+              class="flex items-center gap-1"
+            >
               <select name="format" class="select select-xs select-bordered">
                 <option value="webm">webm</option>
                 <option value="mp4">mp4</option>
@@ -1735,7 +1709,6 @@ defmodule FramerWebWeb.EditorLive do
               </select>
               <button
                 type="submit"
-                phx-page-loading
                 data-wait-title="Exporting animation..."
                 data-wait-message="Encoding animation frames..."
                 class="btn btn-xs btn-accent"
@@ -1753,7 +1726,6 @@ defmodule FramerWebWeb.EditorLive do
               :for={tick <- tick_frames(Rig.frame_count(@rig))}
               phx-click="set_playhead"
               phx-value-frame={tick}
-              phx-page-loading
               class="absolute -translate-x-1/2 hover:opacity-100"
               style={"left: #{playhead_percent(tick, Rig.frame_count(@rig))}%"}
             >
@@ -1776,7 +1748,6 @@ defmodule FramerWebWeb.EditorLive do
             :for={keyframe <- Rig.keyframes(@rig)}
             phx-click="set_playhead"
             phx-value-frame={keyframe["frame"]}
-            phx-page-loading
             title={"keyframe #{keyframe["frame"]}"}
             class="absolute top-2 h-3 w-3 -translate-x-1/2 rotate-45 rounded-sm bg-accent"
             style={"left: #{playhead_percent(keyframe["frame"], Rig.frame_count(@rig))}%"}
@@ -1790,7 +1761,6 @@ defmodule FramerWebWeb.EditorLive do
             :for={keyframe <- selected_keyframes(@rig, @selected)}
             phx-click="set_playhead"
             phx-value-frame={keyframe["frame"]}
-            phx-page-loading
             title={"selected bone keyframe #{keyframe["frame"]}"}
             class="absolute top-8 h-3 w-3 -translate-x-1/2 rotate-45 rounded-sm bg-primary"
             style={"left: #{playhead_percent(keyframe["frame"], Rig.frame_count(@rig))}%"}
@@ -1810,7 +1780,6 @@ defmodule FramerWebWeb.EditorLive do
               :for={channel <- ~w(rot tx ty)}
               phx-click="set_graph_channel"
               phx-value-channel={channel}
-              phx-page-loading
               class={["btn btn-xs join-item", @graph_channel == channel && "btn-active"]}
               title={"#{channel} value / velocity"}
             >
@@ -1890,7 +1859,7 @@ defmodule FramerWebWeb.EditorLive do
       <div class="flex max-h-full max-w-3xl flex-col gap-2 rounded bg-base-100 p-3">
         <div class="flex items-center gap-3 text-xs">
           <span class="font-semibold">Server final render · frame {@frame}</span>
-          <button phx-click="close_render" phx-page-loading class="btn btn-xs ml-auto">Close</button>
+          <button phx-click="close_render" class="btn btn-xs ml-auto">Close</button>
         </div>
         <img
           src={"data:image/png;base64,#{Base.encode64(@rendered)}"}
@@ -2198,11 +2167,16 @@ defmodule FramerWebWeb.EditorLive do
     if payload[:status] == :completed do
       assign(socket, :status, "Export complete")
     else
-      assign(socket, :error, "Export failed: #{format_reason(payload[:error] || "operation failed")}")
+      socket
+      |> assign(:status, nil)
+      |> assign(:error, "Export failed: #{format_reason(payload[:error] || "operation failed")}")
     end
   end
 
-  defp update_blocking_loader_progress(%{assigns: %{blocking_loader: %{op: :export} = loader}} = socket, progress) do
+  defp update_blocking_loader_progress(
+         %{assigns: %{blocking_loader: %{op: :export} = loader}} = socket,
+         progress
+       ) do
     assign(socket, :blocking_loader, %{loader | progress: progress})
   end
 

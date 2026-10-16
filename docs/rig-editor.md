@@ -130,11 +130,12 @@ would also need a rig-schema change, so the slice still keys the whole pose.
 
 The editor provides unambiguous visual feedback for every user action:
 
-* **Immediate acknowledgement.** Every interactive button and form carries
-  `phx-page-loading` to trigger top-bar activity immediately on click (0ms delay).
-  Buttons and forms display a per-action busy state via `.phx-click-loading`,
-  `.phx-submit-loading`, and `.phx-change-loading` with reduced opacity, spinning
-  indicator, and disabled pointer events so clicks register the moment they land.
+* **Immediate acknowledgement.** Buttons and forms display a per-action busy
+  state via LiveView's built-in `.phx-click-loading`, `.phx-submit-loading`, and
+  `.phx-change-loading` classes with reduced opacity, spinning indicator, and
+  disabled pointer events so clicks register the moment they land. Actions that
+  wait on the server push with `page_loading: true`, so the top bar appears
+  immediately and clears when the reply lands.
 * **Blocking loader for long waits.** Actions that require background computation
   (such as `Export`, `Render frame`, or character extraction / background removal)
   display a blocking modal overlay (`#blocking-loader` or `#client-blocking-loader`).
