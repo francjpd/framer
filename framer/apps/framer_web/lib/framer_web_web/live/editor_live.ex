@@ -1262,8 +1262,16 @@ defmodule FramerWebWeb.EditorLive do
             id="toggle-background-layer"
             phx-click="toggle_background_layer"
             phx-page-loading
-            data-wait-title="Extracting character"
-            data-wait-message="Extracting character and generating background plate..."
+            data-wait-title={
+              if Rig.split?(@rig),
+                do: "Removing character layer",
+                else: "Extracting character"
+            }
+            data-wait-message={
+              if Rig.split?(@rig),
+                do: "Merging the character layer back into the background...",
+                else: "Extracting character and generating background plate..."
+            }
             class={["btn btn-xs w-full", Rig.split?(@rig) && "btn-primary"]}
           >
             {if Rig.split?(@rig), do: "Remove the character layer", else: "Extract the character"}
