@@ -100,25 +100,22 @@ def _render_layered_preview(
     rig: dict,
     source: np.ndarray,
     character: np.ndarray,
-    plate: np.ndarray,
+    plate: np.ndarray | None,
     frame: int,
     iterations: int,
 ):
-    """Render the split scene through the preview, passing the two layers."""
+    """Render the split scene through the preview, passing the two layers (or character only)."""
     height, width = source.shape[:2]
     source_path = tmp_path / "source.rgba"
     source_path.write_bytes(source.tobytes())
     character_path = tmp_path / "character.rgba"
     character_path.write_bytes(character.tobytes())
-    plate_path = tmp_path / "background.rgba"
-    plate_path.write_bytes(plate.tobytes())
 
     output_path = tmp_path / "preview.rgba"
 
     spec = {
         "source": str(source_path),
         "character": str(character_path),
-        "background": str(plate_path),
         "output": str(output_path),
         "width": int(width),
         "height": int(height),
@@ -126,6 +123,11 @@ def _render_layered_preview(
         "frame": int(frame),
         "iterations": int(iterations),
     }
+    if plate is not None:
+        plate_path = tmp_path / "background.rgba"
+        plate_path.write_bytes(plate.tobytes())
+        spec["background"] = str(plate_path)
+
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(json.dumps(spec))
 
@@ -297,6 +299,37 @@ def test_layered_preview_matches_the_engine(tmp_path):
 
     assert preview.shape == engine.shape
 
+    diff = np.abs(preview.astype(np.int16) - engine.astype(np.int16))
+    mean_diff = float(diff.mean())
+    outlier_fraction = float((diff > OUTLIER_TOLERANCE).mean())
+
+    assert mean_diff <= MEAN_TOLERANCE, f"mean pixel difference {mean_diff:.3f} too large"
+    assert outlier_fraction <= MAX_OUTLIER_FRACTION, (
+        f"{outlier_fraction:.4f} of pixels differ by more than {OUTLIER_TOLERANCE}"
+    )
+
+
+def test_character_only_preview_leaves_character_alone_with_transparency(tmp_path):
+    rig, source = build_layered_scene()
+    rig["layers"]["background"] = False
+    character, _plate = _layered_layers(source)
+
+    preview = _render_layered_preview(tmp_path, rig, source, character, None, 0, 8)
+    # Outside the character area, alpha is transparent (0)
+    assert (preview[:32, :, 3] == 0).all()
+    # Inside the character area, alpha is opaque (255)
+    assert (preview[32:48, 8:24, 3] == 255).all()
+
+
+def test_character_only_preview_matches_the_engine(tmp_path):
+    rig, source = build_layered_scene()
+    rig["layers"]["background"] = False
+    character, _plate = _layered_layers(source)
+
+    preview = _render_layered_preview(tmp_path, rig, source, character, None, FRAMES - 1, 8)
+    engine = DeformRenderer(rig, source, iterations=8, character=character).render(FRAMES - 1)
+
+    assert preview.shape == engine.shape
     diff = np.abs(preview.astype(np.int16) - engine.astype(np.int16))
     mean_diff = float(diff.mean())
     outlier_fraction = float((diff > OUTLIER_TOLERANCE).mean())

@@ -502,9 +502,19 @@ export function renderFrameRGBA(source, w, h, rig, frame, options = {}) {
 
   // A split rig deforms only its character layer; the opaque background plate
   // is passed through and composited underneath, exactly as the engine does.
+  // When the background is removed, the deformed character layer is rendered
+  // alone with transparency.
   if (options.character && options.background) {
     const warped = remapBilinear(options.character, w, h, mapX, mapY);
     return compositeLayers(warped, options.background);
+  }
+
+  if (options.character) {
+    return remapBilinear(options.character, w, h, mapX, mapY);
+  }
+
+  if (options.background) {
+    return options.background;
   }
 
   return remapBilinear(source, w, h, mapX, mapY);

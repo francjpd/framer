@@ -239,8 +239,12 @@ export const LbsPreview = {
       characterUrl !== layerName(this.characterUrl) ||
       backgroundUrl !== layerName(this.backgroundUrl)
     ) {
-      this.loadCharacterLayer(characterUrl);
-      this.loadBackgroundLayer(backgroundUrl);
+      if (characterUrl !== layerName(this.characterUrl)) {
+        this.loadCharacterLayer(characterUrl);
+      }
+      if (backgroundUrl !== layerName(this.backgroundUrl)) {
+        this.loadBackgroundLayer(backgroundUrl);
+      }
       return;
     }
 
@@ -590,13 +594,26 @@ export const LbsPreview = {
     // A split rig deforms only the character layer; the background plate is
     // proxied at the same size and composited underneath, exactly as the
     // engine composites the two materialised layers.
-    const layered = Boolean(
-      rig.layers && rig.layers.split && this.characterImage && this.backgroundImage
+    // When the background layer is removed, only the character layer is
+    // proxied and drawn with its transparent alpha.
+    const hasChar = Boolean(
+      rig.layers &&
+        rig.layers.split &&
+        rig.layers.character !== false &&
+        rig.layers.character !== null &&
+        this.characterImage
     );
-    proxy.character = layered
+    const hasBg = Boolean(
+      rig.layers &&
+        rig.layers.split &&
+        rig.layers.background !== false &&
+        rig.layers.background !== null &&
+        this.backgroundImage
+    );
+    proxy.character = hasChar
       ? this.downscaleImage(this.characterImage, proxy.width, proxy.height)
       : null;
-    proxy.background = layered
+    proxy.background = hasBg
       ? this.downscaleImage(this.backgroundImage, proxy.width, proxy.height)
       : null;
 
@@ -669,9 +686,22 @@ export const LbsPreview = {
 
     // A split rig deforms only the character layer and composites the untouched
     // background plate underneath - the same two steps the engine runs.
-    if (proxy.character) {
+    // If the background is removed, the deformed character layer is drawn
+    // alone with transparency.
+    if (proxy.character && proxy.background) {
       const warped = remapBilinear(proxy.character.data, proxy.width, proxy.height, mapX, mapY);
       this.drawCanvas(compositeLayers(warped, proxy.background.data));
+      return;
+    }
+
+    if (proxy.character) {
+      const warped = remapBilinear(proxy.character.data, proxy.width, proxy.height, mapX, mapY);
+      this.drawCanvas(warped);
+      return;
+    }
+
+    if (proxy.background) {
+      this.drawCanvas(proxy.background.data);
       return;
     }
 
@@ -780,9 +810,32 @@ export const LbsPreview = {
     // background plate underneath with a plain source-over, exactly as the
     // engine's `core.layers.composite` does. One fragment shader reads both
     // layers and the backward map so the per-pixel alpha weighting stays exact.
-    if (proxy.character) {
+    // If the background layer is removed, only the character layer is rendered
+    // with its transparent alpha.
+    if (proxy.character && proxy.background) {
       gl.disable(gl.BLEND);
       this.drawCompositeQuad(proxy.character, proxy.background, proxy.width, proxy.height, mapX, mapY);
+      return;
+    }
+
+    if (proxy.character) {
+      gl.disable(gl.BLEND);
+      this.drawSampledQuad(proxy.character, proxy.width, proxy.height, mapX, mapY);
+      return;
+    }
+
+    if (proxy.background) {
+      const identityX = new Float32Array(proxy.width * proxy.height);
+      const identityY = new Float32Array(proxy.width * proxy.height);
+      for (let y = 0; y < proxy.height; y++) {
+        for (let x = 0; x < proxy.width; x++) {
+          const idx = y * proxy.width + x;
+          identityX[idx] = x;
+          identityY[idx] = y;
+        }
+      }
+      gl.disable(gl.BLEND);
+      this.drawSampledQuad(proxy.background, proxy.width, proxy.height, identityX, identityY);
       return;
     }
 
