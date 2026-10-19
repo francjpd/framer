@@ -513,9 +513,5 @@ export function renderFrameRGBA(source, w, h, rig, frame, options = {}) {
     return remapBilinear(options.character, w, h, mapX, mapY);
   }
 
-  if (options.background) {
-    return options.background;
-  }
-
   return remapBilinear(source, w, h, mapX, mapY);
 }

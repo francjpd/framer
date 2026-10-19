@@ -700,11 +700,6 @@ export const LbsPreview = {
       return;
     }
 
-    if (proxy.background) {
-      this.drawCanvas(proxy.background.data);
-      return;
-    }
-
     const rgba = remapBilinear(proxy.source.data, proxy.width, proxy.height, mapX, mapY);
     this.drawCanvas(rgba);
   },
@@ -821,21 +816,6 @@ export const LbsPreview = {
     if (proxy.character) {
       gl.disable(gl.BLEND);
       this.drawSampledQuad(proxy.character, proxy.width, proxy.height, mapX, mapY);
-      return;
-    }
-
-    if (proxy.background) {
-      const identityX = new Float32Array(proxy.width * proxy.height);
-      const identityY = new Float32Array(proxy.width * proxy.height);
-      for (let y = 0; y < proxy.height; y++) {
-        for (let x = 0; x < proxy.width; x++) {
-          const idx = y * proxy.width + x;
-          identityX[idx] = x;
-          identityY[idx] = y;
-        }
-      }
-      gl.disable(gl.BLEND);
-      this.drawSampledQuad(proxy.background, proxy.width, proxy.height, identityX, identityY);
       return;
     }
 
