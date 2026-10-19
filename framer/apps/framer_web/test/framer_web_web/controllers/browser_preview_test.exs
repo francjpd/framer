@@ -1904,16 +1904,16 @@ defmodule FramerWebWeb.BrowserPreviewTest do
        %{root: root} do
     alias FramerWeb.RigStore
 
-    evidence_dir = "/home/francjpd/.no-mistakes/evidence/01M5A4E9S8V2GFAVNKKFYBJP73"
-    File.mkdir_p!(evidence_dir)
+    shots = Path.join(root, "character_only")
+    File.mkdir_p!(shots)
 
-    initial_viewport = Path.join(evidence_dir, "01_browser_initial_viewport.png")
-    extracted_viewport = Path.join(evidence_dir, "02_browser_extracted_viewport.png")
-    removed_bg_shell = Path.join(evidence_dir, "03_browser_removed_bg_shell.png")
-    removed_bg_viewport = Path.join(evidence_dir, "03_browser_removed_bg_viewport.png")
-    render_modal = Path.join(evidence_dir, "04_browser_rendered_modal.png")
-    kept_bg_viewport = Path.join(evidence_dir, "05_browser_kept_bg_viewport.png")
-    server_render_path = Path.join(evidence_dir, "server_rendered_frame.png")
+    initial_viewport = Path.join(shots, "01_browser_initial_viewport.png")
+    extracted_viewport = Path.join(shots, "02_browser_extracted_viewport.png")
+    removed_bg_shell = Path.join(shots, "03_browser_removed_bg_shell.png")
+    removed_bg_viewport = Path.join(shots, "03_browser_removed_bg_viewport.png")
+    render_modal = Path.join(shots, "04_browser_rendered_modal.png")
+    kept_bg_viewport = Path.join(shots, "05_browser_kept_bg_viewport.png")
+    server_render_path = Path.join(shots, "server_rendered_frame.png")
 
     {:ok, created} =
       RigStore.create_from_source(Fixtures.keyable_still(64, 64), "keyable.png",
@@ -1931,7 +1931,7 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     spec = %{
       baseUrl: @base_url,
       viewport: %{width: 1280, height: 900},
-      failureScreenshot: Path.join(evidence_dir, "failure.png"),
+      failureScreenshot: Path.join(shots, "failure.png"),
       steps: [
         %{name: "open the editor with the rig", open: "/editor?rig=#{rig_id}"},
         %{name: "shell renders", waitForSelector: "#editor-shell"},
