@@ -15,12 +15,14 @@ character:
   character area is reconstructed from the surrounding background, so no pixel
   is left uncovered. It is never resampled by the rig.
 
-The layers are recomposited with a plain source-over (``out = fg + bg *
-(1 - fg.a)``), so an opaque character wins outright wherever it moves - even
-over background it did not occupy at rest - and a pixel the character moved
-away from shows the reconstructed plate rather than the character's original
-pixels. That is the documented fill behaviour for a vacated region - see
-`docs/rig-editor.md`.
+When the background layer is present, the layers are recomposited with a
+plain source-over (``out = fg + bg * (1 - fg.a)``), so an opaque character wins
+outright wherever it moves - even over background it did not occupy at rest -
+and a pixel the character moved away from shows the reconstructed plate rather
+than the character's original pixels. That is the documented fill behaviour for
+a vacated region - see `docs/rig-editor.md`. When the background layer is
+removed, compositing is skipped and only the deformed character layer is
+rendered, preserving transparency.
 
 The mask itself comes from the existing background-removal segmentation
 (`core.bg_removal.character_alpha`); there is no second segmenter here.

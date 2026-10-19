@@ -853,6 +853,32 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert has_element?(view, "#keep-background-btn")
     end
 
+    test "render_frame with character extracted and background removed renders character alone with transparency",
+         %{
+           conn: conn
+         } do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      # Extract character
+      render_click(view, "toggle_background_layer", %{})
+      # Remove background
+      render_click(view, "remove_layer", %{"layer" => "background"})
+
+      # Render frame
+      render_click(view, "render_frame")
+      rendered_html = render_async(view, 5000)
+      assert rendered_html =~ "Server final render"
+      assert has_element?(view, "#render-panel")
+
+      [_, b64] = Regex.run(~r/data:image\/png;base64,([^"]+)/, rendered_html)
+      png_bytes = Base.decode64!(b64)
+      # PNG header + IHDR chunk (color type 6 = RGBA)
+      assert <<137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, "IHDR", _w::32, _h::32, 8, 6,
+               _rest::binary>> = png_bytes
+    end
+
     test "removing and keeping the character layer", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
       _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))

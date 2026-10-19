@@ -1900,6 +1900,163 @@ defmodule FramerWebWeb.BrowserPreviewTest do
     ]
   end
 
+  test "character extracted and background removed leaves character alone with transparency in preview, render, and keep",
+       %{root: root} do
+    alias FramerWeb.RigStore
+
+    shots = Path.join(root, "character_only")
+    File.mkdir_p!(shots)
+
+    initial_viewport = Path.join(shots, "01_browser_initial_viewport.png")
+    extracted_viewport = Path.join(shots, "02_browser_extracted_viewport.png")
+    removed_bg_shell = Path.join(shots, "03_browser_removed_bg_shell.png")
+    removed_bg_viewport = Path.join(shots, "03_browser_removed_bg_viewport.png")
+    render_modal = Path.join(shots, "04_browser_rendered_modal.png")
+    kept_bg_viewport = Path.join(shots, "05_browser_kept_bg_viewport.png")
+    server_render_path = Path.join(shots, "server_rendered_frame.png")
+
+    {:ok, created} =
+      RigStore.create_from_source(Fixtures.keyable_still(64, 64), "keyable.png",
+        name: "browser-layered"
+      )
+
+    rig =
+      Fixtures.simple_rig(64)
+      |> Map.put("id", created["id"])
+      |> Map.put("name", "browser-layered")
+
+    {:ok, saved} = RigStore.save(rig)
+    rig_id = saved["id"]
+
+    spec = %{
+      baseUrl: @base_url,
+      viewport: %{width: 1280, height: 900},
+      failureScreenshot: Path.join(shots, "failure.png"),
+      steps: [
+        %{name: "open the editor with the rig", open: "/editor?rig=#{rig_id}"},
+        %{name: "shell renders", waitForSelector: "#editor-shell"},
+        %{name: "viewport renders", waitForSelector: "#viewport"},
+        %{
+          name: "source image drawn",
+          waitForFunction:
+            "() => { const s = document.querySelector('#viewport .framer-viewport-status'); return !!s && s.style.display === 'none'; }"
+        },
+        %{name: "settle initial preview", sleep: 1_000},
+        %{
+          name: "screenshot initial viewport",
+          screenshot: %{path: initial_viewport, selector: "#viewport"}
+        },
+        %{
+          name: "click extract character",
+          click: "#extract-character-btn"
+        },
+        %{
+          name: "wait for character to be extracted",
+          waitForSelector: "#remove-character-btn"
+        },
+        %{name: "settle extracted preview", sleep: 1_500},
+        %{
+          name: "screenshot extracted viewport",
+          screenshot: %{path: extracted_viewport, selector: "#viewport"}
+        },
+        %{
+          name: "click remove background",
+          click: "#remove-background-btn"
+        },
+        %{
+          name: "wait for keep background button to appear",
+          waitForSelector: "#keep-background-btn"
+        },
+        %{name: "settle removed background preview", sleep: 1_500},
+        %{
+          name: "screenshot removed background editor shell",
+          screenshot: %{path: removed_bg_shell, selector: "#editor-shell"}
+        },
+        %{
+          name: "screenshot removed background viewport",
+          screenshot: %{path: removed_bg_viewport, selector: "#viewport"}
+        },
+        %{
+          name: "click render frame",
+          click: "#render-frame-btn"
+        },
+        %{
+          name: "wait for render panel modal to appear",
+          waitForSelector: "#render-panel"
+        },
+        %{name: "settle render modal", sleep: 1_000},
+        %{
+          name: "screenshot render panel modal",
+          screenshot: %{path: render_modal, selector: "#render-panel"}
+        },
+        %{
+          name: "close render modal",
+          click: "button[phx-click=\"close_render\"]"
+        },
+        %{
+          name: "wait for render modal to close",
+          waitForFunction: "() => !document.querySelector('#render-panel')"
+        },
+        %{
+          name: "click keep background to restore background layer",
+          click: "#keep-background-btn"
+        },
+        %{
+          name: "wait for remove background button to reappear",
+          waitForSelector: "#remove-background-btn"
+        },
+        %{name: "settle restored background preview", sleep: 1_500},
+        %{
+          name: "screenshot restored background viewport",
+          screenshot: %{path: kept_bg_viewport, selector: "#viewport"}
+        }
+      ]
+    }
+
+    assert run_scenario(spec, root) == :ok
+
+    # Validate screenshots:
+    # 1. Initial viewport: both subject and green background are visible
+    assert %{width: w0, height: h0} = assert_png!(initial_viewport)
+    assert subject_pixels(initial_viewport, w0, h0) >= 1_000
+    assert green_pixels(initial_viewport, w0, h0) >= 1_000
+
+    # 2. Extracted viewport: both subject and background plate are visible
+    assert %{width: w1, height: h1} = assert_png!(extracted_viewport)
+    assert subject_pixels(extracted_viewport, w1, h1) >= 1_000
+    assert green_pixels(extracted_viewport, w1, h1) >= 1_000
+
+    # 3. Background removed: subject remains alone with transparency (zero green background pixels!)
+    assert %{width: w2, height: h2} = assert_png!(removed_bg_viewport)
+    assert subject_pixels(removed_bg_viewport, w2, h2) >= 1_000
+    assert green_pixels(removed_bg_viewport, w2, h2) == 0
+
+    # 4. Server render modal is captured
+    assert %{width: wm, height: hm} = assert_png!(render_modal)
+    assert wm > 0 and hm > 0
+
+    # 5. Background restored ("Keep"): green background is back
+    assert %{width: w3, height: h3} = assert_png!(kept_bg_viewport)
+    assert subject_pixels(kept_bg_viewport, w3, h3) >= 1_000
+    assert green_pixels(kept_bg_viewport, w3, h3) >= 1_000
+
+    # Also test rendering with background removed:
+    # Remove background on saved rig and render through FramerWeb.Renderer
+    {:ok, loaded_rig} = RigStore.load(rig_id)
+    no_bg_rig = FramerWeb.Rig.remove_layer(loaded_rig, "background")
+    assert {:ok, rendered_png} = FramerWeb.Renderer.render_frame(no_bg_rig, 0)
+    File.write!(server_render_path, rendered_png)
+    assert <<137, 80, 78, 71, 13, 10, 26, 10, _rest::binary>> = rendered_png
+    # Decode and check transparency:
+    raw_frame = raw_rgba(server_render_path)
+    # Outside character area (x=10, y=10): alpha must be 0
+    bg_alpha = :binary.at(raw_frame, (10 * 64 + 10) * 4 + 3)
+    assert bg_alpha == 0
+    # Inside character area (x=16, y=40): alpha must be 255
+    char_alpha = :binary.at(raw_frame, (40 * 64 + 16) * 4 + 3)
+    assert char_alpha == 255
+  end
+
   defp run_scenario(spec, root) do
     spec_path = Path.join(root, "scenario_#{System.unique_integer([:positive])}.json")
     File.write!(spec_path, Jason.encode!(spec))
@@ -1968,6 +2125,15 @@ defmodule FramerWebWeb.BrowserPreviewTest do
 
   defp subject_pixel?(r, g, b, a) do
     r >= 200 and g <= 60 and b <= 60 and a >= 200
+  end
+
+  # Green background pixels from Fixtures.keyable_still
+  defp green_pixels(path, width, height) do
+    count_pixels(path, width, height, &green_pixel?/4)
+  end
+
+  defp green_pixel?(r, g, b, a) do
+    g >= 140 and r <= 60 and b <= 60 and a >= 200
   end
 
   # The joint disc of a selected bone: #fbbf24, lighter than the amber stroke

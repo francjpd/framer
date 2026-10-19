@@ -455,3 +455,55 @@ def test_remove_the_background_leaves_character_alone_with_transparency(scene):
     posed = renderer.render(FRAMES - 1)
     # The deformed character is also transparent outside the warped character
     assert (posed[0:4, :, 3] == 0).all()
+
+
+def test_deform_renderer_without_explicit_character_loads_character_layer(scene):
+    """
+    When DeformRenderer is created on a split rig with background removed and no
+    explicit character passed, it automatically resolves and loads the character
+    layer, leaving background as None and rendering only the character with transparency.
+    """
+    rig, source = scene["rig"], scene["source"]
+    no_bg_rig = json.loads(json.dumps(rig))
+    no_bg_rig["layers"]["background"] = False
+
+    renderer = DeformRenderer(no_bg_rig, source, iterations=6)
+    assert renderer.background is None
+    assert renderer.character is not None
+
+    rest = renderer.render(0)
+    assert (rest[: CHARACTER_ROWS.start, :, 3] == 0).all()
+    assert (rest[CHARACTER_ROWS, CHARACTER_COLUMNS, 3] == 255).all()
+
+    posed = renderer.render(FRAMES - 1)
+    assert (posed[0:4, :, 3] == 0).all()
+
+
+def test_deform_video_renders_character_only_when_background_is_removed(tmp_path):
+    """
+    The full deform operation (deform_video) produces a transparent PNG containing
+    only the character when the background layer is removed.
+    """
+    source_path, rig_path = write_scene(tmp_path)
+    rig = json.loads(rig_path.read_text())
+    rig["layers"]["background"] = False
+    rig_path.write_text(json.dumps(rig))
+
+    out_path = tmp_path / "char_only_0.png"
+    result = deform_video(
+        input_path=str(source_path),
+        output_path=str(out_path),
+        rig=str(rig_path),
+        start_frame=0,
+        end_frame=0,
+        still=True,
+        iterations=6,
+    )
+    assert result["success"]
+    img = cv2.imread(str(out_path), cv2.IMREAD_UNCHANGED)
+    assert img is not None
+    assert img.shape[2] == 4
+    # Outside the character area, alpha is transparent (0)
+    assert (img[: CHARACTER_ROWS.start, :, 3] == 0).all()
+    # Inside the character area, alpha is opaque (255)
+    assert (img[CHARACTER_ROWS, CHARACTER_COLUMNS, 3] == 255).all()

@@ -47,15 +47,21 @@ from typing import Any
 import cv2
 import numpy as np
 
+from core.bg_removal import character_alpha
 from core.errors import RigError
 from core.layers import (
+    LAYER_FILENAME,
     PLATE_FILENAME,
     background_plate,
     composite,
     declared_background_path,
+    declared_character_path,
     has_background_layer,
+    has_character_layer,
     is_split,
+    layer_settings,
     load_layer,
+    split_layers,
 )
 
 # Re-exported so `from core.deform import RigError` keeps working for callers
@@ -987,12 +993,13 @@ class DeformRenderer:
     :meth:`render` only re-evaluates bones and runs the skinning, which is what
     makes chunked export cheap.
 
-    When a character layer is supplied the rig only ever warps that layer. If
-    the background layer is present, it is composited underneath the deformed
-    character without being resampled, keeping the background identical in every
-    frame. If the background layer is removed, only the character layer is
-    rendered, preserving transparency. Without layers the renderer behaves
-    exactly as before and deforms the whole still.
+    On a split rig with a character layer (or when a character layer is
+    supplied), the rig only ever warps that layer. If the background layer is
+    present, it is composited underneath the deformed character without being
+    resampled, keeping the background identical in every frame. If the
+    background layer is removed, only the character layer is rendered,
+    preserving transparency. Without layers the renderer behaves exactly as
+    before and deforms the whole still.
     """
 
     def __init__(
@@ -1030,6 +1037,26 @@ class DeformRenderer:
             self.character = np.ascontiguousarray(character)
 
         if is_split(self.rig):
+            if self.character is None and has_character_layer(self.rig):
+                char_declared = declared_character_path(self.rig) or LAYER_FILENAME
+                char_path = Path(char_declared)
+                source_path = self.rig.get("source", {}).get("path") or ""
+                if not char_path.is_absolute() and source_path:
+                    char_path = Path(source_path).parent / char_path
+                if char_path.exists():
+                    char = load_layer(char_path)
+                else:
+                    settings = layer_settings(self.rig)
+                    alpha = character_alpha(self.source, **settings)
+                    char, _ = split_layers(self.source, alpha)
+
+                if char is not None:
+                    if char.shape[1] != canvas_width or char.shape[0] != canvas_height:
+                        char = cv2.resize(
+                            char, (canvas_width, canvas_height), interpolation=cv2.INTER_LINEAR
+                        )
+                    self.character = np.ascontiguousarray(char)
+
             if has_background_layer(self.rig):
                 bg_declared = declared_background_path(self.rig) or PLATE_FILENAME
                 bg_path = Path(bg_declared)
