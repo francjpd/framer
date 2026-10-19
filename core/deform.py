@@ -993,12 +993,13 @@ class DeformRenderer:
     :meth:`render` only re-evaluates bones and runs the skinning, which is what
     makes chunked export cheap.
 
-    When a character layer is supplied the rig only ever warps that layer. If
-    the background layer is present, it is composited underneath the deformed
-    character without being resampled, keeping the background identical in every
-    frame. If the background layer is removed, only the character layer is
-    rendered, preserving transparency. Without layers the renderer behaves
-    exactly as before and deforms the whole still.
+    On a split rig with a character layer (or when a character layer is
+    supplied), the rig only ever warps that layer. If the background layer is
+    present, it is composited underneath the deformed character without being
+    resampled, keeping the background identical in every frame. If the
+    background layer is removed, only the character layer is rendered,
+    preserving transparency. Without layers the renderer behaves exactly as
+    before and deforms the whole still.
     """
 
     def __init__(

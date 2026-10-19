@@ -193,8 +193,8 @@ and compares the dense weights, the rendered pixels and the interpolated poses.
 It skips when Node is absent; the Python golden test (`tests/test_golden_deform.py`)
 still covers the authoritative render. The same file proves the layering agrees:
 it renders the split scene from `tests/layer_scene.py` through the preview with
-the character layer and the background plate and compares against the engine's
-layered render. The server-side timeline value/velocity
+both layers (as well as character-only with transparency when the background is
+removed) and compares against the engine's layered render. The server-side timeline value/velocity
 graph interpolates poses with `FramerWeb.Rig.interpolate_pose/3`, which mirrors
 `core.deform.interpolate_keyframes` and `lbs.mjs` `interpolatePoses`; an Elixir
 test (`framer/apps/framer_web/test/framer_web/rig_test.exs`) keeps it tied to
