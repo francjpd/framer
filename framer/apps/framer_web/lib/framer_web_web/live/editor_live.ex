@@ -1595,8 +1595,8 @@ defmodule FramerWebWeb.EditorLive do
                 <%= cond do %>
                   <% @patch_state == :ready -> %>
                     <span class="badge badge-success badge-xs">ready</span>
-                  <% @patch_state in [:stale, :pending] -> %>
-                    <span class="badge badge-warning badge-xs"><%= patch_badge_text(@patch_state) %></span>
+                  <% @patch_state == :pending -> %>
+                    <span class="badge badge-warning badge-xs">pending</span>
                   <% true -> %>
                     <span class="badge badge-ghost badge-xs"><%= patch_badge_text(@patch_state) %></span>
                 <% end %>
@@ -2436,7 +2436,6 @@ defmodule FramerWebWeb.EditorLive do
       not Rig.has_background_layer?(rig) -> :no_plate
       not Rig.has_character_layer?(rig) -> :no_character
       RigStore.patch_path(rig["id"]) == nil -> :pending
-      patch_built_with_other_fade?(rig) -> :stale
       true -> :ready
     end
   end
@@ -2457,11 +2456,9 @@ defmodule FramerWebWeb.EditorLive do
   defp patch_label(:no_character), do: "Needs the character layer"
   defp patch_label(:off), do: "Off"
   defp patch_label(:pending), do: "Not computed yet"
-  defp patch_label(:stale), do: "Stale - compute it again"
   defp patch_label(:ready), do: "patch.png"
 
   defp patch_badge_text(:ready), do: "ready"
-  defp patch_badge_text(:stale), do: "stale"
   defp patch_badge_text(:pending), do: "pending"
   defp patch_badge_text(:off), do: "off"
   defp patch_badge_text(:no_skeleton), do: "no skeleton"

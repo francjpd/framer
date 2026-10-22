@@ -962,7 +962,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert FramerWeb.Rig.bone(saved, "b0")["rest"]["head"] == [16.0, 16.0]
     end
 
-    test "the export never builds the patch", %{conn: conn} do
+    test "the export builds the project's patch when it is missing", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
       _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
       id = rig["id"]
@@ -970,16 +970,16 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       render_click(view, "toggle_background_layer", %{})
 
-      # The patch is the user's explicit ask, so the export uses the
-      # materialised one and never builds it: the exported frames are the ones
-      # the preview showed.
+      # The rig records a feather but the project has no materialised patch, so
+      # the export builds it there first: the exported frames carry the same
+      # patch the preview would show.
       refute RigStore.patch_path(id)
 
       render_submit(form(view, "#export-form"), %{"format" => "webm"})
-      render_async(view)
+      render_async(view, 60_000)
 
       assert render(view) =~ "Exporting animation"
-      refute RigStore.patch_path(id)
+      assert RigStore.patch_path(id)
 
       stop_orchestrator()
     end

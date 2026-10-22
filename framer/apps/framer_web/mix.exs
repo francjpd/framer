@@ -25,7 +25,7 @@ defmodule FramerWeb.MixProject do
   def application do
     [
       mod: {FramerWeb.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      extra_applications: [:logger, :runtime_tools, :crypto]
     ]
   end
 
