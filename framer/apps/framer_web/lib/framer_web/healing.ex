@@ -124,6 +124,7 @@ defmodule FramerWeb.Healing do
         "width" => correction.bbox_width,
         "height" => correction.bbox_height
       },
+      "canvas" => [correction.canvas_width, correction.canvas_height],
       "fade" => correction.fade,
       "mask" => Base.encode64(correction.mask),
       "content" => Base.encode64(correction.content)

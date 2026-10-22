@@ -318,24 +318,29 @@ automatic patch is, done by hand, and it is done the same way:
   pixels never bleed into the correction;
 * the falloff is the patch's own ramp (`core.patch.feather_ramp`), but it is
   measured from the area the user painted, not from the rig's absolute feather
-  width: the correction is fully opaque across the painted area's middle, so
-  the pixels the user covered are actually replaced, and it feathers into the
-  untouched background at the edge of the painted area - never as a
+  width: the correction reaches full opacity at the middle of the painted
+  area, so the pixels the user covered are actually replaced, and it feathers
+  into the untouched background at the edge of the painted area - never as a
   hard-edged blob;
 * the feather is the rig's own - the band the correction is feathered with is
   the width the document records as `layers.fade` (the **Patch feather**
-  slider), scaled down when the painted area is smaller than that feather, so
-  a brush-sized area is never translucent all the way through. A rig with no
-  feather of its own still gets a soft edge: the band is never zero, and is
-  three pixels wide, narrowed further only when the painted area is too small
-  to carry even that.
+  slider), scaled down only when the painted area is too small to carry that
+  band, so the correction always reaches full opacity at the middle of what
+  the user painted. The band is never scaled up, and never zero: a rig with no
+  feather of its own still gets a soft edge, three pixels wide, narrowed
+  further only when the painted area is too small to carry even that.
 
 The corrected plate is written back over the project's background layer, so
 the frame the editor shows and the frame the engine renders are the same
-healed background. The strokes are painted in the canvas's own pixels, and the
-plate is fitted to the canvas before it is healed, so the correction lands
-exactly where the user painted it even when the background layer is an image
-of another resolution.
+healed background. The strokes are painted in the canvas's own pixels, and
+the background layer may be an image of another resolution, so the painted
+area is mapped into the layer's own pixels: the correction lands exactly
+where the user painted it, and the layer keeps its own resolution. The
+correction's geometry is recorded in the canvas's pixels - the space the user
+painted in, and the space the frame is rendered in - so the corpus never
+mixes a canvas size with a box in layer pixels. The healed layer is written
+in the format its own name implies, so the editor serves it with the content
+type it promises.
 
 **The patch shows the correction.** The patch is the ground the character
 uncovers, reconstructed from the plate - and the reconstruction would paint
@@ -343,9 +348,11 @@ over the ground the user just fixed by hand. The correction is therefore
 written into the project as well (`corrections.json`, beside the still), and
 the patch re-applies it when it is built, so a patch that is rebuilt - the
 feather changed, the motion changed - shows the user's own fix again instead
-of the ground it replaced. The patch is dropped when the correction lands,
-because the patch is built from the plate: the next render rebuilds it
-against the healed ground, with the correction in it.
+of the ground it replaced. A correction painted on another canvas - the still
+was replaced and the canvas changed with it - is not re-applied: its
+rectangle no longer says where it belongs. The patch is dropped when the
+correction lands, because the patch is built from the plate: the next render
+rebuilds it against the healed ground, with the correction in it.
 
 The brush is offered only when the project has a background layer to paint
 into (`#select-heal-tool` is disabled otherwise). **Brush size**

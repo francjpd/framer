@@ -63,6 +63,7 @@ from core.healing import (
 )
 from core.layers import split_layers, write_layer
 from core.patch import (
+    build_patch,
     character_region,
     corrections_path,
     feather_ramp,
@@ -151,9 +152,9 @@ def test_the_falloff_is_measured_from_the_painted_area() -> None:
     band = result["band"]
     mask = result["mask"]
 
-    # The band is the rig's own feather, narrowed to what the painted area
-    # can carry: the correction keeps an opaque middle.
-    assert 0 < band < FADE
+    # The band is the rig's own feather: the painted area is bigger than it,
+    # so it is not scaled down.
+    assert band == FADE
     assert band == correction_band(mask, FADE)
 
     # The ramp is the patch's own ramp over that band.
@@ -242,7 +243,7 @@ def test_the_plate_stays_opaque() -> None:
 
 
 def test_the_correction_lands_where_the_user_painted(tmp_path: Path) -> None:
-    """The strokes are canvas pixels: the plate is fitted to the canvas."""
+    """The strokes are canvas pixels: they are mapped into the plate's."""
     # A plate that is not the canvas's size: the user replaced the
     # background with an image of another resolution.
     plate = cv2.resize(make_plate(), (SIZE * 2, SIZE * 2), interpolation=cv2.INTER_NEAREST)
@@ -262,12 +263,13 @@ def test_the_correction_lands_where_the_user_painted(tmp_path: Path) -> None:
         canvas=(SIZE, SIZE),
     )
 
-    # The plate is healed at the canvas's size, so the correction is where
-    # the user painted it: the artefact's own pixels.
+    # The plate keeps its own resolution - the user's asset is not replaced
+    # by a canvas-sized one - and the correction is where the user painted
+    # it: the artefact's own pixels, twice as far into the plate.
     healed = cv2.imread(str(tmp_path / "healed.png"), cv2.IMREAD_UNCHANGED)
-    assert healed.shape[:2] == (SIZE, SIZE)
-    assert healed[32, 32, 2] < 40, "the artefact is still red after healing"
-    assert healed[32, 32, 1] > 150, "the surrounding background was not painted over it"
+    assert healed.shape[:2] == (SIZE * 2, SIZE * 2)
+    assert healed[64, 64, 2] < 40, "the artefact is still red after healing"
+    assert healed[64, 64, 1] > 150, "the surrounding background was not painted over it"
 
     # And the rectangle the correction is cropped to is a rectangle in canvas
     # pixels, so the corpus never mixes a canvas size with plate pixels.
@@ -403,7 +405,7 @@ def _scene() -> tuple[dict, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     return rig, source, character, plate, alpha
 
 
-def _write_corrections(path: Path, result: dict) -> None:
+def _write_corrections(path: Path, result: dict, canvas: tuple[int, int] = (SIZE, SIZE)) -> None:
     """The project's corrections, in the shape the editor writes them."""
     bbox = result["bbox"]
     mask = cv2.imread(str(Path(result["mask"])), cv2.IMREAD_UNCHANGED)
@@ -411,6 +413,7 @@ def _write_corrections(path: Path, result: dict) -> None:
 
     entry = {
         "bbox": bbox,
+        "canvas": [canvas[0], canvas[1]],
         "fade": result["fade"],
         "mask": base64.b64encode(cv2.imencode(".png", mask)[1].tobytes()).decode(),
         "content": base64.b64encode(cv2.imencode(".png", content)[1].tobytes()).decode(),
@@ -497,7 +500,7 @@ def test_the_patch_shows_the_correction_and_keeps_it(tmp_path: Path) -> None:
         assert len(ys) > 0
 
         moved = np.abs(frame[ys, xs, :3].astype(int) - ground_frame[ys, xs, :3].astype(int))
-        assert moved.mean() > 20, "the patch painted over the correction"
+        assert moved.mean() > 10, "the patch painted over the correction"
 
         # And the frame moved towards the correction, not away from it.
         to_correction = np.abs(frame[ys, xs, :3].astype(int) - healed_plate[ys, xs, :3].astype(int))
@@ -548,3 +551,105 @@ def test_the_patch_is_rebuilt_when_a_correction_is_added(tmp_path: Path) -> None
         rig, source_path, character, plate, weights=weights, build=False
     )
     assert stale is None, "the patch was not stale after a correction"
+
+
+def test_a_correction_from_another_canvas_is_not_reapplied(tmp_path: Path) -> None:
+    """
+    A correction painted on another canvas does not belong here.
+
+    The source was replaced and the canvas changed with it, so the
+    correction's rectangle no longer says where the correction belongs: it
+    must not be painted over the new canvas at the old offset.
+    """
+    rig, source, character, plate, alpha = _scene()
+    source_path = tmp_path / "source.png"
+    cv2.imwrite(str(source_path), source)
+    write_layer(tmp_path / "background.png", plate)
+
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+
+    strokes = [{"points" : [[32, 40]], "radius": 6}]
+    healed = heal_file(
+        tmp_path / "background.png",
+        strokes,
+        target_path=tmp_path / "background.png",
+        artifacts_dir=tmp_path / "artifacts",
+        fade=FADE,
+        radius=6,
+        canvas=(SIZE, SIZE),
+    )
+    # The correction was painted on a canvas of another size.
+    _write_corrections(corrections_path(source_path), healed, canvas=(SIZE // 2, SIZE // 2))
+
+    patch, _path = resolve_patch_layer(
+        rig, source_path, character, plate, weights=weights, iterations=6
+    )
+    ground = build_patch(rig, alpha, plate, fade=FADE, weights=weights, iterations=6)
+    assert np.array_equal(patch[:, :, :3], ground[:, :, :3]), "a stale correction was applied"
+
+
+def test_a_correction_reaching_past_the_canvas_is_clipped(tmp_path: Path) -> None:
+    """A correction at the canvas's edge is placed where it still belongs."""
+    rig, source, character, plate, alpha = _scene()
+    source_path = tmp_path / "source.png"
+    cv2.imwrite(str(source_path), source)
+    write_layer(tmp_path / "background.png", plate)
+
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+
+    strokes = [{"points": [[56, 56]], "radius": 6}]
+    healed = heal_file(
+        tmp_path / "background.png",
+        strokes,
+        target_path=tmp_path / "background.png",
+        artifacts_dir=tmp_path / "artifacts",
+        fade=FADE,
+        radius=6,
+        canvas=(SIZE, SIZE),
+    )
+
+    # The correction's rectangle reaches past the canvas's edge.
+    path = corrections_path(source_path)
+    _write_corrections(path, healed)
+    payload = json.loads(path.read_text())
+    payload["corrections"][0]["bbox"]["x"] = SIZE - 4
+    path.write_text(json.dumps(payload))
+
+    patch, _path = resolve_patch_layer(
+        rig, source_path, character, plate, weights=weights, iterations=6
+    )
+    ground = build_patch(rig, alpha, plate, fade=FADE, weights=weights, iterations=6)
+
+    # The part of the correction that fits the canvas is applied, and the
+    # build does not fall over the part that does not.
+    assert not np.array_equal(patch[:, :, :3], ground[:, :, :3])
+
+
+def test_the_healed_plate_is_written_in_the_format_its_name_implies(tmp_path: Path) -> None:
+    """A layer the editor calls a .jpg has to hold JPEG bytes.
+
+    The editor serves a layer with the content type its name promises, so a
+    plate the project calls ``background_replaced.jpg`` may not hold PNG
+    bytes under that name.
+    """
+    plate_path = tmp_path / "background_replaced.jpg"
+    cv2.imwrite(str(plate_path), make_plate())
+
+    strokes_path = tmp_path / "strokes.json"
+    strokes_path.write_text(json.dumps({"strokes": stroke()}))
+
+    heal_file(
+        plate_path,
+        read_strokes(strokes_path),
+        target_path=plate_path,
+        artifacts_dir=tmp_path / "artifacts",
+        fade=FADE,
+        radius=BRUSH,
+    )
+
+    assert plate_path.read_bytes()[:3] == b"\xff\xd8\xff", "the healed plate is not a JPEG"
+
+    # And it is still a readable plate.
+    healed = cv2.imread(str(plate_path), cv2.IMREAD_UNCHANGED)
+    assert healed is not None
+    assert healed.shape[:2] == (SIZE, SIZE)

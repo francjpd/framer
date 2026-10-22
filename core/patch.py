@@ -320,6 +320,10 @@ def load_corrections(path: str | Path, shape: tuple[int, int]) -> list[dict[str,
     band it was feathered with.  The editor writes them from the corpus, so
     a patch that is rebuilt re-applies the user's own fixes instead of
     painting over them.
+
+    A correction is skipped when it was painted on another canvas: the
+    source was replaced and the canvas changed, so its rectangle no longer
+    says where the correction belongs.
     """
     path = Path(path)
     if not path.exists():
@@ -340,6 +344,11 @@ def load_corrections(path: str | Path, shape: tuple[int, int]) -> list[dict[str,
         if not isinstance(entry, dict):
             continue
 
+        canvas = entry.get("canvas") or []
+        if len(canvas) == 2 and (int(canvas[0]), int(canvas[1])) != (width, height):
+            # Painted on another canvas: its rectangle means nothing here.
+            continue
+
         mask = _decode_mask(entry.get("mask"))
         content = _decode_png(entry.get("content"))
         if mask is None or content is None:
@@ -351,10 +360,17 @@ def load_corrections(path: str | Path, shape: tuple[int, int]) -> list[dict[str,
         w = int(bbox.get("width") or 0)
         h = int(bbox.get("height") or 0)
 
+        # The rectangle is clipped to the canvas: a correction that reaches
+        # past its edge is placed where it still belongs.
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(width, x + w), min(height, y + h)
+        if x1 <= x0 or y1 <= y0:
+            continue
+
         full_mask = np.zeros((height, width), np.uint8)
         full_content = np.zeros((height, width, 4), np.uint8)
-        full_mask[y : y + h, x : x + w] = mask[:h, :w]
-        full_content[y : y + h, x : x + w] = content[:h, :w]
+        full_mask[y0:y1, x0:x1] = mask[y0 - y : y1 - y, x0 - x : x1 - x]
+        full_content[y0:y1, x0:x1] = content[y0 - y : y1 - y, x0 - x : x1 - x]
 
         corrections.append(
             {

@@ -82,9 +82,16 @@ defmodule FramerWeb.Healing.BrushTest do
     assert wait_for_stored(stored_before), "the correction was never stored"
 
     # The background layer is what changed, and the correction is opaque
-    # across the area the user painted: the artefact they covered is gone,
-    # not merely tinted.
-    assert artefact_red(plate) == 0, "the painted area was not healed"
+    # where the user painted: the pixels they covered are replaced, not
+    # tinted, and the correction feathers out of the painted area.
+    reds = reds_along_the_brush(plate)
+
+    assert List.last(reds) < 20, "the painted area was not healed"
+    assert List.first(reds) > 20, "the edge of the correction was overwritten"
+    assert reds == Enum.sort(reds, :desc), "the correction does not ramp into the background"
+
+    distinct = reds |> Enum.uniq() |> length()
+    assert distinct >= 3, "the correction was pasted on as a hard edge"
 
     # The ground the brush never reached is untouched.
     outside = Fixtures.read_pixels(plate, [{2, 2}, {60, 60}, {2, 60}])
@@ -130,6 +137,7 @@ defmodule FramerWeb.Healing.BrushTest do
     {:ok, body} = File.read(corrections)
     {:ok, %{"corrections" => [entry]}} = Jason.decode(body)
     assert entry["bbox"]["width"] > 0
+    assert entry["canvas"] == [@size, @size]
     assert entry["fade"] > 0
     assert byte_size(Base.decode64!(entry["mask"])) > 0
     assert byte_size(Base.decode64!(entry["content"])) > 0
@@ -244,6 +252,20 @@ defmodule FramerWeb.Healing.BrushTest do
     |> Map.get("pixels")
     |> Enum.map(fn [_x, _y, pixel] -> Enum.at(pixel, 2) end)
     |> Enum.max()
+  end
+
+  # The red the artefact is left with along the line the brush painted, from
+  # the artefact's edge into the middle of the correction: the correction
+  # feathers out of the painted area, so the red falls away towards the
+  # middle.
+  defp reds_along_the_brush(plate) do
+    points =
+      for x <- (@artefact_x + @artefact_size - 1)..@centre_x//-1, do: {x, @centre_y}
+
+    plate
+    |> Fixtures.read_pixels(points)
+    |> Map.get("pixels")
+    |> Enum.map(fn [_x, _y, pixel] -> Enum.at(pixel, 2) end)
   end
 
   defp latest_correction do

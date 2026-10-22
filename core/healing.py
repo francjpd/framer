@@ -34,6 +34,7 @@ is used.
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -129,25 +130,30 @@ def correction_band(mask: np.ndarray, fade: int) -> int:
     """
     The width of the falloff band of a manual correction, in pixels.
 
-    The ramp is the patch's own ramp, so a correction merges into the
-    untouched background exactly like the automatic patch does - but it is
-    measured from the area the user painted, not from the rig's absolute
-    feather width.  A brush-sized area is smaller than the feather the rig
-    records, so the band is scaled down to what the painted area can carry:
-    the correction is fully opaque across its middle and only its edge
-    feathers into the background.
+    The band is the rig's own feather, so the feather setting keeps shaping
+    the edge of a manual correction the way it shapes the automatic patch.
+    It is scaled down only when the painted area is smaller than that
+    feather - a brush-sized area cannot carry a wide band - and never up.
 
     The band is never zero: a rig with no feather of its own still gets a
     correction with a soft edge, never a hard-edged blob.
     """
     radius = region_radius(mask)
-    # The widest band that still leaves the painted area opaque across its
-    # middle: the ramp reaches full opacity half way into the area.
-    limit = max(1, int(radius) // 2)
+    # The widest band the painted area can carry: the ramp reaches full
+    # opacity at or before the area's inscribed radius.
+    limit = max(1, int(radius) - 1)
 
     if fade <= 0:
         return max(1, min(MIN_BAND, limit))
     return max(1, min(int(fade), limit))
+
+
+def _fit(image: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """Resize an image to a ``(height, width)`` shape."""
+    height, width = shape
+    if image.shape[0] == height and image.shape[1] == width:
+        return image
+    return cv2.resize(image, (width, height), interpolation=cv2.INTER_LINEAR)
 
 
 def heal_plate(
@@ -156,6 +162,7 @@ def heal_plate(
     *,
     fade: int = DEFAULT_FADE,
     radius: int = DEFAULT_BRUSH_RADIUS,
+    canvas: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """
     Paint the surrounding background over the area the brush covered.
@@ -166,27 +173,45 @@ def heal_plate(
     the correction merges into the untouched background instead of sitting on
     it as a hard-edged blob.
 
+    The strokes are painted in the canvas's own pixels, and the plate may be
+    another size - the user replaced the background with an image of another
+    resolution.  The painted area is therefore built in the canvas's pixels,
+    where the brush stays round, and mapped into the plate's own pixels, so
+    the correction lands where the user painted and the plate keeps its own
+    resolution.
+
     Args:
         plate: the background plate, BGRA.
-        strokes: the strokes the user painted.
+        strokes: the strokes the user painted, in canvas pixels.
         fade: the width of the feather the rig records, in pixels.
         radius: the brush radius for strokes that do not name one.
+        canvas: the canvas size, as ``(width, height)``.
 
     Returns:
         A map with:
 
-        * ``plate`` - the healed plate, BGRA and fully opaque.
-        * ``mask`` - the painted area, ``(H, W)`` uint8.
-        * ``content`` - what was painted: the reconstructed area, BGRA.
-        * ``replaced`` - what it replaced: the plate's own pixels there, BGRA.
+        * ``plate`` - the healed plate, BGRA and fully opaque, in the plate's
+          own pixels.
+        * ``mask`` - the painted area, ``(H, W)`` uint8, in canvas pixels.
+        * ``content`` - what was painted: the reconstructed area, BGRA, in
+          canvas pixels.
+        * ``replaced`` - what it replaced: the plate's own pixels there, BGRA,
+          in canvas pixels.
         * ``bbox`` - the rectangle the correction covers, as
-          ``(x, y, width, height)``.
+          ``(x, y, width, height)``, in canvas pixels.
         * ``band`` - the width of the falloff band, in pixels.
     """
     if plate.ndim != 3 or plate.shape[2] != 4:
         raise RigError(f"the healing brush needs a BGRA plate, got shape {plate.shape}")
 
-    mask = stroke_mask(plate.shape, strokes, radius)
+    height, width = plate.shape[:2]
+    canvas_width, canvas_height = (int(canvas[0]), int(canvas[1])) if canvas else (width, height)
+
+    if canvas_width <= 0 or canvas_height <= 0:
+        raise RigError("the healing brush needs a canvas size")
+
+    # The painted area is the user's own brush, in the canvas's pixels.
+    mask = stroke_mask((canvas_height, canvas_width), strokes, radius)
     if mask.max() == 0:
         raise RigError("the healing brush needs at least one painted point")
 
@@ -195,25 +220,35 @@ def heal_plate(
     # the user painted, so the correction is opaque where they painted.
     band = correction_band(mask, fade)
     ramp = feather_ramp(mask, band)
-    alpha = (ramp.astype(np.float32) / 255.0)[:, :, np.newaxis]
+
+    # The painted area and the ramp are mapped into the plate's own pixels,
+    # so the correction is applied to the plate the project holds.
+    plate_mask = (_fit(mask, (height, width)) > 127).astype(np.uint8) * 255
+    plate_alpha = (_fit(ramp, (height, width)).astype(np.float32) / 255.0)[:, :, np.newaxis]
 
     bgr = plate[:, :, :3]
-    content_bgr = reconstruct(plate, mask, INPAINT_RADIUS)
-    content = np.concatenate(
-        [content_bgr, np.full(plate.shape[:2] + (1,), 255, dtype=np.uint8)], axis=2
-    )
+    content_bgr = reconstruct(plate, plate_mask, INPAINT_RADIUS)
 
-    healed = bgr.astype(np.float32) * (1.0 - alpha) + content_bgr.astype(np.float32) * alpha
+    healed = (
+        bgr.astype(np.float32) * (1.0 - plate_alpha)
+        + content_bgr.astype(np.float32) * plate_alpha
+    )
     healed = np.clip(healed, 0, 255).astype(np.uint8)
     healed = np.concatenate(
         [healed, np.full(plate.shape[:2] + (1,), 255, dtype=np.uint8)], axis=2
     )
 
+    # The training material is recorded in the canvas's own pixels: that is
+    # the space the user painted in, and the space the frame is rendered in.
+    content = np.concatenate(
+        [content_bgr, np.full((height, width, 1), 255, dtype=np.uint8)], axis=2
+    )
+
     return {
         "plate": healed,
         "mask": mask,
-        "content": content,
-        "replaced": plate.copy(),
+        "content": _fit(content, (canvas_height, canvas_width)),
+        "replaced": _fit(plate, (canvas_height, canvas_width)),
         "bbox": mask_bbox(mask),
         "band": band,
     }
@@ -241,6 +276,27 @@ def crop(image: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
     return image[y : y + height, x : x + width]
 
 
+def write_plate(path: str | Path, plate: np.ndarray) -> Path:
+    """
+    Write a background plate in the format its own name implies.
+
+    The editor serves a layer with the content type its name promises, so a
+    plate the project calls ``background_replaced.jpg`` has to hold JPEG
+    bytes - the plate is opaque, so the format costs it nothing.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(f".{target.name}.tmp.{uuid.uuid4().hex}{target.suffix}")
+
+    if not cv2.imwrite(str(temp), plate):
+        if temp.exists():
+            temp.unlink()
+        raise RigError(f"could not write the background plate to {target}")
+
+    temp.replace(target)
+    return target
+
+
 def heal_file(
     plate_path: str | Path,
     strokes: Iterable[Any],
@@ -258,11 +314,10 @@ def heal_file(
     and the pixels it replaced - are written as PNGs, cropped to the painted
     rectangle, so the editor can store them the moment the brush is used.
 
-    The strokes are painted in the canvas's own pixels, and the plate the
-    editor shows is fitted to the canvas, so the plate is fitted to the
-    canvas too before it is healed: the correction then lands exactly where
-    the user painted it, and the rectangle the artefacts are cropped to is a
-    rectangle in canvas pixels.
+    The strokes are painted in the canvas's own pixels.  The plate the
+    editor shows is fitted to the canvas, so the painted area is mapped into
+    the plate's own pixels: the correction then lands exactly where the user
+    painted it, and the plate the project holds keeps its own resolution.
 
     Args:
         plate_path: the background plate to heal.
@@ -285,12 +340,7 @@ def heal_file(
             [plate, np.full(plate.shape[:2] + (1,), 255, dtype=np.uint8)], axis=2
         )
 
-    if canvas is not None:
-        width, height = int(canvas[0]), int(canvas[1])
-        if width > 0 and height > 0 and (plate.shape[1], plate.shape[0]) != (width, height):
-            plate = cv2.resize(plate, (width, height), interpolation=cv2.INTER_LINEAR)
-
-    result = heal_plate(plate, strokes, fade=fade, radius=radius)
+    result = heal_plate(plate, strokes, fade=fade, radius=radius, canvas=canvas)
     bbox = result["bbox"]
     band = result["band"]
 
@@ -307,7 +357,7 @@ def heal_file(
     write_layer(replaced_path, crop(result["replaced"], bbox))
 
     target = Path(target_path)
-    write_layer(target, result["plate"])
+    write_plate(target, result["plate"])
 
     meta = {
         "bbox": {"x": bbox[0], "y": bbox[1], "width": bbox[2], "height": bbox[3]},
@@ -359,4 +409,5 @@ __all__ = [
     "read_strokes",
     "stroke_mask",
     "stroke_radius",
+    "write_plate",
 ]

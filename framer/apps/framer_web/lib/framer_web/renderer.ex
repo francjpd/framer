@@ -419,7 +419,9 @@ defmodule FramerWeb.Renderer do
         broadcast_heal(rig_id, %{status: :failed, error: job_failure_message(state)})
 
       attempts <= 0 ->
-        discard_heal_files(artifacts_dir, strokes_path)
+        # The job's fate is unknown, so its working files stay: the
+        # correction may still land, and the painted material cannot be
+        # reconstructed.
         broadcast_heal(rig_id, %{status: :failed, error: "the healing brush timed out"})
 
       true ->
@@ -433,14 +435,12 @@ defmodule FramerWeb.Renderer do
     # from, so the patch is stale the moment the correction lands.
     RigStore.remove_patch_layer(rig_id)
 
-    stored = Healing.store_correction(artifacts_dir, meta)
-
-    # The working files are the correction's own copies: the corpus holds
-    # them now, so the project keeps neither.
-    discard_heal_files(artifacts_dir, strokes_path)
-
-    case stored do
+    case Healing.store_correction(artifacts_dir, meta) do
       {:ok, correction} ->
+        # The working files are the correction's own copies: the corpus holds
+        # them now, so the project keeps neither.
+        discard_heal_files(artifacts_dir, strokes_path)
+
         case write_project_corrections(rig_id, correction) do
           :ok ->
             broadcast_heal(rig_id, %{
@@ -459,6 +459,8 @@ defmodule FramerWeb.Renderer do
 
       {:error, reason} ->
         # The correction itself is on the plate; only the corpus missed it.
+        # The working files stay: the painted material cannot be
+        # reconstructed, so the correction can still be stored.
         broadcast_heal(rig_id, %{
           status: :completed,
           stored: false,
