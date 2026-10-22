@@ -780,6 +780,248 @@ defmodule FramerWebWeb.EditorLiveTest do
     end
   end
 
+  describe "the background patch" do
+    test "the panel offers the patch and its feather, and the feather is recorded", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # The patch is a layer of its own, with a feather the user can move.
+      assert has_element?(view, "#layer-row-patch")
+      assert has_element?(view, "#compute-patch-btn")
+      assert has_element?(view, "#layer-fade-form")
+
+      render_change(view, "set_patch_fade", %{"fade" => "20"})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.patch_fade(saved) == 20
+      assert FramerWeb.Rig.has_patch_layer?(saved)
+    end
+
+    test "a negative feather is refused without touching the document", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      render_change(view, "set_patch_fade", %{"fade" => "-4"})
+
+      assert render(view) =~ "The feather must be zero or more pixels"
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.patch_fade(saved) == FramerWeb.Rig.default_fade()
+    end
+
+    test "the patch is computed from the skeleton and the preview points at it", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # The extraction does not build the patch: the row says so and the
+      # preview composites no patch.
+      refute RigStore.patch_path(rig["id"])
+      assert render(view) =~ "Not computed yet"
+      refute has_element?(view, "#viewport[data-patch-url]")
+
+      # The compute action builds it beside the still, and the preview
+      # composites the very same bytes.
+      render_click(view, "compute_patch", %{})
+      assert render_async(view, 60_000) =~ "Patch computed"
+      assert RigStore.patch_path(rig["id"])
+      assert File.exists?(RigStore.patch_path(rig["id"]))
+      assert has_element?(view, "#viewport[data-patch-url]")
+    end
+
+    test "a feather change drops the materialised patch until it is computed again", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      render_click(view, "compute_patch", %{})
+      assert render_async(view, 60_000) =~ "Patch computed"
+
+      # The materialised patch was built with the feather the document records.
+      assert has_element?(view, "#layer-row-patch .badge-success")
+
+      # Moving the feather makes the materialised patch stale, so it is
+      # dropped: the panel reports it as not computed and the preview stops
+      # compositing it.
+      render_change(view, "set_patch_fade", %{"fade" => "20"})
+      assert render(view) =~ "Not computed yet"
+      refute RigStore.patch_path(rig["id"])
+      refute has_element?(view, "#viewport[data-patch-url]")
+
+      # Computing it again rebuilds the patch with the new feather.
+      render_click(view, "compute_patch", %{})
+      assert render_async(view, 60_000) =~ "Patch computed"
+      assert has_element?(view, "#layer-row-patch .badge-success")
+      assert has_element?(view, "#viewport[data-patch-url]")
+    end
+
+    test "a change of the motion drops the materialised patch", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      render_click(view, "compute_patch", %{})
+      assert render_async(view, 60_000) =~ "Patch computed"
+      assert RigStore.patch_path(rig["id"])
+
+      # Moving a bone changes the swept region, so the materialised patch no
+      # longer describes it.
+      render_click(view, "bone_moved", %{
+        "id" => "b0",
+        "head" => [20.0, 16.0],
+        "tail" => [20.0, 8.0]
+      })
+
+      assert render(view) =~ "Not computed yet"
+      refute RigStore.patch_path(rig["id"])
+      refute has_element?(view, "#viewport[data-patch-url]")
+    end
+
+    test "the patch needs the character layer it is built from", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # Without the character layer there is nothing to sweep, so the engine
+      # builds no patch and the editor says so instead of claiming one.
+      render_click(view, "remove_layer", %{"layer" => "character"})
+      render_click(view, "compute_patch", %{})
+
+      assert render(view) =~ "The patch needs the character layer"
+      assert render(view) =~ "Needs the character layer"
+    end
+
+    test "the export carries on for a rig that cannot have a patch", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      id = rig["id"]
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # The character layer goes: there is nothing to build a patch from, so
+      # the export carries on without one.
+      render_click(view, "remove_layer", %{"layer" => "character"})
+
+      render_submit(form(view, "#export-form"), %{"format" => "webm"})
+      render_async(view)
+
+      assert render(view) =~ "Exporting animation"
+      refute RigStore.patch_path(id)
+
+      await_idle_orchestrator()
+    end
+
+    test "the patch waits for the background plate it heals against", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # Without the background layer there is no plate to heal against, so the
+      # engine builds no patch and the editor says so instead of claiming one.
+      render_click(view, "remove_layer", %{"layer" => "background"})
+      render_click(view, "compute_patch", %{})
+
+      assert render(view) =~ "The patch needs the background layer"
+      assert render(view) =~ "Needs the background layer"
+    end
+
+    test "the feather slider does not evict the undo history", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      # A bone edit the user wants to be able to undo.
+      render_click(view, "bone_moved", %{
+        "id" => "b0",
+        "head" => [20.0, 16.0],
+        "tail" => [20.0, 8.0]
+      })
+
+      # A drag of the feather slider, one event per step.
+      for fade <- 13..20 do
+        render_change(view, "set_patch_fade", %{"fade" => to_string(fade)})
+      end
+
+      # Undo still steps back to the bone edit, not one pixel of the feather.
+      render_click(view, "undo")
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.bone(saved, "b0")["rest"]["head"] == [16.0, 16.0]
+    end
+
+    test "the export does not wait for a patch to be built", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      id = rig["id"]
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # The rig records a feather but the project has no materialised patch: the
+      # job builds it, so the export is queued at once and the request never
+      # waits for a region sweep.
+      refute RigStore.patch_path(id)
+
+      render_submit(form(view, "#export-form"), %{"format" => "webm"})
+
+      assert render(view) =~ "Exporting animation"
+      refute RigStore.patch_path(id)
+
+      await_idle_orchestrator()
+    end
+
+    test "an export whose patch cannot be built says so", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      id = rig["id"]
+
+      _saved =
+        RigStore.save(
+          Fixtures.simple_rig(32) |> Map.put("id", id) |> FramerWeb.Rig.enable_split()
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+      # The cut-out the patch is built from cannot be read, so the job's
+      # preparation fails: the editor says so instead of claiming an export.
+      File.write!(Path.join(RigStore.project_dir(id), "character.png"), "not a png")
+
+      render_submit(form(view, "#export-form"), %{"format" => "webm"})
+
+      assert wait_for(fn -> render(view) =~ "Export failed" end)
+      assert render(view) =~ "patch"
+
+      await_idle_orchestrator()
+    end
+
+    test "the patch waits for a skeleton", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+
+      # A split rig without bones: the region the character can uncover is only
+      # known once the skeleton exists.
+      split = FramerWeb.Rig.enable_split(FramerWeb.Rig.new(32, 32)) |> Map.put("id", rig["id"])
+      _saved = RigStore.save(split)
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "compute_patch", %{})
+
+      assert render(view) =~ "The patch needs a skeleton"
+      refute RigStore.patch_path(rig["id"])
+    end
+  end
+
   describe "layers panel and per-layer actions" do
     test "panel lists project layers (source still, character, background)", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
@@ -1020,6 +1262,7 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       # Submit export
       render_submit(form(view, "#export-form"), %{"format" => "webm"})
+      render_async(view)
       assert has_element?(view, "#blocking-loader")
       assert has_element?(view, "#blocking-loader-progress")
       assert render(view) =~ "Exporting animation"
@@ -1066,17 +1309,19 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert render(view) =~ "Encoding failed: out of memory"
 
       # Stop orchestrator if still processing so subsequent tests have a clean idle worker
-      if Process.whereis(FramerCore.Orchestrator) do
-        try do
-          state = FramerCore.Orchestrator.get_status()
+      await_idle_orchestrator()
+    end
+  end
 
-          if state.job && state.job.status == :processing do
-            GenServer.stop(FramerCore.Orchestrator, :shutdown, 2000)
-          end
-        catch
-          :exit, _ -> :ok
-        end
-      end
+  # Wait for something the editor shows: the export's outcome arrives over
+  # PubSub, so it lands a moment after the request.
+  defp wait_for(fun, attempts \\ 100) do
+    cond do
+      fun.() -> true
+      attempts <= 0 -> false
+      true ->
+        Process.sleep(100)
+        wait_for(fun, attempts - 1)
     end
   end
 end

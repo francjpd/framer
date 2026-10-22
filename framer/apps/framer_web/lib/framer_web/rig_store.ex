@@ -92,6 +92,60 @@ defmodule FramerWeb.RigStore do
     end
   end
 
+  @doc "Absolute path of a project's materialised patch layer, if it exists."
+  def patch_path(id) do
+    with :ok <- validate_id(id) do
+      path = Path.join(project_dir(id), Rig.patch_filename())
+      if File.exists?(path), do: path
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  What the materialised patch records about itself, if anything.
+
+  The sidecar the engine writes next to the patch holds the feather the patch
+  was built with, so the editor can tell a patch that still matches the
+  document from a stale one.
+  """
+  def patch_meta(id) do
+    with :ok <- validate_id(id) do
+      path = Path.join(project_dir(id), Rig.patch_meta_filename())
+
+      case File.read(path) do
+        {:ok, body} ->
+          case Jason.decode(body) do
+            {:ok, meta} when is_map(meta) -> meta
+            _ -> nil
+          end
+
+        {:error, _} ->
+          nil
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  A cache-busting version for the materialised patch layer.
+
+  The patch is rebuilt whenever the rig it came from changes, so the bytes
+  behind the same URL are new.  The sidecar records what the patch was built
+  from, so its digest is the patch's identity: it changes whenever the patch
+  does, and it costs a read of a small file rather than of the patch itself.
+  The token is plain text, so it survives the URL it is interpolated into.
+  """
+  def patch_version(id) do
+    with true <- patch_path(id) != nil,
+         meta when is_map(meta) <- patch_meta(id) do
+      Base.encode16(:crypto.hash(:sha256, :erlang.term_to_binary(meta)), case: :lower)
+    else
+      _ -> nil
+    end
+  end
+
   @doc "Replace a project's layer (:source, :character, or :background) with a new image."
   def replace_layer(id, :source, binary, filename),
     do: replace_layer(id, "source", binary, filename)
@@ -109,7 +163,7 @@ defmodule FramerWeb.RigStore do
       ext = extension(filename, binary, info.format)
       dest_name = "source_replaced.#{ext}"
       dest_path = Path.join(project_dir(id), dest_name)
-      File.write!(dest_path, binary)
+      write_layer!(id, dest_path, binary)
 
       rig =
         rig
@@ -128,7 +182,7 @@ defmodule FramerWeb.RigStore do
       ext = extension(filename, binary, info.format)
       dest_name = "character_replaced.#{ext}"
       dest_path = Path.join(project_dir(id), dest_name)
-      File.write!(dest_path, binary)
+      write_layer!(id, dest_path, binary)
 
       rig =
         rig
@@ -146,7 +200,7 @@ defmodule FramerWeb.RigStore do
       ext = extension(filename, binary, info.format)
       dest_name = "background_replaced.#{ext}"
       dest_path = Path.join(project_dir(id), dest_name)
-      File.write!(dest_path, binary)
+      write_layer!(id, dest_path, binary)
 
       rig =
         rig
@@ -162,7 +216,8 @@ defmodule FramerWeb.RigStore do
 
   A re-extraction has to drop every file the engine could resolve for the rig:
   the declared character path and the default name it falls back to once the
-  document stops declaring one, plus the plate that was built from them.
+  document stops declaring one, plus the plate that was built from them. The
+  patch is built from those two layers, so it goes with them.
   """
   def remove_character_layer(id) do
     with :ok <- validate_id(id),
@@ -174,6 +229,29 @@ defmodule FramerWeb.RigStore do
       ]
       |> Enum.each(&File.rm/1)
 
+      remove_patch_layer(id)
+
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  @doc """
+  Drop a project's materialised patch and the sidecar that records it.
+
+  The patch is built from the rig's motion, the feather and the layer files,
+  so it is stale as soon as any of them changes. The engine rebuilds it on
+  the next render, or when the compute action asks for it.
+  """
+  def remove_patch_layer(id) do
+    with :ok <- validate_id(id) do
+      [
+        Path.join(project_dir(id), Rig.patch_filename()),
+        Path.join(project_dir(id), Rig.patch_meta_filename())
+      ]
+      |> Enum.each(&File.rm/1)
+
       :ok
     else
       _ -> :ok
@@ -182,6 +260,15 @@ defmodule FramerWeb.RigStore do
 
   defp character_layer_for(rig, id) do
     Path.join(project_dir(id), Rig.character_layer(rig) || Rig.layer_filename())
+  end
+
+  # The one place a layer's content changes.  The patch is built from that
+  # content, so it is stale the moment the bytes change - even when the
+  # document that names the layer stays exactly the same - and it goes with
+  # them.
+  defp write_layer!(id, path, binary) do
+    File.write!(path, binary)
+    remove_patch_layer(id)
   end
 
   @doc "Absolute path of a project's exported result, if it exists."
@@ -262,6 +349,8 @@ defmodule FramerWeb.RigStore do
       dir = project_dir(id)
       File.mkdir_p!(dir)
 
+      drop_stale_patch(id, rig)
+
       body = Jason.encode!(rig, pretty: true)
       target = Path.join(dir, "rig.json")
       temp = Path.join(dir, ".rig.json.tmp.#{System.unique_integer([:positive])}")
@@ -272,6 +361,36 @@ defmodule FramerWeb.RigStore do
   end
 
   def save(_rig), do: {:error, :missing_id}
+
+  # The materialised patch is built from the rig's motion, the feather and the
+  # layer files, so a document that changes any of them makes it stale.  It is
+  # dropped here, at the one write path every writer passes through, so the
+  # editor never presents a patch the engine would rebuild - not after a change
+  # made through the editor and not after one made through the API.
+  defp drop_stale_patch(id, rig) do
+    case load(id) do
+      {:ok, previous} ->
+        if patch_inputs(previous) != patch_inputs(rig), do: remove_patch_layer(id)
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  # The inputs the patch is built from.  The engine's own fingerprint is the
+  # authority on them; this is the editor's view of the same ones.
+  defp patch_inputs(rig) do
+    %{
+      canvas: rig["canvas"],
+      duration: rig["duration"],
+      bones: rig["bones"],
+      bind: rig["bind"],
+      keyframes: rig["keyframes"],
+      mask: rig["layers"],
+      fade: Rig.patch_fade(rig)
+    }
+  end
 
   @doc "Load and validate a stored rig."
   def load(id) do

@@ -17,6 +17,12 @@ defmodule FramerWeb.Renderer do
   contract: it materialises the character layer of a split rig with the engine's
   existing background-removal segmentation.
 
+  `build_patch/2` is the fourth: it materialises the feathered patch layer of a
+  split rig - the region the character can uncover, reconstructed from the
+  background plate and feathered at its edge. The patch is a project-level
+  artefact: the engine computes it once from the skeleton and reuses it for
+  every frame, every preview and every export.
+
   A split rig (`rig.layers.split`) renders through the same `deform` operation
   as ever - the rig document tells the engine which character layer to deform -
   so the final render is authoritative for the layering exactly as it is for the
@@ -44,6 +50,10 @@ defmodule FramerWeb.Renderer do
 
   The in-memory rig is written to a private temp file so the engine reads
   exactly what the editor is showing, even before the next autosave lands.
+
+  The frame is rendered with the materialised patch when there is one and
+  without building one, so a single frame never pays for the whole-timeline
+  region sweep.
   """
   def render_frame(rig, frame, opts \\ []) do
     with {:ok, source} <- source_path(rig) do
@@ -65,7 +75,8 @@ defmodule FramerWeb.Renderer do
         "options" => %{
           "rig" => rig_path,
           "still" => true,
-          "iterations" => opts[:iterations] || 6
+          "iterations" => opts[:iterations] || 6,
+          "patch" => "reuse"
         }
       }
 
@@ -100,6 +111,11 @@ defmodule FramerWeb.Renderer do
   composited still the editor shows afterwards is exactly what the first render
   will produce. The response carries the materialised path, which is what the
   editor records in `rig.layers.character` and persists.
+
+  The extraction never builds the patch: it asks the engine to reuse the
+  materialised one, so extracting never pays for the whole-timeline region
+  sweep. The patch is built by the compute action, the export or a render that
+  asks for it.
   """
   def split_character(rig, opts \\ []) do
     with {:ok, source} <- source_path(rig) do
@@ -120,7 +136,8 @@ defmodule FramerWeb.Renderer do
         "options" => %{
           "rig" => rig_path,
           "still" => true,
-          "iterations" => opts[:iterations] || 6
+          "iterations" => opts[:iterations] || 6,
+          "patch" => "reuse"
         }
       }
 
@@ -142,10 +159,79 @@ defmodule FramerWeb.Renderer do
   end
 
   @doc """
+  Materialise the feathered patch layer of a split rig and return `{:ok, path}`.
+
+  This is the editor's "compute patch" action. The patch is the region the
+  character can uncover - the union of its warped footprints over the timeline,
+  minus its own rest footprint - reconstructed from the background plate and
+  feathered at its edge, so the character slides over one coherent material
+  instead of from the plate's reconstruction onto untouched background.
+
+  It is a *project-level* computation: the engine builds it once, writes it
+  beside the still as `patch.png` and reuses it for every later frame. The
+  render that produces it is frame 0 of the very rig being patched, so the
+  composited still the editor shows afterwards is exactly what the first render
+  will produce.
+
+  A rig the engine cannot build a patch for - one without the background plate
+  the reconstruction is made from - has no patch to report, and this says so
+  instead of answering with a file that is in no render.
+  """
+  def build_patch(rig, opts \\ []) do
+    with {:ok, source} <- source_path(rig) do
+      workspace = workspace_dir(rig)
+      rig_path = Path.join(workspace, "patch_rig.json")
+      output = Path.join(workspace, "patch_#{System.unique_integer([:positive])}.png")
+
+      File.mkdir_p!(workspace)
+      File.write!(rig_path, Jason.encode!(rig))
+
+      request = %{
+        "op" => "deform",
+        "input" => source,
+        "output" => output,
+        "start_frame" => 0,
+        "end_frame" => 0,
+        "fps" => Rig.fps(rig),
+        "options" => %{
+          "rig" => rig_path,
+          "still" => true,
+          "iterations" => opts[:iterations] || 6
+        }
+      }
+
+      try do
+        case PortWorker.run_once(request, Keyword.get(opts, :timeout, @default_timeout)) do
+          {:ok, %{"patch" => path}} when is_binary(path) ->
+            {:ok, path}
+
+          {:ok, _response} ->
+            # The engine has no patch for this rig: it either could not build
+            # one or there is none to report.
+            {:error, :patch_not_materialised}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      after
+        # The engine writes the output only when it succeeds, so removing a
+        # file that is not there would raise and hide the error above.
+        if File.exists?(output), do: File.rm(output)
+      end
+    end
+  end
+
+  @doc """
   Submit a chunked deform export for `rig`.
 
   Returns `{:ok, %{job_id: id, output: path, format: format}}` and starts a
   background watcher that merges the finished chunks when the job completes.
+
+  The request only queues the job.  The patch the export composites is the
+  project's own, copied into the export directory; a project with no patch - or
+  with one the engine would rebuild - has the job build one there, once,
+  before the chunks are dispatched, so the request never waits for a region
+  sweep.
   """
   def submit_export(rig, opts \\ []) do
     with {:ok, source} <- source_path(rig),
@@ -165,19 +251,26 @@ defmodule FramerWeb.Renderer do
       snapshotted_rig_path = Path.join(export_dir, "rig.json")
       File.write!(snapshotted_rig_path, Jason.encode!(rig))
 
+      # The layer snapshot carries the project's patch and its sidecar, so the
+      # export composites the very file the editor's preview shows.  The job
+      # builds the patch in the export directory - before the chunks are
+      # dispatched - so the request never waits for a region sweep, and a
+      # patch the engine would rebuild is rebuilt there in that same step.
       snapshot_layer_files(rig, export_dir)
 
       options =
         %{
           "rig" => snapshotted_rig_path,
           "still" => true,
-          "iterations" => opts[:iterations] || 5
+          "iterations" => opts[:iterations] || 5,
+          "patch" => "reuse"
         }
         |> maybe_put("weights", opts[:weights])
 
       case Orchestrator.submit_job(snapshotted_source, output,
              operation: "deform",
              options: options,
+             prepare: prepare_patch(rig, snapshotted_source, options),
              total_frames: frames,
              fps: to_float(fps)
            ) do
@@ -202,6 +295,23 @@ defmodule FramerWeb.Renderer do
 
   # --- internals ---
 
+  # The job's preparation: the export's own patch, materialised in the export
+  # directory before the chunks are dispatched, by one worker.  The chunks then
+  # reuse that copy, so no chunk sweeps the timeline and no two workers write
+  # the same file.
+  #
+  # A rig that cannot have a patch at all - no skeleton, no character layer, no
+  # plate - has nothing to prepare: its export carries on exactly as before.
+  defp prepare_patch(rig, source, options) do
+    if Rig.patch_buildable?(rig) do
+      %{
+        "op" => "patch",
+        "input" => source,
+        "options" => Map.take(options, ["rig", "still", "iterations", "weights"])
+      }
+    end
+  end
+
   defp start_watcher(job_id, rig_id, output, export_dir) do
     Task.start(fn -> watch(job_id, rig_id, output, export_dir) end)
   end
@@ -217,7 +327,11 @@ defmodule FramerWeb.Renderer do
 
       state.job && state.job.id == job_id && state.job.status == :failed ->
         if export_dir, do: File.rm_rf(export_dir)
-        broadcast(rig_id, event(job_id, :failed, {:error, :job_failed}, output, state))
+
+        broadcast(
+          rig_id,
+          event(job_id, :failed, {:error, job_failure_message(state)}, output, state)
+        )
 
       attempts <= 0 ->
         if export_dir, do: File.rm_rf(export_dir)
@@ -226,6 +340,45 @@ defmodule FramerWeb.Renderer do
       true ->
         Process.sleep(@poll_interval)
         watch(job_id, rig_id, output, export_dir, attempts - 1)
+    end
+  end
+
+  @doc """
+  Why a render or an export failed, in words.
+
+  The engine's own message is already a sentence; the reasons the app raises
+  itself - a missing source, an export that is already running - are not, so
+  they are translated here.  Anything the vocabulary does not know is the
+  worker's own failure vocabulary, and a term never reaches the user.
+  """
+  def failure_message(reason) when is_binary(reason), do: reason
+  def failure_message(:missing_source), do: "a source image or a canvas size is required"
+  def failure_message(:escaping_path), do: "the source path escapes the project directory"
+  def failure_message(:enoent), do: "unknown rig"
+  def failure_message(:unsupported_image), do: "the file is not an image the editor can read"
+
+  def failure_message(:layer_not_materialised),
+    do: "the engine did not materialise the character layer"
+
+  def failure_message(:patch_not_materialised),
+    do: "the engine could not build a patch for this rig"
+
+  def failure_message(:job_in_progress), do: "another export is already running"
+  def failure_message(:no_workers), do: "no render workers are available"
+  def failure_message(:unknown_frame_count), do: "the frame count of the rig is unknown"
+  def failure_message(reason), do: PortWorker.failure_message(reason)
+
+  @doc """
+  Why the job failed, in words.
+
+  A chunk that could not be rendered - the patch could not be built, the
+  plate was missing - fails the export loudly, and the message says what
+  happened instead of showing an atom.
+  """
+  def job_failure_message(state) do
+    case Map.get(state, :job) do
+      %{error: error} when is_binary(error) -> error
+      _ -> "#{length(state.failed_chunks)} of #{state.total_chunks} chunks could not be rendered"
     end
   end
 
@@ -249,8 +402,7 @@ defmodule FramerWeb.Renderer do
     }
   end
 
-  defp event_error({:error, reason}) when is_binary(reason), do: reason
-  defp event_error({:error, reason}), do: inspect(reason)
+  defp event_error({:error, reason}), do: failure_message(reason)
   defp event_error(_), do: nil
 
   defp broadcast(rig_id, payload) do
@@ -340,6 +492,24 @@ defmodule FramerWeb.Renderer do
           plate_dest = Path.join(export_dir, bg_rel)
           File.mkdir_p!(Path.dirname(plate_dest))
           File.cp!(plate_src, plate_dest)
+        end
+      end
+
+      # The patch is a project-level artefact, so the export reuses the very
+      # file the preview shows instead of computing it again per chunk. Its
+      # sidecar travels with it: it records what the patch was built from, and
+      # the engine rebuilds the patch when that no longer matches the rig.
+      if Rig.has_patch_layer?(rig) do
+        patch_src = RigStore.patch_path(id)
+
+        if patch_src && File.exists?(patch_src) do
+          File.cp!(patch_src, Path.join(export_dir, Rig.patch_filename()))
+
+          meta_src = Path.join(project_dir, Rig.patch_meta_filename())
+
+          if File.exists?(meta_src) do
+            File.cp!(meta_src, Path.join(export_dir, Rig.patch_meta_filename()))
+          end
         end
       end
     end

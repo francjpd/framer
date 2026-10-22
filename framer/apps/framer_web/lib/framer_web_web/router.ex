@@ -82,6 +82,7 @@ defmodule FramerWebWeb.Router do
     get "/rigs/:id/source", RigController, :source
     get "/rigs/:id/character", RigController, :character
     get "/rigs/:id/background", RigController, :background
+    get "/rigs/:id/patch", RigController, :patch
     get "/rigs/:id/result", RigController, :result
   end
 

@@ -187,6 +187,15 @@ def test_validate_rig_rejects_a_bool_where_a_number_is_expected_in_layers():
         validate_rig(split_rig(soft_edges=True))
 
 
+def test_validate_rig_accepts_a_feather_and_refuses_a_negative_one():
+    # The feather is the editor's rule too: a non-negative integer.
+    assert validate_rig(split_rig(fade=0))["layers"]["fade"] == 0
+    assert validate_rig(split_rig(fade=12))["layers"]["fade"] == 12
+
+    with pytest.raises(RigError, match="layers.fade must be a non-negative integer"):
+        validate_rig(split_rig(fade=-1))
+
+
 # --- weights ----------------------------------------------------------------
 
 

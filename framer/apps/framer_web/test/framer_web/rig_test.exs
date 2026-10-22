@@ -397,11 +397,42 @@ defmodule FramerWeb.RigTest do
                "tolerance" => 45,
                "soft_edges" => 0,
                "edge_cleanup" => 0,
-               "auto_ranges" => true
+               "auto_ranges" => true,
+               "fade" => Rig.default_fade()
              }
 
       assert {:ok, _} = Rig.validate(split, project_dir: "/tmp/project")
       assert Jason.decode!(Jason.encode!(split)) == split
+    end
+
+    test "the fade is what enables the patch layer, and it is recorded per project" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+
+      # A document that records no fade has no patch layer at all, so a rig
+      # saved before the patch existed renders exactly as it did.
+      assert Rig.patch_fade(rig) == nil
+      refute Rig.has_patch_layer?(rig)
+
+      split = Rig.enable_split(rig)
+      assert Rig.patch_fade(split) == Rig.default_fade()
+      assert Rig.has_patch_layer?(split)
+
+      narrowed = Rig.set_patch_fade(split, 0)
+      assert Rig.patch_fade(narrowed) == 0
+      assert Rig.has_patch_layer?(narrowed)
+      assert {:ok, _} = Rig.validate(narrowed, project_dir: "/tmp/project")
+    end
+
+    test "a fade that is not a non-negative integer is refused" do
+      {rig, _id} = Rig.add_bone(Rig.new(64, 64), [10, 10], [10, 30])
+      split = Rig.enable_split(rig)
+
+      broken = put_in(split, ["layers", "fade"], -1)
+      assert {:error, reason} = Rig.validate(broken, project_dir: "/tmp/project")
+      assert reason =~ "fade"
+
+      broken = put_in(split, ["layers", "fade"], "wide")
+      assert {:error, _reason} = Rig.validate(broken, project_dir: "/tmp/project")
     end
 
     test "the recorded split mask is exact, so no background is keyed out wide" do

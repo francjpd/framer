@@ -19,7 +19,8 @@ defmodule FramerCore.Job do
     :workers,
     :chunks_assigned,
     :chunks_completed,
-    :inserted_at
+    :inserted_at,
+    :error
   ]
 
   @type t :: %__MODULE__{
@@ -34,7 +35,8 @@ defmodule FramerCore.Job do
           workers: [pid()],
           chunks_assigned: non_neg_integer(),
           chunks_completed: non_neg_integer(),
-          inserted_at: DateTime.t()
+          inserted_at: DateTime.t(),
+          error: String.t() | nil
         }
 
   def new(input_path, output_path, opts \\ []) do

@@ -51,16 +51,16 @@ from core.bg_removal import character_alpha
 from core.errors import RigError
 from core.layers import (
     LAYER_FILENAME,
-    PLATE_FILENAME,
     background_plate,
-    composite,
-    declared_background_path,
+    composite_layers,
     declared_character_path,
     has_background_layer,
     has_character_layer,
+    has_patch_layer,
     is_split,
     layer_settings,
     load_layer,
+    resolve_background_layer,
     split_layers,
 )
 
@@ -75,6 +75,7 @@ __all__ = [
     "DeformRenderer",
     "RigError",
     "apply_lbs",
+    "bind_poses",
     "bone_local_matrix",
     "build_grid_mesh",
     "compute_backward_map",
@@ -282,6 +283,13 @@ def _validate_layers(rig: dict[str, Any]) -> None:
                 isinstance(value, int) and not isinstance(value, bool),
                 f"rig.layers.{key} must be an integer",
             )
+
+    fade = layers.get("fade")
+    if fade is not None:
+        _require(
+            isinstance(fade, int) and not isinstance(fade, bool) and fade >= 0,
+            "rig.layers.fade must be a non-negative integer",
+        )
 
     for key in ("auto_ranges", "adaptive_bg"):
         value = layers.get(key)
@@ -709,7 +717,8 @@ def evaluate_bones(
     return [resolve(bone, ()) for bone in rig["bones"]]
 
 
-def _bind_poses(rig: dict[str, Any]) -> dict[str, dict[str, float]]:
+def bind_poses(rig: dict[str, Any]) -> dict[str, dict[str, float]]:
+    """The identity pose of every bone - the bind pose the rig is cut at."""
     return {bone["id"]: {"rot": 0.0, "tx": 0.0, "ty": 0.0} for bone in rig["bones"]}
 
 
@@ -996,10 +1005,13 @@ class DeformRenderer:
     On a split rig with a character layer (or when a character layer is
     supplied), the rig only ever warps that layer. If the background layer is
     present, it is composited underneath the deformed character without being
-    resampled, keeping the background identical in every frame. If the
-    background layer is removed, only the character layer is rendered,
-    preserving transparency. Without layers the renderer behaves exactly as
-    before and deforms the whole still.
+    resampled, keeping the background identical in every frame. Between them
+    sits the patch layer, when the rig records one: the feathered
+    reconstruction of the region the character can uncover, so the character
+    slides over one coherent material instead of from the plate's reconstruction
+    onto untouched background. If the background layer is removed, only the
+    character layer is rendered, preserving transparency. Without layers the
+    renderer behaves exactly as before and deforms the whole still.
     """
 
     def __init__(
@@ -1011,6 +1023,9 @@ class DeformRenderer:
         weights_cache: str | os.PathLike[str] | None = None,
         still: bool | None = None,
         character: np.ndarray | None = None,
+        background: np.ndarray | None = None,
+        patch: np.ndarray | None = None,
+        source_path: str | os.PathLike[str] | None = None,
     ):
         self.rig = validate_rig(rig)
 
@@ -1024,9 +1039,16 @@ class DeformRenderer:
         self.width = canvas_width
         self.height = canvas_height
         self.iterations = max(1, int(iterations))
+        # The layers live beside the still that is being rendered, so they are
+        # resolved against that path and not against the document's, which may
+        # be relative to the project.
+        self.source_path = str(
+            source_path or (self.rig.get("source", {}).get("path") or "")
+        )
 
         self.character = None
         self.background = None
+        self.patch = None
         if character is not None:
             # Resize the character layer with the same call as the still so the
             # two stay pixel-aligned at the canvas size.
@@ -1040,9 +1062,8 @@ class DeformRenderer:
             if self.character is None and has_character_layer(self.rig):
                 char_declared = declared_character_path(self.rig) or LAYER_FILENAME
                 char_path = Path(char_declared)
-                source_path = self.rig.get("source", {}).get("path") or ""
-                if not char_path.is_absolute() and source_path:
-                    char_path = Path(source_path).parent / char_path
+                if not char_path.is_absolute() and self.source_path:
+                    char_path = Path(self.source_path).parent / char_path
                 if char_path.exists():
                     char = load_layer(char_path)
                 else:
@@ -1058,24 +1079,33 @@ class DeformRenderer:
                     self.character = np.ascontiguousarray(char)
 
             if has_background_layer(self.rig):
-                bg_declared = declared_background_path(self.rig) or PLATE_FILENAME
-                bg_path = Path(bg_declared)
-                source_path = self.rig.get("source", {}).get("path") or ""
-                if not bg_path.is_absolute() and source_path:
-                    bg_path = Path(source_path).parent / bg_path
-                if bg_path.exists():
-                    bg = load_layer(bg_path)
-                elif self.character is not None:
-                    bg = background_plate(self.source, self.character[:, :, 3])
+                if background is not None:
+                    # The caller resolved the plate against the still it is
+                    # rendering, so the background the frame is composited over
+                    # is the very file the editor's preview fetches.
+                    bg = background
                 else:
-                    bg = None
+                    # The plate is resolved by the same rule the engine uses
+                    # everywhere else, so the frame and the patch are built
+                    # from the very same file.
+                    bg = resolve_background_layer(
+                        self.rig, self.source, self.source_path, self.character
+                    )
 
                 if bg is not None:
-                    if bg.shape[1] != canvas_width or bg.shape[0] != canvas_height:
-                        bg = cv2.resize(
-                            bg, (canvas_width, canvas_height), interpolation=cv2.INTER_LINEAR
-                        )
-                    self.background = np.ascontiguousarray(bg)
+                    self.background = self._fit(bg)
+
+            # The patch layer sits between the character and the plate.  It is
+            # only used when the background layer is there to heal against: a
+            # character-only render stays exactly the character.  The patch
+            # itself is resolved by the caller, which knows whether the
+            # materialised one may be used at all.
+            if (
+                has_patch_layer(self.rig)
+                and has_background_layer(self.rig)
+                and patch is not None
+            ):
+                self.patch = self._fit(patch)
         elif character is not None:
             self.background = background_plate(self.source, self.character[:, :, 3])
 
@@ -1095,8 +1125,16 @@ class DeformRenderer:
             )
         self.weights = weights
 
-        poses = _bind_poses(self.rig)
+        poses = bind_poses(self.rig)
         self.bind = evaluate_bones(self.rig, 0, poses=poses)
+
+    def _fit(self, layer: np.ndarray) -> np.ndarray:
+        """Resize a layer to the canvas size, the way the still is fitted."""
+        if layer.shape[1] != self.width or layer.shape[0] != self.height:
+            layer = cv2.resize(
+                layer, (self.width, self.height), interpolation=cv2.INTER_LINEAR
+            )
+        return np.ascontiguousarray(layer)
 
     def render(self, frame: int) -> np.ndarray:
         """Render one frame index to a BGRA image."""
@@ -1107,7 +1145,7 @@ class DeformRenderer:
 
         if self.character is not None and self.background is not None:
             warped = apply_lbs(self.character, self.weights, world, self.bind, self.iterations)
-            return composite(warped, self.background)
+            return composite_layers(warped, self.patch, self.background)
 
         if self.character is not None:
             return apply_lbs(self.character, self.weights, world, self.bind, self.iterations)

@@ -22,6 +22,7 @@ defmodule FramerCore.Orchestrator do
   alias FramerCore.Job
   alias FramerCore.Job.Chunk
   alias FramerCore.Player
+  alias FramerCore.PortWorker
 
   @max_retries 3
   @max_total_errors 20
@@ -34,6 +35,7 @@ defmodule FramerCore.Orchestrator do
     :failed_chunks,
     :total_chunks,
     :temp_dir,
+    :pending_prepare,
     total_errors: 0
   ]
 
@@ -45,6 +47,7 @@ defmodule FramerCore.Orchestrator do
           failed_chunks: [Chunk.t()],
           total_chunks: non_neg_integer(),
           temp_dir: String.t() | nil,
+          pending_prepare: String.t() | nil,
           total_errors: non_neg_integer()
         }
 
@@ -83,6 +86,7 @@ defmodule FramerCore.Orchestrator do
        failed_chunks: [],
        total_chunks: 0,
        temp_dir: nil,
+       pending_prepare: nil,
        total_errors: 0
      }}
   end
@@ -151,6 +155,19 @@ defmodule FramerCore.Orchestrator do
     end
   end
 
+  def handle_info({:prepare_finished, player_id, result}, state) do
+    case state.pending_prepare do
+      ^player_id ->
+        case result do
+          {:ok, _response} -> {:noreply, start_chunks(state)}
+          {:error, reason} -> {:noreply, fail_job(state, reason)}
+        end
+
+      _stale_or_missing ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
@@ -199,15 +216,7 @@ defmodule FramerCore.Orchestrator do
         }
 
         chunks = create_chunks(job, chunk_size, fps, temp_dir, operation, options)
-        {initial_work, remaining} = Enum.split(chunks, length(players))
-
-        active_chunks =
-          players
-          |> Enum.zip(initial_work)
-          |> Enum.into(%{}, fn {player_id, chunk} ->
-            Player.process_chunk(player_id, chunk)
-            {player_id, chunk}
-          end)
+        {chunk_queue, active_chunks, pending_prepare} = start_job(opts[:prepare], players, chunks)
 
         Logger.info(
           "Job #{job.id} (#{operation}): #{length(chunks)} chunks of #{chunk_size} frames " <>
@@ -217,12 +226,13 @@ defmodule FramerCore.Orchestrator do
         new_state = %{
           state
           | job: job,
-            chunk_queue: remaining,
+            chunk_queue: chunk_queue,
             active_chunks: active_chunks,
             completed_chunks: [],
             failed_chunks: [],
             total_chunks: length(chunks),
             temp_dir: temp_dir,
+            pending_prepare: pending_prepare,
             total_errors: 0
         }
 
@@ -230,6 +240,59 @@ defmodule FramerCore.Orchestrator do
       end
     end
   end
+
+  # A job's preparation runs before any chunk: the chunks wait for it, so the
+  # work it does happens exactly once, in one worker, and every chunk then
+  # uses what it produced.  Without a preparation the chunks start right away.
+  defp start_job(nil, players, chunks) do
+    {initial_work, remaining} = Enum.split(chunks, length(players))
+    {remaining, dispatch_chunks(players, initial_work), nil}
+  end
+
+  defp start_job(request, players, chunks) do
+    [player_id | _] = players
+    Player.prepare(player_id, request)
+    {chunks, %{}, player_id}
+  end
+
+  defp start_chunks(state) do
+    players = FramerCore.PlayerPool.players()
+    {initial_work, remaining} = Enum.split(state.chunk_queue, length(players))
+
+    %{
+      state
+      | chunk_queue: remaining,
+        active_chunks: dispatch_chunks(players, initial_work),
+        pending_prepare: nil
+    }
+  end
+
+  defp dispatch_chunks(players, chunks) do
+    players
+    |> Enum.zip(chunks)
+    |> Enum.into(%{}, fn {player_id, chunk} ->
+      Player.process_chunk(player_id, chunk)
+      {player_id, chunk}
+    end)
+  end
+
+  # The job's preparation failed, so the job fails with it: the work the
+  # chunks needed never happened, and the job says why in words.
+  defp fail_job(state, reason) do
+    Logger.error("job #{short(state.job.id)} failed to prepare: #{inspect(reason)}")
+
+    %{
+      state
+      | chunk_queue: [],
+        pending_prepare: nil,
+        job: %{state.job | status: :failed, error: prepare_error(reason)}
+    }
+  end
+
+  defp prepare_error(reason) when is_binary(reason), do: reason
+
+  defp prepare_error(reason),
+    do: "the background patch could not be built because " <> PortWorker.failure_message(reason)
 
   # `loop` operates on the whole file, so it is always a single chunk.
   defp chunk_size(requested, total_frames, _player_count, "loop") do

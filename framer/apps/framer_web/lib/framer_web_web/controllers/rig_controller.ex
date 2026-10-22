@@ -13,6 +13,7 @@ defmodule FramerWebWeb.RigController do
     * `GET    /api/rigs/:id/source` - the source still
     * `GET    /api/rigs/:id/character` - the materialised character layer
     * `GET    /api/rigs/:id/background` - the materialised background plate
+    * `GET    /api/rigs/:id/patch` - the materialised feathered patch layer
     * `GET    /api/rigs/:id/result` - the merged export (download)
 
   The BEAM never receives pixel data here either: the still is written to disk
@@ -168,6 +169,27 @@ defmodule FramerWebWeb.RigController do
     end
   end
 
+  @doc """
+  The feathered patch layer of a split rig.
+
+  Serves the project's patch: the region the character can uncover,
+  reconstructed from the background plate and feathered at its edge. The preview
+  fetches it and composites it between the character and the plate, the same
+  three-layer stack the engine renders and exports with.
+  """
+  def patch(conn, %{"id" => id}) do
+    case RigStore.patch_path(id) do
+      nil ->
+        conn |> put_status(:not_found) |> json(%{error: "no patch layer for #{id}"})
+
+      path ->
+        conn
+        |> put_resp_content_type(MIME.type(path) || "application/octet-stream")
+        |> put_resp_header("cache-control", "no-store")
+        |> send_file(200, path)
+    end
+  end
+
   def result(conn, %{"id" => id}) do
     case RigStore.result_path(id) do
       nil ->
@@ -238,14 +260,11 @@ defmodule FramerWebWeb.RigController do
     end
   end
 
-  defp error_message(%{__struct__: _} = error), do: inspect(error)
-  defp error_message(:missing_source), do: "a source image or a canvas size is required"
   defp error_message(:enoent), do: "unknown rig"
   defp error_message(:invalid_canvas), do: "width and height must be positive integers"
   defp error_message(:invalid_base64), do: "source_base64 is not valid base64"
   defp error_message(:invalid_id), do: "invalid rig id"
-  defp error_message(:escaping_path), do: "the source path escapes the project directory"
   defp error_message({:invalid_rig, reason}), do: reason
   defp error_message({:invalid_json, _}), do: "rig.json is not valid JSON"
-  defp error_message(reason), do: inspect(reason)
+  defp error_message(reason), do: Renderer.failure_message(reason)
 end

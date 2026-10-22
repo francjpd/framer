@@ -59,9 +59,10 @@ defmodule FramerCore.Catalog do
 
   # Port operations that are plumbing rather than agent-facing operations:
   # `info` resolves a media file's frame count and fps, `merge` glues finished
-  # chunks into the final output. Both are driven by framer itself, never by an
-  # agent listing what it can run.
-  @port_internal_ops ~w(info merge)
+  # chunks into the final output, `patch` materialises a rig's background
+  # patch, which the export's job runs once before its chunks. All are driven
+  # by framer itself, never by an agent listing what it can run.
+  @port_internal_ops ~w(info merge patch)
 
   # One option definition, reused by every operation: sizing the player pool is
   # a property of the orchestrator, not of a single operation.

@@ -10,6 +10,7 @@ defmodule FramerWebWeb.JobController do
 
   alias FramerCore.Orchestrator
   alias FramerCore.PortWorker
+  alias FramerWeb.Renderer
 
   @doc "GET /api/status - current orchestrator/job status."
   def status(conn, _params) do
@@ -65,13 +66,15 @@ defmodule FramerWebWeb.JobController do
             conn |> put_status(:accepted) |> json(%{job_id: job_id, status: "processing"})
 
           {:error, reason} ->
-            conn |> put_status(:conflict) |> json(%{error: inspect(reason)})
+            conn
+            |> put_status(:conflict)
+            |> json(%{error: Renderer.failure_message(reason)})
         end
 
       {:error, reason} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "could not read video: #{inspect(reason)}"})
+        |> json(%{error: "could not read video: " <> Renderer.failure_message(reason)})
     end
   end
 
@@ -112,6 +115,7 @@ defmodule FramerWebWeb.JobController do
         output: job.output_path,
         total_frames: job.total_frames
       },
+      error: job_error(state),
       total_chunks: state.total_chunks,
       completed_chunks: completed,
       failed_chunks: failed,
@@ -119,4 +123,10 @@ defmodule FramerWebWeb.JobController do
       progress: progress
     }
   end
+
+  # A failed job says why, in words: a chunk that could not be rendered - the
+  # patch could not be built, the plate was missing - fails the export loudly.
+  defp job_error(%{job: %{status: :failed, error: error}}) when is_binary(error), do: error
+  defp job_error(%{job: %{status: :failed}} = state), do: Renderer.job_failure_message(state)
+  defp job_error(_state), do: nil
 end

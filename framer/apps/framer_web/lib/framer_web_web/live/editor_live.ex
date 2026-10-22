@@ -458,6 +458,88 @@ defmodule FramerWebWeb.EditorLive do
 
   def handle_event("set_layer_tolerance", _params, socket), do: {:noreply, socket}
 
+  # --- the background patch -------------------------------------------------
+  #
+  # The patch is the third materialised layer: the character, then the
+  # feathered reconstruction of the region the character can uncover, then the
+  # opaque plate. Its width is recorded in the document, so it travels with the
+  # project; a document that records no fade has no patch at all and renders
+  # exactly as it did before the patch existed.
+
+  def handle_event("set_patch_fade", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("set_patch_fade", %{"fade" => fade}, socket) do
+    case to_float(fade) do
+      value when is_number(value) and value >= 0 ->
+        rig = Rig.set_patch_fade(socket.assigns.rig, trunc(value))
+
+        {:noreply,
+         socket
+         |> finalize_mutation(rig, status: "Patch feather set to #{trunc(value)} px")}
+
+      _ ->
+        {:noreply, assign(socket, :error, "The feather must be zero or more pixels")}
+    end
+  end
+
+  def handle_event("set_patch_fade", _params, socket), do: {:noreply, socket}
+
+  def handle_event("compute_patch", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("compute_patch", _params, socket) do
+    rig = socket.assigns.rig
+
+    # The patch is enabled by recording a feather, so a document saved before
+    # the patch existed gets the default when the user asks for it.
+    rig =
+      if Rig.patch_fade(rig) == nil do
+        Rig.set_patch_fade(rig, Rig.default_fade())
+      else
+        rig
+      end
+
+    case Rig.patch_blocker(rig) do
+      :no_split ->
+        {:noreply,
+         assign(socket, :error, "Extract the character first: the patch heals the background")}
+
+      :no_skeleton ->
+        {:noreply, assign(socket, :error, "The patch needs a skeleton: add a bone first")}
+
+      :no_background ->
+        {:noreply,
+         assign(
+           socket,
+           :error,
+           "The patch needs the background layer: keep it to heal the background"
+         )}
+
+      :no_character ->
+        {:noreply,
+         assign(
+           socket,
+           :error,
+           "The patch needs the character layer: extract the character first"
+         )}
+
+      :no_timeline ->
+        {:noreply, assign(socket, :error, "The patch needs a timeline: set the frame count")}
+
+      # The rig can have a patch, so the engine builds one.  It sweeps the
+      # whole timeline, so the build runs outside the LiveView process, the way
+      # a frame render does.
+      _ ->
+        socket =
+          socket
+          |> finalize_mutation(rig, status: "Computing the patch...")
+          |> start_async(:compute_patch, fn -> Renderer.build_patch(rig) end)
+
+        {:noreply, socket}
+    end
+  end
+
   # --- undo ----------------------------------------------------------------
 
   def handle_event("undo", _params, %{assigns: %{undo: [previous | rest]}} = socket) do
@@ -573,6 +655,9 @@ defmodule FramerWebWeb.EditorLive do
   def handle_event("export", params, socket) do
     format = params["format"] || "webm"
 
+    # The job is queued here, so the export is submitted even if the editor
+    # goes away.  The patch the job needs is built by the job, so the request
+    # never waits for a region sweep.
     case Renderer.submit_export(socket.assigns.rig, format: format) do
       {:ok, export} ->
         output = Path.basename(export.output)
@@ -636,7 +721,28 @@ defmodule FramerWebWeb.EditorLive do
     {:noreply,
      socket
      |> assign(:blocking_loader, nil)
-     |> assign(:error, "Render failed: #{inspect(reason)}")}
+     |> assign(:error, "Render failed: #{format_reason(reason)}")}
+  end
+
+  def handle_async(:compute_patch, {:ok, {:ok, _path}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:status, "Patch computed")
+     |> assign(:error, nil)}
+  end
+
+  def handle_async(:compute_patch, {:ok, {:error, reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:status, nil)
+     |> assign(:error, "Could not compute the patch: #{format_reason(reason)}")}
+  end
+
+  def handle_async(:compute_patch, {:exit, reason}, socket) do
+    {:noreply,
+     socket
+     |> assign(:status, nil)
+     |> assign(:error, "Could not compute the patch: #{format_reason(reason)}")}
   end
 
   # --- layer extraction -----------------------------------------------------
@@ -755,7 +861,7 @@ defmodule FramerWebWeb.EditorLive do
           assign(socket, :error, "Choose an image first")
 
         other ->
-          assign(socket, :error, "Could not replace layer: #{inspect(other)}")
+          assign(socket, :error, "Could not replace layer: #{format_reason(other)}")
       end
     end
   end
@@ -826,6 +932,11 @@ defmodule FramerWebWeb.EditorLive do
 
   @impl true
   def render(assigns) do
+    assigns =
+      assigns
+      |> assign(:patch_state, patch_state(assigns.rig))
+      |> assign(:patch_url, patch_layer_url(assigns.rig))
+
     ~H"""
     <div
       id="editor-shell"
@@ -864,6 +975,7 @@ defmodule FramerWebWeb.EditorLive do
       <div class="flex min-h-0 flex-1">
         <.palette
           rig={@rig}
+          patch_state={@patch_state}
           projects={@projects}
           upload={@uploads.source}
           uploads={@uploads}
@@ -878,6 +990,7 @@ defmodule FramerWebWeb.EditorLive do
           selected={@selected_bone}
           mesh_visible={@mesh_visible}
           labels_visible={@labels_visible}
+          patch_url={@patch_url}
         />
       </div>
 
@@ -1017,6 +1130,7 @@ defmodule FramerWebWeb.EditorLive do
   end
 
   attr :rig, :map, default: nil
+  attr :patch_state, :atom, required: true
   attr :projects, :list, default: []
   attr :upload, :any, required: true
   attr :uploads, :any, default: %{}
@@ -1465,6 +1579,39 @@ defmodule FramerWebWeb.EditorLive do
                 <% end %>
               </div>
             </div>
+            
+    <!-- 4. Patch layer row -->
+            <div id="layer-row-patch" class="flex flex-col gap-1 p-2">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold">Patch layer</span>
+                <span class="badge badge-accent badge-xs">patch</span>
+              </div>
+              <div class="flex items-center justify-between opacity-70 text-[11px]">
+                <span class="truncate max-w-[130px]">
+                  {patch_label(@patch_state)}
+                </span>
+                <%= cond do %>
+                  <% @patch_state == :ready -> %>
+                    <span class="badge badge-success badge-xs">ready</span>
+                  <% @patch_state in [:stale, :pending] -> %>
+                    <span class="badge badge-warning badge-xs">{patch_badge_text(@patch_state)}</span>
+                  <% true -> %>
+                    <span class="badge badge-ghost badge-xs">{patch_badge_text(@patch_state)}</span>
+                <% end %>
+              </div>
+              <div class="mt-1">
+                <button
+                  id="compute-patch-btn"
+                  phx-click={JS.push("compute_patch", page_loading: true)}
+                  data-wait-title="Computing the patch"
+                  data-wait-message="Reconstructing the region the character can uncover..."
+                  class="btn btn-xs btn-outline w-full"
+                  disabled={not Rig.split?(@rig) or Rig.bones(@rig) == []}
+                >
+                  Compute patch
+                </button>
+              </div>
+            </div>
           </div>
 
           <form :if={Rig.split?(@rig)} id="layer-tolerance-form" class="mt-2">
@@ -1484,6 +1631,30 @@ defmodule FramerWebWeb.EditorLive do
               title="How far a pixel may sit from the background colour and still count as background"
             />
             <p class="opacity-60">{layer_tolerance(@rig)}</p>
+          </form>
+
+          <form :if={Rig.split?(@rig)} id="layer-fade-form" class="mt-2">
+            <label class="label-text" for="layer-fade">
+              Patch feather
+            </label>
+            <input
+              id="layer-fade"
+              type="range"
+              min="0"
+              max="40"
+              step="1"
+              value={layer_fade(@rig)}
+              phx-change="set_patch_fade"
+              name="fade"
+              class="range range-xs"
+              title="How wide the patch's feather is, in pixels: 0 is no feather at all"
+            />
+            <p class="opacity-60">{layer_fade(@rig)} px</p>
+            <p class="opacity-60">
+              The patch reconstructs the ground the character uncovers as it moves and feathers
+              it into the background, so the character slides over one material. The feather
+              applies when the patch is computed again.
+            </p>
           </form>
         </div>
       </section>
@@ -1513,6 +1684,7 @@ defmodule FramerWebWeb.EditorLive do
   attr :selected, :string, default: nil
   attr :mesh_visible, :boolean, default: true
   attr :labels_visible, :boolean, default: false
+  attr :patch_url, :string, default: nil
 
   defp viewport(assigns) do
     ~H"""
@@ -1572,6 +1744,7 @@ defmodule FramerWebWeb.EditorLive do
         data-source-url={~p"/api/rigs/#{@rig["id"]}/source"}
         data-character-url={character_layer_url(@rig)}
         data-background-url={background_layer_url(@rig)}
+        data-patch-url={@patch_url}
         data-frame={@playhead}
         data-tool={@tool}
         data-selected={@selected || ""}
@@ -2202,6 +2375,74 @@ defmodule FramerWebWeb.EditorLive do
     end
   end
 
+  # The patch is rebuilt whenever the rig it came from changes, so the URL
+  # carries the file's timestamp: the preview then re-fetches the bytes behind
+  # it instead of showing the patch the rig used to have.
+  defp patch_layer_url(rig) do
+    id = rig["id"]
+
+    if Rig.has_patch_layer?(rig) and RigStore.patch_path(id) do
+      ~p"/api/rigs/#{id}/patch?v=#{RigStore.patch_version(id)}"
+    end
+  end
+
+  # The feather width the editor shows. A document that records no fade has no
+  # patch, but the slider still shows the default the editor would use.
+  defp layer_fade(rig) do
+    case Rig.patch_fade(rig) do
+      nil -> Rig.default_fade()
+      fade -> fade
+    end
+  end
+
+  # The state of the patch layer in the panel. A patch the editor dropped is
+  # not computed any more, and a materialised patch is only "ready" when it
+  # still matches the document: the sidecar next to it records the feather it
+  # was built with, so a patch built with another feather is stale and has to
+  # be computed again.
+  defp patch_state(nil), do: :unsplit
+
+  defp patch_state(rig) do
+    cond do
+      not Rig.split?(rig) -> :unsplit
+      Rig.bones(rig) == [] -> :no_skeleton
+      Rig.patch_fade(rig) == nil -> :off
+      not Rig.has_background_layer?(rig) -> :no_plate
+      not Rig.has_character_layer?(rig) -> :no_character
+      RigStore.patch_path(rig["id"]) == nil -> :pending
+      not patch_current?(rig) -> :stale
+      true -> :ready
+    end
+  end
+
+  # Whether the materialised patch is the one the document asks for.  The
+  # sidecar the engine writes next to the patch records the feather it was
+  # built with, so that is what decides.
+  defp patch_current?(rig) do
+    case RigStore.patch_meta(rig["id"]) do
+      %{"fade" => fade} -> fade == Rig.patch_fade(rig)
+      _ -> false
+    end
+  end
+
+  defp patch_label(:unsplit), do: "Not split yet"
+  defp patch_label(:no_skeleton), do: "Needs a skeleton"
+  defp patch_label(:no_plate), do: "Needs the background layer"
+  defp patch_label(:no_character), do: "Needs the character layer"
+  defp patch_label(:off), do: "Off"
+  defp patch_label(:pending), do: "Not computed yet"
+  defp patch_label(:stale), do: "Stale - compute it again"
+  defp patch_label(:ready), do: "patch.png"
+
+  defp patch_badge_text(:ready), do: "ready"
+  defp patch_badge_text(:stale), do: "stale"
+  defp patch_badge_text(:pending), do: "pending"
+  defp patch_badge_text(:off), do: "off"
+  defp patch_badge_text(:no_skeleton), do: "no skeleton"
+  defp patch_badge_text(:no_plate), do: "no plate"
+  defp patch_badge_text(:no_character), do: "no character"
+  defp patch_badge_text(:unsplit), do: "unsplit"
+
   defp clamp_frame(socket, frame) do
     frames = if socket.assigns.rig, do: Rig.frame_count(socket.assigns.rig), else: 1
     frame |> to_int() |> max(0) |> min(max(frames - 1, 0))
@@ -2242,7 +2483,6 @@ defmodule FramerWebWeb.EditorLive do
 
   defp to_int(_), do: 0
 
-  defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason({:invalid_rig, reason}), do: reason
-  defp format_reason(reason), do: inspect(reason)
+  defp format_reason(reason), do: Renderer.failure_message(reason)
 end

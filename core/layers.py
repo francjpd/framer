@@ -7,13 +7,20 @@ recomposites them after the deformation, so the rig only ever warps the
 character:
 
     source.png ── character mask (background-removal alpha) ──▶ character layer
-                                                              └─▶ background layer
+                                                              ├─▶ background layer
+                                                              └─▶ patch layer
 
 * **character layer** - the still's colour with the mask as its alpha, so the
   cut-out is exactly the pixels the background-removal operation kept.
 * **background layer** - an opaque *plate*: a full copy of the still whose
   character area is reconstructed from the surrounding background, so no pixel
   is left uncovered. It is never resampled by the rig.
+* **patch layer** - a third materialised layer, between the character and the
+  plate: the region the character can uncover (the union of its warped
+  footprints over the timeline, minus its rest footprint) reconstructed from
+  the plate, with an alpha ramp that is opaque in the middle of the region and
+  fades to transparent at its edge. The feather lives here and never on the
+  plate, so the frame under it stays fully opaque.
 
 When the background layer is present, the layers are recomposited with a
 plain source-over (``out = fg + bg * (1 - fg.a)``), so an opaque character wins
@@ -42,9 +49,16 @@ from core.errors import RigError
 
 # Default file names for the materialised layers, written next to the still so
 # a project directory stays `source.png` + `character.png` + `background.png` +
-# `rig.json`.
+# `patch.png` + `rig.json`.
 LAYER_FILENAME = "character.png"
 PLATE_FILENAME = "background.png"
+PATCH_FILENAME = "patch.png"
+
+# The default width of the patch's feather, in pixels, recorded in the rig
+# document when the patch is enabled.  A rig that does not record a fade has no
+# patch layer at all, so a document saved before the patch existed keeps
+# rendering exactly as it did.
+DEFAULT_FADE = 12
 
 # The rig document field holding the layered state.
 LAYERS_KEY = "layers"
@@ -159,6 +173,25 @@ def composite(character: np.ndarray, background: np.ndarray) -> np.ndarray:
     )
 
 
+def composite_layers(
+    character: np.ndarray,
+    patch: np.ndarray | None,
+    background: np.ndarray | None,
+) -> np.ndarray:
+    """
+    Composite the layer stack: character over patch over background.
+
+    The patch is the middle layer: it carries the feathered reconstruction of
+    the region the character can uncover, and it sits *under* the character so
+    the character keeps its own pixels wherever it is.  Without a patch the
+    stack is the character over the background, exactly as before.
+    """
+    stack = character if patch is None else composite(character, patch)
+    if background is None:
+        return stack
+    return composite(stack, background)
+
+
 def load_layer(path: str | Path) -> np.ndarray:
     """Read a materialised character layer as BGRA."""
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
@@ -245,6 +278,72 @@ def declared_background_path(rig: dict[str, Any]) -> str | None:
     return declared if isinstance(declared, str) and declared else None
 
 
+def patch_fade(rig: dict[str, Any]) -> int | None:
+    """
+    The feather width the rig document records, or None when it has no patch.
+
+    The fade is what enables the patch layer: a document that records no fade
+    renders exactly as it did before the patch existed, because the patch is a
+    materialised layer the editor asks for explicitly.
+    """
+    layers = rig.get(LAYERS_KEY) or {}
+    value = layers.get("fade")
+    if value is None:
+        return None
+    return int(value)
+
+
+def has_patch_layer(rig: dict[str, Any]) -> bool:
+    """Whether the layered rig includes a feathered patch layer."""
+    if not is_split(rig):
+        return False
+    return patch_fade(rig) is not None
+
+
+def patch_path(source_path: str | Path) -> Path:
+    """
+    Where the patch layer lives: `patch.png` beside the still.
+
+    The patch is derived from the rig and the still rather than being a file
+    the user chooses, so it always has one home.
+    """
+    return Path(source_path).parent / PATCH_FILENAME
+
+
+def resolve_background_layer(
+    rig: dict[str, Any],
+    source: np.ndarray,
+    source_path: str | Path,
+    character: np.ndarray | None,
+) -> np.ndarray | None:
+    """
+    Return the background plate for a rig.
+
+    The materialised plate is used when it exists, so a background layer the
+    user replaced by hand is the material the frame is composited over - the
+    same file the editor's preview fetches.  Otherwise the plate is rebuilt
+    from the still and the character mask, exactly as
+    :func:`background_plate` does.
+
+    A rig that does not ask for a split, or whose background layer is removed,
+    returns ``None``: the frame is then the character alone, with its
+    transparency.
+    """
+    if not is_split(rig) or not has_background_layer(rig):
+        return None
+
+    declared = declared_background_path(rig) or PLATE_FILENAME
+    path = Path(declared)
+    if not path.is_absolute():
+        path = Path(source_path).parent / path
+    if path.exists():
+        return load_layer(path)
+
+    if character is None:
+        return None
+    return background_plate(source, character[:, :, 3])
+
+
 def resolve_character_layer(
     rig: dict[str, Any],
     source: np.ndarray,
@@ -319,19 +418,26 @@ def _ensure_plate(
 
 
 __all__ = [
+    "DEFAULT_FADE",
     "LAYERS_KEY",
     "LAYER_FILENAME",
+    "PATCH_FILENAME",
     "PLATE_FILENAME",
     "background_plate",
     "character_alpha",
     "composite",
+    "composite_layers",
     "declared_background_path",
     "declared_character_path",
     "has_background_layer",
     "has_character_layer",
+    "has_patch_layer",
     "is_split",
     "layer_settings",
     "load_layer",
+    "patch_fade",
+    "patch_path",
+    "resolve_background_layer",
     "resolve_character_layer",
     "split_layers",
     "write_layer",

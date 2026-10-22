@@ -199,3 +199,76 @@ def test_op_deform_raises_when_the_request_has_no_rig(tmp_path, tiny_still):
                 "options": {},
             }
         )
+
+
+def patch_scene(tmp_path: Path, fade: int | None = 12) -> tuple[Path, Path]:
+    """The layered scene, with a feather when the rig asks for a patch."""
+    from tests.layer_scene import build_scene
+
+    rig, source = build_scene()
+    if fade is not None:
+        rig["layers"]["fade"] = fade
+
+    rig_path = tmp_path / "rig.json"
+    rig_path.write_text(json.dumps(rig))
+    source_path = tmp_path / "source.png"
+    cv2.imwrite(str(source_path), source)
+    return source_path, rig_path
+
+
+def test_the_patch_op_materialises_the_patch_beside_the_source(tmp_path):
+    """The export's job builds the patch once, before the chunks are dispatched."""
+    from core.patch import read_patch_meta
+
+    source_path, rig_path = patch_scene(tmp_path)
+
+    response = framer_worker.op_patch(
+        {
+            "op": "patch",
+            "input": str(source_path),
+            "options": {"rig": str(rig_path), "still": True},
+        }
+    )
+
+    patch = tmp_path / "patch.png"
+    assert response["patch"] == str(patch)
+    assert patch.exists()
+
+    meta = read_patch_meta(patch)
+    assert meta["fade"] == 12
+    assert meta["fingerprint"]
+
+
+def test_the_patch_op_leaves_a_rig_that_asks_for_no_patch_alone(tmp_path):
+    """A document that records no feather has no patch layer to materialise."""
+    source_path, rig_path = patch_scene(tmp_path, fade=None)
+
+    response = framer_worker.op_patch(
+        {
+            "op": "patch",
+            "input": str(source_path),
+            "options": {"rig": str(rig_path), "still": True},
+        }
+    )
+
+    assert response["patch"] is None
+    assert not (tmp_path / "patch.png").exists()
+
+
+def test_a_chunk_in_reuse_mode_never_builds_the_patch(tmp_path):
+    """The chunks composite the prepared patch; they never sweep the timeline."""
+    source_path, rig_path = patch_scene(tmp_path)
+
+    result = deform_video(
+        input_path=str(source_path),
+        output_path=str(tmp_path / "chunk.webm"),
+        rig=str(rig_path),
+        start_frame=0,
+        end_frame=1,
+        fps=12.0,
+        still=True,
+        patch="reuse",
+    )
+
+    assert result["success"] is True, result.get("error")
+    assert not (tmp_path / "patch.png").exists()

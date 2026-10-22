@@ -174,6 +174,91 @@ defmodule FramerWeb.RigStoreTest do
     assert RigStore.plate_path("../escape") == nil
   end
 
+  test "the patch path resolves the materialised patch layer" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+
+    # Nothing materialised yet.
+    assert RigStore.patch_path(id) == nil
+    assert RigStore.patch_version(id) == nil
+
+    patch = Path.join(RigStore.project_dir(id), Rig.patch_filename())
+    File.write!(patch, "patch")
+
+    assert RigStore.patch_path(id) == patch
+    assert RigStore.patch_path("../escape") == nil
+  end
+
+  test "the patch version follows the sidecar the patch was built with" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+
+    patch = Path.join(RigStore.project_dir(id), Rig.patch_filename())
+    meta = Path.join(RigStore.project_dir(id), Rig.patch_meta_filename())
+    File.write!(patch, "patch")
+
+    # Without a sidecar there is nothing to version the bytes by.
+    assert RigStore.patch_version(id) == nil
+
+    File.write!(meta, ~s({"fade": 12}))
+    version = RigStore.patch_version(id)
+    assert is_binary(version)
+    # The version travels in a URL, so it must not carry a fragment marker.
+    refute String.contains?(version, "#")
+
+    # A patch built from something else is a different patch.
+    File.write!(meta, ~s({"fade": 20}))
+    assert RigStore.patch_version(id) != version
+  end
+
+  test "removing the patch drops the layer and the sidecar that records it" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+
+    patch = Path.join(RigStore.project_dir(id), Rig.patch_filename())
+    meta = Path.join(RigStore.project_dir(id), Rig.patch_meta_filename())
+    File.write!(patch, "patch")
+    File.write!(meta, ~s({"fade": 12}))
+
+    assert RigStore.patch_meta(id) == %{"fade" => 12}
+
+    assert RigStore.remove_patch_layer(id) == :ok
+
+    refute File.exists?(patch)
+    refute File.exists?(meta)
+    assert RigStore.patch_path(id) == nil
+    assert RigStore.patch_meta(id) == nil
+  end
+
+  test "replacing a layer's content drops the patch, even when the document does not change" do
+    {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+    id = rig["id"]
+
+    _saved =
+      RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", id) |> Rig.enable_split())
+
+    patch = Path.join(RigStore.project_dir(id), Rig.patch_filename())
+    meta = Path.join(RigStore.project_dir(id), Rig.patch_meta_filename())
+
+    # The plate is replaced once: the document changes with it, so the patch
+    # goes with it.
+    assert {:ok, first} = RigStore.replace_layer(id, :background, Fixtures.png(32, 32), "b.png")
+    refute File.exists?(patch)
+
+    # A patch computed from that plate...
+    File.write!(patch, "patch")
+    File.write!(meta, ~s({"fade": 12}))
+
+    # ...is stale as soon as the plate's bytes change again, even though the
+    # document names the same file and stays exactly the same.
+    assert {:ok, second} = RigStore.replace_layer(id, :background, Fixtures.png(16, 16), "b.png")
+
+    assert second["layers"] == first["layers"]
+    refute File.exists?(patch)
+    refute File.exists?(meta)
+    assert RigStore.patch_path(id) == nil
+  end
+
   test "character layer paths honour the declared layer path" do
     {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
     id = rig["id"]

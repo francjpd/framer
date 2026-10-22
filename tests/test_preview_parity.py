@@ -103,6 +103,7 @@ def _render_layered_preview(
     plate: np.ndarray | None,
     frame: int,
     iterations: int,
+    patch: np.ndarray | None = None,
 ):
     """Render the split scene through the preview, passing the two layers (or character only)."""
     height, width = source.shape[:2]
@@ -127,6 +128,10 @@ def _render_layered_preview(
         plate_path = tmp_path / "background.rgba"
         plate_path.write_bytes(plate.tobytes())
         spec["background"] = str(plate_path)
+    if patch is not None:
+        patch_path = tmp_path / "patch.rgba"
+        patch_path.write_bytes(patch.tobytes())
+        spec["patch"] = str(patch_path)
 
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(json.dumps(spec))
@@ -330,6 +335,75 @@ def test_character_only_preview_matches_the_engine(tmp_path):
     engine = DeformRenderer(rig, source, iterations=8, character=character).render(FRAMES - 1)
 
     assert preview.shape == engine.shape
+    diff = np.abs(preview.astype(np.int16) - engine.astype(np.int16))
+    mean_diff = float(diff.mean())
+    outlier_fraction = float((diff > OUTLIER_TOLERANCE).mean())
+
+    assert mean_diff <= MEAN_TOLERANCE, f"mean pixel difference {mean_diff:.3f} too large"
+    assert outlier_fraction <= MAX_OUTLIER_FRACTION, (
+        f"{outlier_fraction:.4f} of pixels differ by more than {OUTLIER_TOLERANCE}"
+    )
+
+
+def test_the_preview_composites_the_patch_between_the_character_and_the_plate(tmp_path):
+    """
+    A rig with a feather has three layers, and the preview has to stack them
+    the way the engine does: the character over the patch over the plate.
+
+    A synthetic patch makes the order observable: a half-transparent green
+    layer between the character and the plate tints the background green,
+    while the same layer over the plate would tint the character instead.
+    """
+    rig, source = build_layered_scene()
+    rig["layers"]["fade"] = 12
+    character, plate = _layered_layers(source)
+
+    patch = np.zeros((64, 64, 4), dtype=np.uint8)
+    patch[:, :, 1] = 255
+    patch[:, :, 3] = 128
+
+    preview = _render_layered_preview(
+        tmp_path, rig, source, character, plate, FRAMES - 1, 8, patch=patch
+    )
+    engine = DeformRenderer(
+        rig, source, iterations=8, character=character, patch=patch
+    ).render(FRAMES - 1)
+
+    assert preview.shape == engine.shape
+
+    diff = np.abs(preview.astype(np.int16) - engine.astype(np.int16))
+    assert float(diff.mean()) <= MEAN_TOLERANCE
+    assert float((diff > OUTLIER_TOLERANCE).mean()) <= MAX_OUTLIER_FRACTION
+
+    # The patch is in the middle: the background under it is tinted, and the
+    # character over it is not.
+    background = preview[:20]
+    assert (background[:, :, 1] > background[:, :, 0]).all()
+    character_pixels = preview[32:48, 22:38]
+    assert (character_pixels[:, :, 2] > character_pixels[:, :, 1]).all()
+    assert (character_pixels[:, :, 1] == 0).all()
+
+
+def test_the_preview_with_the_engines_patch_matches_the_engine(tmp_path):
+    """The preview stacks the engine's own patch the same way the engine does."""
+    from core.deform import load_or_build_weights
+    from core.patch import build_patch
+
+    rig, source = build_layered_scene()
+    rig["layers"]["fade"] = 12
+    character, plate = _layered_layers(source)
+    weights = load_or_build_weights(rig, width=64, height=64)
+    patch = build_patch(rig, character[:, :, 3], plate, fade=12, weights=weights)
+
+    preview = _render_layered_preview(
+        tmp_path, rig, source, character, plate, FRAMES - 1, 8, patch=patch
+    )
+    engine = DeformRenderer(
+        rig, source, iterations=8, character=character, patch=patch
+    ).render(FRAMES - 1)
+
+    assert preview.shape == engine.shape
+
     diff = np.abs(preview.astype(np.int16) - engine.astype(np.int16))
     mean_diff = float(diff.mean())
     outlier_fraction = float((diff > OUTLIER_TOLERANCE).mean())

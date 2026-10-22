@@ -31,9 +31,18 @@ defmodule FramerWeb.Rig do
   @layers_key "layers"
   @layer_filename "character.png"
   @plate_filename "background.png"
+  @patch_filename "patch.png"
+  # The sidecar the engine writes next to the patch, recording what the patch
+  # was built from. A rig that changed rebuilds the patch instead of reusing a
+  # stale file.
+  @patch_meta_filename "patch.json"
   @default_tolerance 30
   @default_soft_edges 0
   @default_edge_cleanup 0
+  # The default width of the patch's feather, in pixels. It is recorded in the
+  # document when the patch is enabled, so a document saved before the patch
+  # existed - which records no fade at all - keeps rendering exactly as it did.
+  @default_fade 12
   # The editor-facing option name for each mask setting, so a caller never has
   # to build an atom from a JSON key.
   @layer_setting_options [
@@ -55,6 +64,9 @@ defmodule FramerWeb.Rig do
   def falloffs, do: @falloffs
   def layer_filename, do: @layer_filename
   def plate_filename, do: @plate_filename
+  def patch_filename, do: @patch_filename
+  def patch_meta_filename, do: @patch_meta_filename
+  def default_fade, do: @default_fade
   def layers_key, do: @layers_key
 
   # ---------------------------------------------------------------------------
@@ -438,6 +450,65 @@ defmodule FramerWeb.Rig do
     end
   end
 
+  @doc """
+  The feather width the rig document records, or `nil` when it records none.
+
+  The fade is what enables the patch layer: a document that records no fade
+  renders exactly as it did before the patch existed.
+  """
+  def patch_fade(rig) do
+    case layers(rig)["fade"] do
+      fade when is_integer(fade) and fade >= 0 -> fade
+      _ -> nil
+    end
+  end
+
+  @doc "Whether the layered rig includes the feathered patch layer."
+  def has_patch_layer?(rig), do: split?(rig) and patch_fade(rig) != nil
+
+  @doc """
+  Why the rig cannot have a patch layer yet, or nil when it can.
+
+  The patch is built from the character layer and the background plate, it
+  needs a skeleton to know the swept area, a timeline to sweep and a feather to
+  be enabled at all.  This is the one rule both the editor and the export use.
+  """
+  def patch_blocker(rig) do
+    cond do
+      not split?(rig) -> :no_split
+      bones(rig) == [] -> :no_skeleton
+      not has_character_layer?(rig) -> :no_character
+      not has_background_layer?(rig) -> :no_background
+      frame_count(rig) <= 0 -> :no_timeline
+      patch_fade(rig) == nil -> :no_fade
+      true -> nil
+    end
+  end
+
+  @doc """
+  Whether the rig can have a patch layer at all.
+
+  This is the one rule the editor and the export share: a rig that cannot have
+  a patch has no background patch to carry, so its export carries on exactly
+  as before, while a rig that can have one must not ship without it.
+  """
+  def patch_buildable?(rig), do: patch_blocker(rig) == nil
+
+  @doc """
+  Record the patch's feather width, in pixels.
+
+  A split rig without a recorded fade has no patch layer at all, so the fade is
+  what turns the layer on. `0` is a valid width: it is the patch without a
+  feather.
+  """
+  def set_patch_fade(rig, fade) when is_integer(fade) and fade >= 0 do
+    if split?(rig) do
+      Map.update!(rig, @layers_key, &Map.put(&1, "fade", fade))
+    else
+      rig
+    end
+  end
+
   @doc "Turn on the layer split, recording the default file and mask settings."
   def enable_split(rig, opts \\ []) do
     layers = %{
@@ -446,7 +517,8 @@ defmodule FramerWeb.Rig do
       "tolerance" => Keyword.get(opts, :tolerance, @default_tolerance),
       "soft_edges" => Keyword.get(opts, :soft_edges, @default_soft_edges),
       "edge_cleanup" => Keyword.get(opts, :edge_cleanup, @default_edge_cleanup),
-      "auto_ranges" => Keyword.get(opts, :auto_ranges, true)
+      "auto_ranges" => Keyword.get(opts, :auto_ranges, true),
+      "fade" => Keyword.get(opts, :fade, @default_fade)
     }
 
     layers =
@@ -584,6 +656,9 @@ defmodule FramerWeb.Rig do
           not Enum.all?(@layer_settings, &valid_layer_setting?(layers, &1)) ->
             {:error, "rig.layers settings must be a plain JSON value"}
 
+          not valid_fade?(layers["fade"]) ->
+            {:error, "rig.layers.fade must be a non-negative integer"}
+
           true ->
             {:ok, layers}
         end
@@ -611,6 +686,9 @@ defmodule FramerWeb.Rig do
       value -> is_integer(value)
     end
   end
+
+  defp valid_fade?(nil), do: true
+  defp valid_fade?(value), do: is_integer(value) and value >= 0
 
   defp color_setting?(layers) do
     case layers["color"] do

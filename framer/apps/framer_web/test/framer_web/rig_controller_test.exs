@@ -226,6 +226,94 @@ defmodule FramerWebWeb.RigControllerTest do
     end
   end
 
+  describe "GET /api/rigs/:id/patch" do
+    test "serves the materialised patch layer", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png(8, 8), "s.png")
+      patch = Path.join(RigStore.project_dir(rig["id"]), FramerWeb.Rig.patch_filename())
+      File.write!(patch, "patch")
+
+      assert conn |> get(~p"/api/rigs/#{rig["id"]}/patch") |> response(200) == "patch"
+    end
+
+    test "404s when the patch has not been materialised", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png(8, 8), "s.png")
+
+      assert %{"error" => message} =
+               conn |> get(~p"/api/rigs/#{rig["id"]}/patch") |> json_response(404)
+
+      assert message =~ "no patch layer"
+    end
+
+    test "does not serve a patch outside the projects root", %{conn: conn, root: root} do
+      secret_dir = Path.join(Path.dirname(root), Path.basename(root) <> "_patch_secret")
+      File.mkdir_p!(secret_dir)
+      File.write!(Path.join(secret_dir, "patch.png"), "top secret")
+      on_exit(fn -> File.rm_rf(secret_dir) end)
+
+      traversal = "..%2F" <> Path.basename(secret_dir)
+      body = conn |> get("/api/rigs/#{traversal}/patch") |> response(404)
+      refute String.contains?(body, "top secret")
+    end
+  end
+
+  describe "POST /api/rigs/:id/export" do
+    test "queues the job without building a patch in the request", %{conn: conn} do
+      {:ok, project} =
+        RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+
+      id = project["id"]
+
+      rig =
+        Fixtures.simple_rig(32)
+        |> Map.put("id", id)
+        |> FramerWeb.Rig.enable_split()
+
+      _saved = RigStore.save(rig)
+
+      # The rig records a feather, so the job has a patch to build - the
+      # request only queues the job, so the project keeps no patch and the
+      # caller is answered straight away.
+      body = conn |> post(~p"/api/rigs/#{id}/export", %{"format" => "webm"}) |> json_response(202)
+
+      assert body["job_id"]
+      refute RigStore.patch_path(id)
+
+      await_idle_orchestrator()
+    end
+
+    test "a rig whose patch cannot be built fails the job with a readable message", %{
+      conn: conn
+    } do
+      {:ok, project} =
+        RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+
+      id = project["id"]
+
+      rig =
+        Fixtures.simple_rig(32)
+        |> Map.put("id", id)
+        |> FramerWeb.Rig.enable_split()
+
+      _saved = RigStore.save(rig)
+
+      # The cut-out the patch is built from cannot be read, so the job's
+      # preparation fails - and the export must say so rather than ship the
+      # character over the plate.
+      File.write!(Path.join(RigStore.project_dir(id), "character.png"), "not a png")
+
+      body = conn |> post(~p"/api/rigs/#{id}/export", %{"format" => "webm"}) |> json_response(202)
+      assert body["job_id"]
+
+      state = await_job_status(:failed)
+
+      assert state.job.status == :failed
+      assert state.job.error =~ "patch"
+      refute state.job.error =~ ~r/^:[a-z_]+$/
+
+      await_idle_orchestrator()
+    end
+  end
+
   describe "GET /api/rigs/:id/result" do
     test "404s until an export exists", %{conn: conn} do
       {:ok, rig} = RigStore.save(Fixtures.simple_rig(8))

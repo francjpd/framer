@@ -24,7 +24,7 @@ output chunk file.
 // Request (Elixir -> Python)
 {
   "id":          "e2f1...",        // correlation id, echoed back
-  "op":          "remove-bg",      // remove-bg | fps-boost | loop | deform | merge | info
+  "op":          "remove-bg",      // remove-bg | fps-boost | loop | deform | patch | merge | info
   "input":       "/abs/input.mp4", // source file (nil for merge)
   "output":      "/abs/chunk.webm",// destination chunk file
   "start_frame": 0,                // inclusive
@@ -47,7 +47,7 @@ OpenCV/FFmpeg chatter can never corrupt the protocol stream.
 
 ```
 CLI / web
-   │  submit_job(operation, input, output, total_frames, fps, options)
+   │  submit_job(operation, input, output, total_frames, fps, options, prepare)
    ▼
 FramerCore.Orchestrator ── builds chunks (operation, paths, range, options)
    │  Player.process_chunk(player_id, chunk)
@@ -60,6 +60,13 @@ FramerCore.PortWorker                    ← owns one Python OS process
    ▼
 framer_worker.py  ── reads input chunk, runs the Python core, writes output chunk
 ```
+
+A job may carry a **preparation**: the work every chunk of that job needs
+before any chunk can run, done once by one worker.  The export's preparation
+materialises the rig's background patch in the export directory, so the chunks
+of that job composite one patch file instead of each sweeping the timeline
+themselves.  The orchestrator dispatches no chunk until the preparation has
+finished; when it fails, the job fails and says why.
 
 `FramerCore.Player` runs the blocking `PortWorker.run/3` inside a `Task` so its
 mailbox stays responsive. Each player keeps one Python process for the lifetime
@@ -75,6 +82,7 @@ next queued chunk.
 | `fps-boost` | `ffmpeg` (same filter choices as `ops/fps_boost.py`) | interpolates a frame range, chunkable |
 | `loop`      | `ops/loop.py` (`create_loop`) | whole-file operation, always one chunk |
 | `deform`    | `core/deform.py` (LBS math), `core/layers.py` (layer split/plate composite), `ops/deform.py` (render/loop) | rig/bones puppet warp of a still image, chunkable; writes BGRA chunks |
+| `patch`     | `core/patch.py` (`build_patch`), `core/layers.py` | materialises the rig's background patch beside the still; run once per job, before the chunks |
 | `merge`     | `ffmpeg` concat | concatenates finished chunks into the final output |
 | `info`      | `ffprobe` | resolves width/height/fps/frame count |
 
