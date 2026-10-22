@@ -914,6 +914,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       render_click(view, "remove_layer", %{"layer" => "character"})
 
       render_submit(form(view, "#export-form"), %{"format" => "webm"})
+      render_async(view)
 
       assert render(view) =~ "Exporting animation"
       refute RigStore.patch_path(id)
@@ -961,7 +962,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert FramerWeb.Rig.bone(saved, "b0")["rest"]["head"] == [16.0, 16.0]
     end
 
-    test "the export materialises the patch in the project", %{conn: conn} do
+    test "the export never builds the patch", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
       _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
       id = rig["id"]
@@ -969,14 +970,16 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       render_click(view, "toggle_background_layer", %{})
 
-      # The project's patch is gone, so the export has to materialise it: the
-      # exported frames and the preview then composite the very same patch.
-      RigStore.remove_patch_layer(id)
+      # The patch is the user's explicit ask, so the export uses the
+      # materialised one and never builds it: the exported frames are the ones
+      # the preview showed.
       refute RigStore.patch_path(id)
 
       render_submit(form(view, "#export-form"), %{"format" => "webm"})
+      render_async(view)
 
-      assert RigStore.patch_path(id)
+      assert render(view) =~ "Exporting animation"
+      refute RigStore.patch_path(id)
 
       stop_orchestrator()
     end
@@ -1237,6 +1240,7 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       # Submit export
       render_submit(form(view, "#export-form"), %{"format" => "webm"})
+      render_async(view)
       assert has_element?(view, "#blocking-loader")
       assert has_element?(view, "#blocking-loader-progress")
       assert render(view) =~ "Exporting animation"

@@ -339,9 +339,9 @@ def resolve_patch_layer(
     the reconstruction is made from the plate, so a rig without one has no
     patch at all (and the renderer skips the patch in that case anyway).
 
-    With ``build=False`` the materialised patch is used when it is there and
-    current, and nothing is ever built: a caller that must not pay for the
-    whole-timeline sweep gets no patch instead of one.
+    With ``build=False`` the materialised patch is used as it is - when the
+    file is there - and nothing is ever built: a caller that must not pay for
+    the whole-timeline sweep gets the patch the project already has, or none.
 
     Returns:
         ``(patch, written_path)``; ``written_path`` is ``None`` when an
@@ -370,17 +370,20 @@ def resolve_patch_layer(
         return None, None
 
     path = patch_path(rig, source_path)
+
+    if not build:
+        # The caller asked for the materialised patch only: it is used as it
+        # is, and this call never builds one.
+        if path.exists():
+            return load_layer(path), None
+        return None, None
+
     fingerprint = patch_fingerprint(rig, source_path)
     if path.exists():
         meta = read_patch_meta(path)
         if meta and meta.get("fingerprint") == fingerprint:
             return load_layer(path), None
         # The rig changed since the patch was built: rebuild it.
-
-    if not build:
-        # The caller asked for the materialised patch only: it is missing or
-        # stale, and this call never builds one.
-        return None, None
 
     size = int(rig["canvas"]["width"])
     height = int(rig["canvas"]["height"])

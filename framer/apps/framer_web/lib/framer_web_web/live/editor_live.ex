@@ -642,35 +642,17 @@ defmodule FramerWebWeb.EditorLive do
 
   def handle_event("export", params, socket) do
     format = params["format"] || "webm"
+    rig = socket.assigns.rig
 
-    case Renderer.submit_export(socket.assigns.rig, format: format) do
-      {:ok, export} ->
-        output = Path.basename(export.output)
+    # The export is submitted outside the LiveView process, the way the frame
+    # render and the patch build are, so the editor keeps answering while the
+    # job is prepared.
+    socket =
+      socket
+      |> assign(:error, nil)
+      |> start_async(:export, fn -> Renderer.submit_export(rig, format: format) end)
 
-        {:noreply,
-         socket
-         |> assign(:export, %{
-           job_id: export.job_id,
-           status: :processing,
-           progress: 0.0,
-           output: output,
-           result_url: ~p"/api/rigs/#{socket.assigns.rig["id"]}/result"
-         })
-         |> assign(:blocking_loader, %{
-           op: :export,
-           title: "Exporting animation (#{format})",
-           message: "Rendering and encoding #{output}...",
-           progress: 0.0
-         })
-         |> assign(:error, nil)
-         |> schedule_export_tick()}
-
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> assign(:blocking_loader, nil)
-         |> assign(:error, "Export failed: #{format_reason(reason)}")}
-    end
+    {:noreply, socket}
   end
 
   def handle_event("save_rig", _params, %{assigns: %{rig: nil}} = socket),
@@ -707,6 +689,41 @@ defmodule FramerWebWeb.EditorLive do
      socket
      |> assign(:blocking_loader, nil)
      |> assign(:error, "Render failed: #{inspect(reason)}")}
+  end
+
+  def handle_async(:export, {:ok, {:ok, export}}, socket) do
+    output = Path.basename(export.output)
+
+    {:noreply,
+     socket
+     |> assign(:export, %{
+       job_id: export.job_id,
+       status: :processing,
+       progress: 0.0,
+       output: output,
+       result_url: ~p"/api/rigs/#{socket.assigns.rig["id"]}/result"
+     })
+     |> assign(:blocking_loader, %{
+       op: :export,
+       title: "Exporting animation (#{export.format})",
+       message: "Rendering and encoding #{output}...",
+       progress: 0.0
+     })
+     |> schedule_export_tick()}
+  end
+
+  def handle_async(:export, {:ok, {:error, reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:blocking_loader, nil)
+     |> assign(:error, "Export failed: #{format_reason(reason)}")}
+  end
+
+  def handle_async(:export, {:exit, reason}, socket) do
+    {:noreply,
+     socket
+     |> assign(:blocking_loader, nil)
+     |> assign(:error, "Export failed: #{inspect(reason)}")}
   end
 
   def handle_async(:compute_patch, {:ok, {:ok, _path}}, socket) do

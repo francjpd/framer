@@ -60,7 +60,6 @@ from core.layers import (
     is_split,
     layer_settings,
     load_layer,
-    patch_path,
     resolve_background_layer,
     split_layers,
 )
@@ -1098,14 +1097,15 @@ class DeformRenderer:
 
             # The patch layer sits between the character and the plate.  It is
             # only used when the background layer is there to heal against: a
-            # character-only render stays exactly the character.
-            if has_patch_layer(self.rig) and has_background_layer(self.rig):
-                if patch is not None:
-                    self.patch = self._fit(patch)
-                else:
-                    patch_file = patch_path(self.rig, self.source_path)
-                    if patch_file.exists():
-                        self.patch = self._fit(load_layer(patch_file))
+            # character-only render stays exactly the character.  The patch
+            # itself is resolved by the caller, which knows whether the
+            # materialised one may be used at all.
+            if (
+                has_patch_layer(self.rig)
+                and has_background_layer(self.rig)
+                and patch is not None
+            ):
+                self.patch = self._fit(patch)
         elif character is not None:
             self.background = background_plate(self.source, self.character[:, :, 3])
 
