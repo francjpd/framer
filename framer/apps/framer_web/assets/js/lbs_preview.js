@@ -12,7 +12,7 @@
 
 import {
   applyMatrix,
-  compositeLayers,
+  compositeStack,
   computeBackwardMap,
   computeDenseWeights,
   computeVertexWeights,
@@ -134,9 +134,11 @@ export const LbsPreview = {
     this.sourceImage = null;
     this.characterImage = null;
     this.backgroundImage = null;
+    this.patchImage = null;
     this.sourceUrl = this.el.dataset.sourceUrl;
     this.characterUrl = null;
     this.backgroundUrl = null;
+    this.patchUrl = null;
     this.layerSettingsKey = null;
     this.frame = Number(this.el.dataset.frame || 0);
     this.tool = this.el.dataset.tool || "bones";
@@ -166,6 +168,7 @@ export const LbsPreview = {
     this.loadSource();
     this.loadCharacterLayer(this.el.dataset.characterUrl || null);
     this.loadBackgroundLayer(this.el.dataset.backgroundUrl || null);
+    this.loadPatchLayer(this.el.dataset.patchUrl || null);
     this.setCursor(this.tool === "bones" ? "crosshair" : "default");
 
     this.handleEvent("rig", ({ rig }) => this.setRig(rig));
@@ -235,6 +238,14 @@ export const LbsPreview = {
     // the preview follows the URLs rather than caching them.
     const characterUrl = this.el.dataset.characterUrl || null;
     const backgroundUrl = this.el.dataset.backgroundUrl || null;
+    // The patch is rebuilt in place, so its URL carries the file's timestamp
+    // and is compared whole: a new patch means new bytes behind the same path.
+    const patchUrl = this.el.dataset.patchUrl || null;
+    if (patchUrl !== this.patchUrl) {
+      this.loadPatchLayer(patchUrl);
+      return;
+    }
+
     if (
       characterUrl !== layerName(this.characterUrl) ||
       backgroundUrl !== layerName(this.backgroundUrl)
@@ -361,6 +372,35 @@ export const LbsPreview = {
     image.onerror = () => {
       this.backgroundImage = null;
       this.setStatus("Could not load the background layer");
+    };
+    image.src = url;
+  },
+
+  // The feathered patch layer a split rig composites between the character and
+  // the plate: the region the character can uncover, reconstructed from the
+  // plate and feathered at its edge. The engine materialises it once per
+  // project, so the preview reads the same bytes the export is composited
+  // with. Without it the preview composites the character straight over the
+  // plate, exactly as before.
+  loadPatchLayer(url) {
+    this.patchUrl = url || null;
+
+    if (!url) {
+      this.patchImage = null;
+      this.invalidate();
+      this.draw();
+      return;
+    }
+
+    const image = new Image();
+    image.onload = () => {
+      this.patchImage = image;
+      this.invalidate();
+      this.draw();
+    };
+    image.onerror = () => {
+      this.patchImage = null;
+      this.setStatus("Could not load the patch layer");
     };
     image.src = url;
   },
@@ -583,7 +623,7 @@ export const LbsPreview = {
     // The two layers are part of what the proxy cache is built from: a
     // different cut-out or plate (or none at all) means the proxy has to be
     // rebuilt.
-    const layerKey = `${this.characterUrl || ""}|${this.backgroundUrl || ""}`;
+    const layerKey = `${this.characterUrl || ""}|${this.backgroundUrl || ""}|${this.patchUrl || ""}`;
     if (bindKey === this.cache.bindKey && layerKey === (this.cache.layerKey || "")) return true;
 
     const baseScale = Math.min(1, PROXY_MAX / Math.max(rig.canvas.width, rig.canvas.height));
@@ -615,6 +655,21 @@ export const LbsPreview = {
       : null;
     proxy.background = hasBg
       ? this.downscaleImage(this.backgroundImage, proxy.width, proxy.height)
+      : null;
+
+    // A rig that records a feather also has a patch layer: the feathered
+    // reconstruction of the region the character can uncover, composited
+    // between the character and the plate. It is only used when the plate is
+    // there to heal against.
+    const hasPatch = Boolean(
+      rig.layers &&
+        rig.layers.split &&
+        rig.layers.background !== false &&
+        rig.layers.background !== null &&
+        this.patchImage
+    );
+    proxy.patch = hasPatch
+      ? this.downscaleImage(this.patchImage, proxy.width, proxy.height)
       : null;
 
     this.cache = {
@@ -690,7 +745,7 @@ export const LbsPreview = {
     // alone with transparency.
     if (proxy.character && proxy.background) {
       const warped = remapBilinear(proxy.character.data, proxy.width, proxy.height, mapX, mapY);
-      this.drawCanvas(compositeLayers(warped, proxy.background.data));
+      this.drawCanvas(compositeStack(warped, proxy.patch ? proxy.patch.data : null, proxy.background.data));
       return;
     }
 
@@ -756,6 +811,8 @@ export const LbsPreview = {
         pos: gl.getAttribLocation(composite, "a_pos"),
         character: gl.getUniformLocation(composite, "u_character"),
         background: gl.getUniformLocation(composite, "u_background"),
+        patch: gl.getUniformLocation(composite, "u_patch"),
+        hasPatch: gl.getUniformLocation(composite, "u_has_patch"),
         map: gl.getUniformLocation(composite, "u_map"),
         size: gl.getUniformLocation(composite, "u_size"),
       };
@@ -766,6 +823,7 @@ export const LbsPreview = {
 
       this.glSourceTex = gl.createTexture();
       this.glBackgroundTex = gl.createTexture();
+      this.glPatchTex = gl.createTexture();
       this.glMapTex = gl.createTexture();
 
       gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
@@ -775,6 +833,12 @@ export const LbsPreview = {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
       gl.bindTexture(gl.TEXTURE_2D, this.glBackgroundTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+      gl.bindTexture(gl.TEXTURE_2D, this.glPatchTex);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -807,9 +871,26 @@ export const LbsPreview = {
     // layers and the backward map so the per-pixel alpha weighting stays exact.
     // If the background layer is removed, only the character layer is rendered
     // with its transparent alpha.
+    // A split rig deforms only its character layer and composites the untouched
+    // background plate underneath with a plain source-over, exactly as the
+    // engine's `core.layers.composite` does. One fragment shader reads both
+    // layers and the backward map so the per-pixel alpha weighting stays exact.
+    // If the background layer is removed, only the character layer is rendered
+    // with its transparent alpha.
+    // A rig with a patch layer composites the feathered reconstruction between
+    // the character and the plate: the same three-layer stack the engine
+    // renders.
     if (proxy.character && proxy.background) {
       gl.disable(gl.BLEND);
-      this.drawCompositeQuad(proxy.character, proxy.background, proxy.width, proxy.height, mapX, mapY);
+      this.drawCompositeQuad(
+        proxy.character,
+        proxy.background,
+        proxy.patch,
+        proxy.width,
+        proxy.height,
+        mapX,
+        mapY,
+      );
       return;
     }
 
@@ -869,7 +950,7 @@ export const LbsPreview = {
   // pass, matching `core.layers.composite`: out_alpha = fg.a + bg.a *
   // (1 - fg.a), out_rgb = (fg.rgb * fg.a + bg.rgb * bg.a * (1 - fg.a)) /
   // out_alpha.
-  drawCompositeQuad(character, background, width, height, mapX, mapY) {
+  drawCompositeQuad(character, background, patch, width, height, mapX, mapY) {
     const gl = this.gl;
 
     gl.bindTexture(gl.TEXTURE_2D, this.glSourceTex);
@@ -898,6 +979,35 @@ export const LbsPreview = {
       new Uint8Array(background.data.buffer)
     );
 
+    if (patch) {
+      gl.bindTexture(gl.TEXTURE_2D, this.glPatchTex);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        width,
+        height,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        new Uint8Array(patch.data.buffer)
+      );
+    } else {      // The sampler is declared whether or not the rig has a patch, so the
+      // texture it points at is always complete: a single transparent pixel.
+      gl.bindTexture(gl.TEXTURE_2D, this.glPatchTex);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        1,
+        1,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        new Uint8Array([0, 0, 0, 0])
+      );
+    }
+
     const map = new Float32Array(width * height * 2);
     for (let i = 0; i < mapX.length; i++) {
       map[i * 2] = mapX[i];
@@ -911,6 +1021,8 @@ export const LbsPreview = {
     gl.uniform1i(this.glCompositeLocations.character, 0);
     gl.uniform1i(this.glCompositeLocations.background, 1);
     gl.uniform1i(this.glCompositeLocations.map, 2);
+    gl.uniform1i(this.glCompositeLocations.patch, 3);
+    gl.uniform1f(this.glCompositeLocations.hasPatch, patch ? 1 : 0);
     gl.uniform2f(this.glCompositeLocations.size, width, height);
 
     gl.activeTexture(gl.TEXTURE0);
@@ -919,6 +1031,8 @@ export const LbsPreview = {
     gl.bindTexture(gl.TEXTURE_2D, this.glBackgroundTex);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.glMapTex);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.glPatchTex);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.glBuffer);
     gl.enableVertexAttribArray(this.glCompositeLocations.pos);
@@ -933,6 +1047,7 @@ export const LbsPreview = {
       if (this.glBuffer) gl.deleteBuffer(this.glBuffer);
       if (this.glSourceTex) gl.deleteTexture(this.glSourceTex);
       if (this.glBackgroundTex) gl.deleteTexture(this.glBackgroundTex);
+      if (this.glPatchTex) gl.deleteTexture(this.glPatchTex);
       if (this.glMapTex) gl.deleteTexture(this.glMapTex);
       if (this.glProgram) gl.deleteProgram(this.glProgram);
       if (this.glCompositeProgram) gl.deleteProgram(this.glCompositeProgram);
@@ -941,6 +1056,7 @@ export const LbsPreview = {
     this.glBuffer = null;
     this.glSourceTex = null;
     this.glBackgroundTex = null;
+    this.glPatchTex = null;
     this.glMapTex = null;
     this.glProgram = null;
     this.glCompositeProgram = null;
@@ -1819,10 +1935,17 @@ void main() {
 // (1 - fg.a), out_rgb = (fg.rgb * fg.a + bg.rgb * bg.a * (1 - fg.a)) /
 // out_alpha. The plate is read straight through (never remapped), the
 // character is sampled through the backward map.
+//
+// A rig with a patch layer has a third layer in between: the feathered
+// reconstruction of the region the character can uncover. The patch is read
+// straight through as well, and the two source-overs are applied in the
+// engine's order - the character over the patch over the plate.
 const COMPOSITE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D u_character;
 uniform sampler2D u_background;
+uniform sampler2D u_patch;
+uniform float u_has_patch;
 uniform sampler2D u_map;
 uniform vec2 u_size;
 out vec4 outColor;
@@ -1851,9 +1974,18 @@ void main() {
   vec2 p = texelFetch(u_map, ivec2(x, y), 0).xy;
   vec4 fg = sampleCharacter(p);
   vec4 bg = texelFetch(u_background, ivec2(x, y), 0);
-  float outAlpha = fg.a + bg.a * (1.0 - fg.a);
-  vec3 colour = fg.rgb * fg.a + bg.rgb * bg.a * (1.0 - fg.a);
-  colour = colour / max(outAlpha, 1.0 / 255.0);
+
+  // The patch, when the rig has one, sits between the character and the plate.
+  vec4 mid = vec4(0.0);
+  if (u_has_patch > 0.5) {
+    mid = texelFetch(u_patch, ivec2(x, y), 0);
+  }
+
+  float midAlpha = fg.a + mid.a * (1.0 - fg.a);
+  vec3 midColour = (fg.rgb * fg.a + mid.rgb * mid.a * (1.0 - fg.a)) / max(midAlpha, 1.0 / 255.0);
+
+  float outAlpha = midAlpha + bg.a * (1.0 - midAlpha);
+  vec3 colour = (midColour * midAlpha + bg.rgb * bg.a * (1.0 - midAlpha)) / max(outAlpha, 1.0 / 255.0);
   outColor = vec4(colour, outAlpha);
 }
 `;

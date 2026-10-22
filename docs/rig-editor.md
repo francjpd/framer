@@ -232,8 +232,48 @@ The Layers panel (`#layers-panel`) lists every layer belonging to the project:
 1. **Source still** (`#layer-row-source`) - the original uploaded image. Can be replaced with **Change** to point the rig at an updated source.
 2. **Character layer** (`#layer-row-character`) - the segmented character cut-out. Shows whether it is extracted, kept, or removed. Can be removed, restored with **Keep**, or replaced with **Change**.
 3. **Background layer** (`#layer-row-background`) - the background plate. Can be removed, restored with **Keep**, or replaced with **Change**. On an unsplit rig, clicking **Remove** on the background layer extracts the character and drops the background in a single step.
+4. **Patch layer** (`#layer-row-patch`) - the feathered reconstruction of the ground the character uncovers. It is materialised by the engine, and **Compute patch** asks for it. The row says whether it is ready, still to be computed, waiting for a skeleton, or off.
 
-**No-background outcome**: When the background layer is removed (`layers.background: false`), the deformed character layer renders alone against a transparent background. The viewport preview, frame render, and video export (WebM with alpha) all reflect this transparent outcome.
+**The patch feather** (`#layer-fade-form`) is a 0-40 px slider, recorded in the document as `layers.fade`. It is the width of the feather at the region's edge, and it is saved with the project, so it travels with the rig. `0` is a valid width: the patch without a feather. A rig that records no fade at all has no patch layer and renders exactly as it did before the patch existed.
+
+**No-background outcome**: When the background layer is removed (`layers.background: false`), the deformed character layer renders alone against a transparent background. The viewport preview, frame render, and video export (WebM with alpha) all reflect this transparent outcome. The patch is a heal against the plate, so it is not used in that outcome either.
+
+### The background patch
+
+The plate reconstructs the character's *rest footprint* - the ground it stood on.
+But a character also *travels*: the union of its warped footprints over the
+timeline reaches past the rest footprint, and there the plate still shows the
+untouched background. The character therefore slides from the plate's
+reconstruction onto the original background - two different materials under one
+moving character.
+
+The **patch** is the third materialised layer that closes that gap. It is
+computed from the skeleton with the engine's own LBS: the *region* is the
+character's swept area (the union of its warped footprints over the timeline,
+minus its rest footprint), the *reconstruction* fills that region from the
+plate, and the *feather* is an alpha ramp over the region - fully opaque in
+the middle, clear at the edge - so the patch merges into the untouched
+background around it.
+
+The stack is **character -> feathered patch -> opaque plate**, and the feather
+is on the patch, never on the plate: a feathered plate would leave a
+transparent ring in every frame, while the opaque plate underneath keeps every
+frame fully opaque.
+
+It is a *project-level* artefact: computed once from the skeleton, written
+beside the still as `patch.png`, and reused by every frame, every preview and
+every export. It needs a skeleton - the region the character can uncover is
+only known once the bones and the timeline exist - so **Compute patch** is
+disabled until the rig has one, and the engine rebuilds the patch when the rig
+it came from changes.
+
+**What it promises, honestly**: on a flat or gradient background the patch
+reproduces the background almost exactly. On a textured background it is a
+*plausible reconstruction* of the ground the character uncovers, not a recovery
+of the original pixels - no inpainting method is the latter. The character
+reads as the same character on top of a coherent material; the pixels
+underneath it where it used to be are a reconstruction, as they already were
+with the plate alone.
 
 ### Fill of a vacated region
 
@@ -275,6 +315,8 @@ default `apps/framer_web/priv/projects`):
   source.png      # uploaded still (or source_replaced.<ext> when changed)
   character.png   # the materialised character layer, once split (or character_replaced.<ext>)
   background.png  # the materialised background plate, once split (or background_replaced.<ext>)
+  patch.png       # the materialised background patch, once a rig records a fade
+  patch.json      # what the patch was built from, so a changed rig rebuilds it
   rig.json        # framer.rig v1 - the engine-facing contract
   output.webm     # merged export, once rendered
 ```
@@ -298,6 +340,7 @@ Extends the existing `/api` surface (`FramerWebWeb.RigController`):
 | `GET` | `/api/rigs/:id/source` | the source still |
 | `GET` | `/api/rigs/:id/character` | the materialised character layer of a split rig |
 | `GET` | `/api/rigs/:id/background` | the materialised background plate of a split rig |
+| `GET` | `/api/rigs/:id/patch` | the materialised background patch of a split rig |
 | `GET` | `/api/rigs/:id/result` | the merged export (download) |
 
 Export progress is polled from the existing `GET /api/jobs/:id`; the server-side

@@ -1,0 +1,364 @@
+"""
+Proof: the feathered background patch keeps a background-backed frame opaque.
+
+The patch is the third materialised layer: the character, then the feathered
+reconstruction of the region the character can uncover, then the opaque plate.
+This file drives the real engine operation (`ops.deform.deform_video`, the same
+code the editor's "Render frame" action runs through the Port contract) over
+the deterministic scene from `tests/layer_scene.py`, so what it asserts is what
+an end user sees.
+
+What is pinned:
+
+1. **The region is the swept area.** The union of the character's warped
+   footprints over the timeline, minus its own rest footprint - the strip the
+   character travels into, and not the block it started on.
+2. **The feather is a ramp.** Fully opaque in the middle of the region, clear
+   at its edge, so the patch merges into the untouched background around it.
+3. **The frame stays opaque.** The patch carries the feather, the plate does
+   not, so a background-backed render has no transparent pixel at all.
+4. **The reconstruction comes from the plate.** A plate the user replaced is
+   the material the patch is built from, so the character's own pixels never
+   bleed into it.
+5. **An old rig is untouched.** A document that records no fade renders
+   byte-for-byte as it did before the patch existed.
+6. **The patch is a project-level artefact.** It is materialised once, reused
+   by every later render, and rebuilt when the rig it came from changes.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from core.bg_removal import character_alpha
+from core.deform import DeformRenderer, load_or_build_weights
+from core.layers import (
+    PATCH_FILENAME,
+    PLATE_FILENAME,
+    composite_layers,
+    has_patch_layer,
+    patch_fade,
+    split_layers,
+)
+from core.patch import (
+    build_patch,
+    character_region,
+    feather_ramp,
+    patch_fingerprint,
+    read_patch_meta,
+)
+from ops.deform import deform_video
+from tests.layer_scene import FRAMES, SHIFT, SIZE, build_scene, write_scene
+
+CHARACTER_ROWS = slice(32, 48)
+CHARACTER_COLUMNS = slice(8, 24)
+FADE = 12
+
+
+def scene_rig(fade: int | None = FADE) -> tuple[dict, np.ndarray]:
+    """The deterministic scene, optionally asking for a patch layer."""
+    rig, source = build_scene()
+    if fade is not None:
+        rig["layers"]["fade"] = fade
+    return rig, source
+
+
+def scene_alpha(source: np.ndarray) -> np.ndarray:
+    """The character's mask, as the engine computes it."""
+    return character_alpha(source, tolerance=40, soft_edges=0, edge_cleanup=0)
+
+
+def render(directory: Path, rig: dict, frame: int, tag: str) -> np.ndarray:
+    """Render one frame through the real operation and read it back."""
+    rig_path = directory / f"{tag}.json"
+    rig_path.write_text(json.dumps(rig))
+    output = directory / f"{tag}_{frame}.png"
+    result = deform_video(
+        input_path=str(directory / "source.png"),
+        output_path=str(output),
+        rig=str(rig_path),
+        start_frame=frame,
+        end_frame=frame,
+        fps=12.0,
+        iterations=6,
+        still=True,
+    )
+    assert result["success"], result.get("error")
+    image = cv2.imread(str(output), cv2.IMREAD_UNCHANGED)
+    assert image is not None
+    return image
+
+
+@pytest.fixture
+def project(tmp_path: Path):
+    _source_path, _rig_path = write_scene(tmp_path)
+    return tmp_path
+
+
+def test_the_region_is_the_area_the_character_can_uncover():
+    """The union of the warped footprints, minus the rest footprint."""
+    rig, source = scene_rig()
+    alpha = scene_alpha(source)
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+
+    region = character_region(rig, alpha, weights=weights)
+    assert region.shape == (SIZE, SIZE)
+    assert region.max() == 255
+
+    # The strip the character travels into is inside the region...
+    assert region[CHARACTER_ROWS, CHARACTER_COLUMNS.stop : CHARACTER_COLUMNS.stop + SHIFT].any()
+    # ...and the block it started on is not (the region is dilated by a few
+    # pixels, so the middle of the rest footprint stays clear of it).
+    assert not region[CHARACTER_ROWS, CHARACTER_COLUMNS.start : CHARACTER_COLUMNS.start + 8].any()
+    # The background the character never reaches is not in the region either.
+    assert not region[: CHARACTER_ROWS.start - 4].any()
+
+
+def test_the_feather_ramp_is_opaque_in_the_middle_and_clear_at_the_edge():
+    """The shared primitive: a ramp over the region, `fade` pixels wide."""
+    region = np.zeros((80, 80), np.uint8)
+    region[20:60, 20:60] = 255
+
+    ramp = feather_ramp(region, FADE)
+    assert ramp.shape == region.shape
+    # Outside the region the patch is clear...
+    assert (ramp[region == 0] == 0).all()
+    # ...and so is the region's own edge, so it merges into the untouched
+    # background around it.
+    assert (ramp[20, 20:60] == 0).all()
+    assert (ramp[59, 20:60] == 0).all()
+    assert (ramp[20:60, 20] == 0).all()
+    assert (ramp[20:60, 59] == 0).all()
+    # The middle is fully opaque: the patch covers the region the character
+    # travels through.
+    assert (ramp[40, 33:47] == 255).all()
+    assert (ramp[33:47, 40] == 255).all()
+    # And the ramp between the two rises towards the middle and falls again.
+    column = ramp[20:60, 40].astype(int)
+    half = len(column) // 2
+    assert (np.diff(column[: half + 1]) >= 0).all()
+    assert (np.diff(column[half:]) <= 0).all()
+    assert 0 < column.max() <= 255
+
+
+def test_the_ramp_over_the_real_region_starts_clear_at_its_edge():
+    rig, source = scene_rig()
+    alpha = scene_alpha(source)
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+    region = character_region(rig, alpha, weights=weights)
+
+    ramp = feather_ramp(region, FADE)
+    edge = np.zeros_like(region, bool)
+    edge[1:-1, 1:-1] = (region[1:-1, 1:-1] > 0) & (
+        (region[:-2, 1:-1] == 0)
+        | (region[2:, 1:-1] == 0)
+        | (region[1:-1, :-2] == 0)
+        | (region[1:-1, 2:] == 0)
+    )
+    edge[0, :] = region[0, :] > 0
+    edge[-1, :] = region[-1, :] > 0
+    edge[:, 0] = region[:, 0] > 0
+    edge[:, -1] = region[:, -1] > 0
+
+    assert edge.any()
+    assert (ramp[edge] == 0).all()
+    assert (ramp[region == 0] == 0).all()
+
+
+def test_a_fade_of_zero_is_no_feather_at_all():
+    rig, source = scene_rig()
+    alpha = scene_alpha(source)
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+    region = character_region(rig, alpha, weights=weights)
+
+    ramp = feather_ramp(region, 0)
+    assert set(np.unique(ramp)) <= {0, 255}
+    assert (ramp[region > 0] == 255).all()
+    assert (ramp[region == 0] == 0).all()
+
+
+def test_the_rendered_frame_has_no_transparent_pixel(project: Path):
+    """The feather lives on the patch, so the plate underneath stays opaque."""
+    rig, _source = scene_rig()
+    for frame in (0, FRAMES - 1):
+        image = render(project, rig, frame, "patched")
+        assert (image[:, :, 3] == 255).all()
+
+
+def test_the_patch_is_built_from_the_plate_not_from_the_still(project: Path):
+    """
+    A plate the user replaced is the material the reconstruction comes from.
+
+    Inpainting from the still would leak the character's own pixels into the
+    result; the plate holds background only, so the patch carries the plate's
+    material instead.
+    """
+    rig, _source = scene_rig()
+    # The first render materialises the character layer and the plate; the
+    # plate is then replaced by hand, the way a user would.
+    render(project, rig, 0, "replaced")
+
+    plate = np.zeros((SIZE, SIZE, 4), np.uint8)
+    plate[:, :, 0] = 200  # a blue plate, nothing like the still's green band
+    plate[:, :, 3] = 255
+    assert cv2.imwrite(str(project / PLATE_FILENAME), plate)
+    (project / PATCH_FILENAME).unlink()
+
+    image = render(project, rig, 0, "replaced")
+
+    # The strip the character travels into shows the plate's blue, not the
+    # still's green band.
+    swept = image[CHARACTER_ROWS, CHARACTER_COLUMNS.stop : CHARACTER_COLUMNS.stop + SHIFT]
+    assert (swept[:, :, 0] > 100).all()
+    # The background the character never reaches is the plate's blue as well.
+    assert (image[:20, :, 0] == 200).all()
+
+
+def test_the_patch_carries_no_character_colour():
+    """The patch is reconstructed from background-only pixels."""
+    rig, source = scene_rig()
+    alpha = scene_alpha(source)
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+    _character, plate = split_layers(source, alpha)
+
+    patch = build_patch(rig, alpha, plate, fade=FADE, weights=weights)
+    assert patch.shape == (SIZE, SIZE, 4)
+    # The still's character is pure red; the patch holds none of it.
+    assert not patch[:, :, 2].any()
+
+
+def test_an_old_rig_without_a_fade_renders_exactly_as_before(project: Path):
+    """A document saved before the patch existed keeps rendering as it did."""
+    rig, _source = scene_rig(fade=None)
+    assert not has_patch_layer(rig)
+    assert patch_fade(rig) is None
+
+    legacy = render(project, rig, FRAMES - 1, "legacy")
+    assert (legacy[:, :, 3] == 255).all()
+    assert not (project / PATCH_FILENAME).exists()
+
+    # The very same rig with a fade recorded is a different render, and the
+    # difference is confined to the region the patch covers.
+    patched_rig, _ = scene_rig()
+    patched = render(project, patched_rig, FRAMES - 1, "patched")
+    assert not np.array_equal(legacy, patched)
+
+
+def test_the_patch_is_materialised_once_beside_the_still_and_then_reused(project: Path):
+    """The patch is a project-level artefact, not a per-frame computation."""
+    rig, _source = scene_rig()
+    rig_path = project / "rig.json"
+    rig_path.write_text(json.dumps(rig))
+
+    output = project / "frame.png"
+    result = deform_video(
+        input_path=str(project / "source.png"),
+        output_path=str(output),
+        rig=str(rig_path),
+        start_frame=0,
+        end_frame=0,
+        fps=12.0,
+        iterations=6,
+        still=True,
+    )
+    assert result["success"], result.get("error")
+    patch = project / PATCH_FILENAME
+    assert patch.exists()
+    assert result["patch"] == str(patch)
+
+    meta = read_patch_meta(patch)
+    assert meta is not None
+    assert meta["fingerprint"] == patch_fingerprint(rig)
+    assert meta["fade"] == FADE
+
+    # A later render reads the file rather than rebuilding it.
+    mtime = patch.stat().st_mtime_ns
+    again = deform_video(
+        input_path=str(project / "source.png"),
+        output_path=str(project / "frame2.png"),
+        rig=str(rig_path),
+        start_frame=FRAMES - 1,
+        end_frame=FRAMES - 1,
+        fps=12.0,
+        iterations=6,
+        still=True,
+    )
+    assert again["success"], again.get("error")
+    assert "patch" not in again
+    assert patch.stat().st_mtime_ns == mtime
+
+
+def test_the_patch_is_rebuilt_when_the_rig_it_came_from_changes(project: Path):
+    """A rig that moved is a different region, so the patch is rebuilt."""
+    rig, _source = scene_rig()
+    rig_path = project / "rig.json"
+    rig_path.write_text(json.dumps(rig))
+
+    deform_video(
+        input_path=str(project / "source.png"),
+        output_path=str(project / "frame.png"),
+        rig=str(rig_path),
+        start_frame=0,
+        end_frame=0,
+        fps=12.0,
+        iterations=6,
+        still=True,
+    )
+    patch = project / PATCH_FILENAME
+    first = patch.stat().st_mtime_ns
+
+    moved = json.loads(rig_path.read_text())
+    moved["keyframes"][-1]["pose"]["b0"]["tx"] = SHIFT * 2
+    rig_path.write_text(json.dumps(moved))
+
+    result = deform_video(
+        input_path=str(project / "source.png"),
+        output_path=str(project / "frame2.png"),
+        rig=str(rig_path),
+        start_frame=0,
+        end_frame=0,
+        fps=12.0,
+        iterations=6,
+        still=True,
+    )
+    assert result["success"], result.get("error")
+    assert result["patch"] == str(patch)
+    assert patch.stat().st_mtime_ns != first
+    assert read_patch_meta(patch)["fingerprint"] == patch_fingerprint(moved)
+
+
+def test_removing_the_background_layer_keeps_the_character_transparent(project: Path):
+    """The patch heals against the plate, so a character-only render is untouched."""
+    rig, _source = scene_rig()
+    rig["layers"]["background"] = False
+
+    image = render(project, rig, FRAMES - 1, "char_only")
+    assert (image[: CHARACTER_ROWS.start, :, 3] == 0).all()
+    # The character itself is still solid, where it moved to.
+    moved = image[CHARACTER_ROWS, CHARACTER_COLUMNS.start + SHIFT : CHARACTER_COLUMNS.stop + SHIFT]
+    assert (moved[:, :, 3] == 255).all()
+
+
+def test_the_renderer_composites_character_over_patch_over_plate():
+    """The stack order is the one the editor's preview has to match."""
+    rig, source = scene_rig()
+    alpha = scene_alpha(source)
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+    character, plate = split_layers(source, alpha)
+    patch = build_patch(rig, alpha, plate, fade=FADE, weights=weights)
+
+    renderer = DeformRenderer(rig, source, iterations=6, character=character, patch=patch)
+    frame = renderer.render(FRAMES - 1)
+
+    # The frame is the character over the patch over the plate.
+    assert (frame[:, :, 3] == 255).all()
+    stacked = composite_layers(renderer.character, patch, plate)
+    assert stacked.shape == frame.shape

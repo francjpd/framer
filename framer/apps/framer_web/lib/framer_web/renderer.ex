@@ -17,6 +17,12 @@ defmodule FramerWeb.Renderer do
   contract: it materialises the character layer of a split rig with the engine's
   existing background-removal segmentation.
 
+  `build_patch/2` is the fourth: it materialises the feathered patch layer of a
+  split rig - the region the character can uncover, reconstructed from the
+  background plate and feathered at its edge. The patch is a project-level
+  artefact: the engine computes it once from the skeleton and reuses it for
+  every frame, every preview and every export.
+
   A split rig (`rig.layers.split`) renders through the same `deform` operation
   as ever - the rig document tells the engine which character layer to deform -
   so the final render is authoritative for the layering exactly as it is for the
@@ -131,6 +137,66 @@ defmodule FramerWeb.Renderer do
 
           {:ok, _response} ->
             {:error, :layer_not_materialised}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      after
+        File.rm(output)
+      end
+    end
+  end
+
+  @doc """
+  Materialise the feathered patch layer of a split rig and return `{:ok, path}`.
+
+  This is the editor's "compute patch" action. The patch is the region the
+  character can uncover - the union of its warped footprints over the timeline,
+  minus its own rest footprint - reconstructed from the background plate and
+  feathered at its edge, so the character slides over one coherent material
+  instead of from the plate's reconstruction onto untouched background.
+
+  It is a *project-level* computation: the engine builds it once, writes it
+  beside the still as `patch.png` and reuses it for every later frame. The
+  render that produces it is frame 0 of the very rig being patched, so the
+  composited still the editor shows afterwards is exactly what the first render
+  will produce.
+  """
+  def build_patch(rig, opts \\ []) do
+    with {:ok, source} <- source_path(rig) do
+      workspace = workspace_dir(rig)
+      rig_path = Path.join(workspace, "patch_rig.json")
+      output = Path.join(workspace, "patch_#{System.unique_integer([:positive])}.png")
+
+      File.mkdir_p!(workspace)
+      File.write!(rig_path, Jason.encode!(rig))
+
+      request = %{
+        "op" => "deform",
+        "input" => source,
+        "output" => output,
+        "start_frame" => 0,
+        "end_frame" => 0,
+        "fps" => Rig.fps(rig),
+        "options" => %{
+          "rig" => rig_path,
+          "still" => true,
+          "iterations" => opts[:iterations] || 6
+        }
+      }
+
+      try do
+        case PortWorker.run_once(request, Keyword.get(opts, :timeout, @default_timeout)) do
+          {:ok, %{"patch" => path}} when is_binary(path) ->
+            {:ok, path}
+
+          {:ok, _response} ->
+            # The patch was already materialised and is still current, so the
+            # engine reused it instead of writing a new one.
+            case RigStore.patch_path(rig["id"]) do
+              nil -> {:error, :patch_not_materialised}
+              path -> {:ok, path}
+            end
 
           {:error, reason} ->
             {:error, reason}
@@ -340,6 +406,24 @@ defmodule FramerWeb.Renderer do
           plate_dest = Path.join(export_dir, bg_rel)
           File.mkdir_p!(Path.dirname(plate_dest))
           File.cp!(plate_src, plate_dest)
+        end
+      end
+
+      # The patch is a project-level artefact, so the export reuses the very
+      # file the preview shows instead of computing it again per chunk. Its
+      # sidecar travels with it: it records what the patch was built from, and
+      # the engine rebuilds the patch when that no longer matches the rig.
+      if Rig.has_patch_layer?(rig) do
+        patch_src = RigStore.patch_path(id)
+
+        if patch_src && File.exists?(patch_src) do
+          File.cp!(patch_src, Path.join(export_dir, Rig.patch_filename()))
+
+          meta_src = Path.join(project_dir, Rig.patch_meta_filename())
+
+          if File.exists?(meta_src) do
+            File.cp!(meta_src, Path.join(export_dir, Rig.patch_meta_filename()))
+          end
         end
       end
     end

@@ -19,10 +19,17 @@ from core.deform import (
     IMAGE_EXTENSIONS,
     DeformRenderer,
     RigError,
+    load_or_build_weights,
     load_rig,
     load_source,
 )
-from core.layers import is_split, resolve_character_layer
+from core.layers import (
+    has_patch_layer,
+    is_split,
+    resolve_background_layer,
+    resolve_character_layer,
+)
+from core.patch import resolve_patch_layer
 from core.video import VideoStreamWriter
 
 
@@ -109,19 +116,43 @@ def deform_video(
         height = int(rig_document["canvas"]["height"])
 
         character_layer = None
+        background_layer = None
         materialised = None
+        patch_layer = None
+        patch_materialised = None
+        shared_weights = None
         if is_split(rig_document):
             character_layer, materialised = resolve_character_layer(
                 rig_document, source, input_path
             )
+            background_layer = resolve_background_layer(
+                rig_document, source, input_path, character_layer
+            )
+            if character_layer is not None and has_patch_layer(rig_document):
+                # The patch is computed from the skeleton, so it needs the same
+                # dense weights the renderer uses.  They are built once here and
+                # handed to both.
+                shared_weights = load_or_build_weights(
+                    rig_document, width=width, height=height, cache_path=weights
+                )
+                patch_layer, patch_materialised = resolve_patch_layer(
+                    rig_document,
+                    source,
+                    input_path,
+                    character_layer,
+                    weights=shared_weights,
+                )
 
         renderer = DeformRenderer(
             rig_document,
             source,
             iterations=iterations,
+            weights=shared_weights,
             weights_cache=weights,
             still=still,
             character=character_layer,
+            background=background_layer,
+            patch=patch_layer,
         )
 
         output = Path(output_path)
@@ -139,6 +170,8 @@ def deform_video(
             }
             if materialised is not None:
                 result["character"] = str(materialised)
+            if patch_materialised is not None:
+                result["patch"] = str(patch_materialised)
             return result
 
         # MP4 drops alpha on encode, so the *rendered* frame is what decides
@@ -180,6 +213,7 @@ def deform_video(
             "end_frame": end,
             "fps": resolved_fps,
             **({"character": str(materialised)} if materialised is not None else {}),
+            **({"patch": str(patch_materialised)} if patch_materialised is not None else {}),
         }
 
     except (RigError, cv2.error, OSError, ValueError) as exc:

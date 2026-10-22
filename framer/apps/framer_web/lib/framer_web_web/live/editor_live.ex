@@ -458,6 +458,76 @@ defmodule FramerWebWeb.EditorLive do
 
   def handle_event("set_layer_tolerance", _params, socket), do: {:noreply, socket}
 
+  # --- the background patch -------------------------------------------------
+  #
+  # The patch is the third materialised layer: the character, then the
+  # feathered reconstruction of the region the character can uncover, then the
+  # opaque plate. Its width is recorded in the document, so it travels with the
+  # project; a document that records no fade has no patch at all and renders
+  # exactly as it did before the patch existed.
+
+  def handle_event("set_patch_fade", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("set_patch_fade", %{"fade" => fade}, socket) do
+    case to_float(fade) do
+      value when is_number(value) and value >= 0 ->
+        socket = maybe_push_undo(socket, [])
+        rig = Rig.set_patch_fade(socket.assigns.rig, trunc(value))
+
+        {:noreply,
+         socket
+         |> finalize_mutation(rig, status: "Patch feather set to #{trunc(value)} px")}
+
+      _ ->
+        {:noreply, assign(socket, :error, "The feather must be zero or more pixels")}
+    end
+  end
+
+  def handle_event("set_patch_fade", _params, socket), do: {:noreply, socket}
+
+  def handle_event("compute_patch", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("compute_patch", _params, socket) do
+    rig = socket.assigns.rig
+
+    cond do
+      not Rig.split?(rig) ->
+        {:noreply,
+         assign(socket, :error, "Extract the character first: the patch heals the background")}
+
+      Rig.bones(rig) == [] ->
+        {:noreply, assign(socket, :error, "The patch needs a skeleton: add a bone first")}
+
+      true ->
+        # The patch is enabled by recording a feather, so a document saved
+        # before the patch existed gets the default when the user asks for it.
+        rig =
+          if Rig.patch_fade(rig) == nil do
+            Rig.set_patch_fade(rig, Rig.default_fade())
+          else
+            rig
+          end
+
+        socket = assign(socket, :status, "Computing the patch...")
+
+        case Renderer.build_patch(rig) do
+          {:ok, _path} ->
+            {:noreply,
+             socket
+             |> finalize_mutation(rig, status: "Patch computed")
+             |> assign(:error, nil)}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> assign(:status, nil)
+             |> assign(:error, "Could not compute the patch: #{format_reason(reason)}")}
+        end
+    end
+  end
+
   # --- undo ----------------------------------------------------------------
 
   def handle_event("undo", _params, %{assigns: %{undo: [previous | rest]}} = socket) do
@@ -1465,6 +1535,54 @@ defmodule FramerWebWeb.EditorLive do
                 <% end %>
               </div>
             </div>
+            
+    <!-- 4. Patch layer row -->
+            <div id="layer-row-patch" class="flex flex-col gap-1 p-2">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold">Patch layer</span>
+                <span class="badge badge-accent badge-xs">patch</span>
+              </div>
+              <div class="flex items-center justify-between opacity-70 text-[11px]">
+                <span class="truncate max-w-[130px]">
+                  <%= cond do %>
+                    <% not Rig.split?(@rig) -> %>
+                      Needs the character layer
+                    <% Rig.bones(@rig) == [] -> %>
+                      Needs a skeleton
+                    <% Rig.patch_fade(@rig) == nil -> %>
+                      Off
+                    <% RigStore.patch_path(@rig["id"]) != nil -> %>
+                      patch.png
+                    <% true -> %>
+                      Not computed yet
+                  <% end %>
+                </span>
+                <%= cond do %>
+                  <% not Rig.split?(@rig) -> %>
+                    <span class="badge badge-ghost badge-xs">unsplit</span>
+                  <% Rig.bones(@rig) == [] -> %>
+                    <span class="badge badge-ghost badge-xs">no skeleton</span>
+                  <% Rig.patch_fade(@rig) == nil -> %>
+                    <span class="badge badge-ghost badge-xs">off</span>
+                  <% RigStore.patch_path(@rig["id"]) != nil -> %>
+                    <span class="badge badge-success badge-xs">ready</span>
+                  <% true -> %>
+                    <span class="badge badge-warning badge-xs">pending</span>
+                <% end %>
+              </div>
+              <div class="mt-1">
+                <button
+                  id="compute-patch-btn"
+                  phx-click={JS.push("compute_patch", page_loading: true)}
+                  data-wait-title="Computing the patch"
+                  data-wait-message="Reconstructing the region the character can uncover..."
+                  class="btn btn-xs btn-outline w-full"
+                  disabled={not Rig.split?(@rig) or Rig.bones(@rig) == []}
+                >
+                  Compute patch
+                </button>
+              </div>
+            </div>
           </div>
 
           <form :if={Rig.split?(@rig)} id="layer-tolerance-form" class="mt-2">
@@ -1484,6 +1602,29 @@ defmodule FramerWebWeb.EditorLive do
               title="How far a pixel may sit from the background colour and still count as background"
             />
             <p class="opacity-60">{layer_tolerance(@rig)}</p>
+          </form>
+
+          <form :if={Rig.split?(@rig)} id="layer-fade-form" class="mt-2">
+            <label class="label-text" for="layer-fade">
+              Patch feather
+            </label>
+            <input
+              id="layer-fade"
+              type="range"
+              min="0"
+              max="40"
+              step="1"
+              value={layer_fade(@rig)}
+              phx-change="set_patch_fade"
+              name="fade"
+              class="range range-xs"
+              title="How wide the patch's feather is, in pixels: 0 is no feather at all"
+            />
+            <p class="opacity-60">{layer_fade(@rig)} px</p>
+            <p class="opacity-60">
+              The patch reconstructs the ground the character uncovers as it moves and feathers
+              it into the background, so the character slides over one material.
+            </p>
           </form>
         </div>
       </section>
@@ -1572,6 +1713,7 @@ defmodule FramerWebWeb.EditorLive do
         data-source-url={~p"/api/rigs/#{@rig["id"]}/source"}
         data-character-url={character_layer_url(@rig)}
         data-background-url={background_layer_url(@rig)}
+        data-patch-url={patch_layer_url(@rig)}
         data-frame={@playhead}
         data-tool={@tool}
         data-selected={@selected || ""}
@@ -2199,6 +2341,26 @@ defmodule FramerWebWeb.EditorLive do
   defp background_layer_url(rig) do
     if Rig.split?(rig) and Rig.has_background_layer?(rig) and is_binary(Rig.background_layer(rig)) do
       ~p"/api/rigs/#{rig["id"]}/background"
+    end
+  end
+
+  # The patch is rebuilt whenever the rig it came from changes, so the URL
+  # carries the file's timestamp: the preview then re-fetches the bytes behind
+  # it instead of showing the patch the rig used to have.
+  defp patch_layer_url(rig) do
+    id = rig["id"]
+
+    if Rig.has_patch_layer?(rig) and RigStore.patch_path(id) do
+      ~p"/api/rigs/#{id}/patch?v=#{RigStore.patch_version(id)}"
+    end
+  end
+
+  # The feather width the editor shows. A document that records no fade has no
+  # patch, but the slider still shows the default the editor would use.
+  defp layer_fade(rig) do
+    case Rig.patch_fade(rig) do
+      nil -> Rig.default_fade()
+      fade -> fade
     end
   end
 

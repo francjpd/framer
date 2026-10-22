@@ -92,6 +92,36 @@ defmodule FramerWeb.RigStore do
     end
   end
 
+  @doc "Absolute path of a project's materialised patch layer, if it exists."
+  def patch_path(id) do
+    with :ok <- validate_id(id) do
+      path = Path.join(project_dir(id), Rig.patch_filename())
+      if File.exists?(path), do: path
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  A cache-busting version for the materialised patch layer.
+
+  The patch is rebuilt whenever the rig it came from changes, so the file's
+  timestamp is what tells the editor's preview that the bytes behind the same
+  URL are new.
+  """
+  def patch_version(id) do
+    case patch_path(id) do
+      nil ->
+        nil
+
+      path ->
+        case File.stat(path) do
+          {:ok, stat} -> inspect(stat.mtime)
+          _ -> nil
+        end
+    end
+  end
+
   @doc "Replace a project's layer (:source, :character, or :background) with a new image."
   def replace_layer(id, :source, binary, filename),
     do: replace_layer(id, "source", binary, filename)

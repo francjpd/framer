@@ -491,6 +491,19 @@ export function compositeLayers(character, background) {
   return out;
 }
 
+/**
+ * Composite the layer stack: character over patch over background.
+ *
+ * The patch is the middle layer - the feathered reconstruction of the region
+ * the character can uncover - and it sits under the character, so the character
+ * keeps its own pixels wherever it is. Without a patch the stack is the
+ * character over the background, exactly as before.
+ */
+export function compositeStack(character, patch, background) {
+  const stack = patch ? compositeLayers(character, patch) : character;
+  return background ? compositeLayers(stack, background) : stack;
+}
+
 /** Convenience: render one frame to an RGBA buffer (the 2D-canvas fallback). */
 export function renderFrameRGBA(source, w, h, rig, frame, options = {}) {
   const iterations = options.iterations ?? 5;
@@ -504,9 +517,12 @@ export function renderFrameRGBA(source, w, h, rig, frame, options = {}) {
   // is passed through and composited underneath, exactly as the engine does.
   // When the background is removed, the deformed character layer is rendered
   // alone with transparency.
+  // A rig that records a feather also has a patch layer: the feathered
+  // reconstruction of the region the character can uncover, between the
+  // character and the plate.
   if (options.character && options.background) {
     const warped = remapBilinear(options.character, w, h, mapX, mapY);
-    return compositeLayers(warped, options.background);
+    return compositeStack(warped, options.patch, options.background);
   }
 
   if (options.character) {

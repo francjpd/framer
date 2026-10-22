@@ -780,6 +780,75 @@ defmodule FramerWebWeb.EditorLiveTest do
     end
   end
 
+  describe "the background patch" do
+    test "the panel offers the patch and its feather, and the feather is recorded", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # The patch is a layer of its own, with a feather the user can move.
+      assert has_element?(view, "#layer-row-patch")
+      assert has_element?(view, "#compute-patch-btn")
+      assert has_element?(view, "#layer-fade-form")
+
+      render_change(view, "set_patch_fade", %{"fade" => "20"})
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.patch_fade(saved) == 20
+      assert FramerWeb.Rig.has_patch_layer?(saved)
+    end
+
+    test "a negative feather is refused without touching the document", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      render_change(view, "set_patch_fade", %{"fade" => "-4"})
+
+      assert render(view) =~ "The feather must be zero or more pixels"
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.patch_fade(saved) == FramerWeb.Rig.default_fade()
+    end
+
+    test "the patch is computed from the skeleton and the preview points at it", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # The rig has a skeleton now, so the engine materialised the patch beside
+      # the still and the preview composites the very same bytes.
+      assert RigStore.patch_path(rig["id"])
+      assert File.exists?(RigStore.patch_path(rig["id"]))
+      assert has_element?(view, "#viewport[data-patch-url]")
+
+      # Asking for it again reuses the materialised patch rather than
+      # recomputing it.
+      render_click(view, "compute_patch", %{})
+      assert render(view) =~ "Patch computed"
+      assert has_element?(view, "#viewport[data-patch-url]")
+    end
+
+    test "the patch waits for a skeleton", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+
+      # A split rig without bones: the region the character can uncover is only
+      # known once the skeleton exists.
+      split = FramerWeb.Rig.enable_split(FramerWeb.Rig.new(32, 32)) |> Map.put("id", rig["id"])
+      _saved = RigStore.save(split)
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "compute_patch", %{})
+
+      assert render(view) =~ "The patch needs a skeleton"
+      refute RigStore.patch_path(rig["id"])
+    end
+  end
+
   describe "layers panel and per-layer actions" do
     test "panel lists project layers (source still, character, background)", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")

@@ -13,6 +13,7 @@ defmodule FramerWebWeb.RigController do
     * `GET    /api/rigs/:id/source` - the source still
     * `GET    /api/rigs/:id/character` - the materialised character layer
     * `GET    /api/rigs/:id/background` - the materialised background plate
+    * `GET    /api/rigs/:id/patch` - the materialised feathered patch layer
     * `GET    /api/rigs/:id/result` - the merged export (download)
 
   The BEAM never receives pixel data here either: the still is written to disk
@@ -159,6 +160,27 @@ defmodule FramerWebWeb.RigController do
     case RigStore.plate_path(id) do
       nil ->
         conn |> put_status(:not_found) |> json(%{error: "no background layer for #{id}"})
+
+      path ->
+        conn
+        |> put_resp_content_type(MIME.type(path) || "application/octet-stream")
+        |> put_resp_header("cache-control", "no-store")
+        |> send_file(200, path)
+    end
+  end
+
+  @doc """
+  The feathered patch layer of a split rig.
+
+  Serves the project's patch: the region the character can uncover,
+  reconstructed from the background plate and feathered at its edge. The preview
+  fetches it and composites it between the character and the plate, the same
+  three-layer stack the engine renders and exports with.
+  """
+  def patch(conn, %{"id" => id}) do
+    case RigStore.patch_path(id) do
+      nil ->
+        conn |> put_status(:not_found) |> json(%{error: "no patch layer for #{id}"})
 
       path ->
         conn

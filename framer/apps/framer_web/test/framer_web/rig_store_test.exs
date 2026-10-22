@@ -174,6 +174,22 @@ defmodule FramerWeb.RigStoreTest do
     assert RigStore.plate_path("../escape") == nil
   end
 
+  test "the patch path resolves the materialised patch layer" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+
+    # Nothing materialised yet.
+    assert RigStore.patch_path(id) == nil
+    assert RigStore.patch_version(id) == nil
+
+    patch = Path.join(RigStore.project_dir(id), Rig.patch_filename())
+    File.write!(patch, "patch")
+
+    assert RigStore.patch_path(id) == patch
+    assert is_binary(RigStore.patch_version(id))
+    assert RigStore.patch_path("../escape") == nil
+  end
+
   test "character layer paths honour the declared layer path" do
     {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
     id = rig["id"]

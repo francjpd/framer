@@ -226,6 +226,36 @@ defmodule FramerWebWeb.RigControllerTest do
     end
   end
 
+  describe "GET /api/rigs/:id/patch" do
+    test "serves the materialised patch layer", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png(8, 8), "s.png")
+      patch = Path.join(RigStore.project_dir(rig["id"]), FramerWeb.Rig.patch_filename())
+      File.write!(patch, "patch")
+
+      assert conn |> get(~p"/api/rigs/#{rig["id"]}/patch") |> response(200) == "patch"
+    end
+
+    test "404s when the patch has not been materialised", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png(8, 8), "s.png")
+
+      assert %{"error" => message} =
+               conn |> get(~p"/api/rigs/#{rig["id"]}/patch") |> json_response(404)
+
+      assert message =~ "no patch layer"
+    end
+
+    test "does not serve a patch outside the projects root", %{conn: conn, root: root} do
+      secret_dir = Path.join(Path.dirname(root), Path.basename(root) <> "_patch_secret")
+      File.mkdir_p!(secret_dir)
+      File.write!(Path.join(secret_dir, "patch.png"), "top secret")
+      on_exit(fn -> File.rm_rf(secret_dir) end)
+
+      traversal = "..%2F" <> Path.basename(secret_dir)
+      body = conn |> get("/api/rigs/#{traversal}/patch") |> response(404)
+      refute String.contains?(body, "top secret")
+    end
+  end
+
   describe "GET /api/rigs/:id/result" do
     test "404s until an export exists", %{conn: conn} do
       {:ok, rig} = RigStore.save(Fixtures.simple_rig(8))
