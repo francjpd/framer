@@ -22,6 +22,7 @@ defmodule FramerCore.Orchestrator do
   alias FramerCore.Job
   alias FramerCore.Job.Chunk
   alias FramerCore.Player
+  alias FramerCore.PortWorker
 
   @max_retries 3
   @max_total_errors 20
@@ -289,7 +290,9 @@ defmodule FramerCore.Orchestrator do
   end
 
   defp prepare_error(reason) when is_binary(reason), do: reason
-  defp prepare_error(reason), do: inspect(reason)
+
+  defp prepare_error(reason),
+    do: "the background patch could not be built because " <> PortWorker.failure_message(reason)
 
   # `loop` operates on the whole file, so it is always a single chunk.
   defp chunk_size(requested, total_frames, _player_count, "loop") do

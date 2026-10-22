@@ -163,7 +163,7 @@ defmodule FramerWeb.RigStore do
       ext = extension(filename, binary, info.format)
       dest_name = "source_replaced.#{ext}"
       dest_path = Path.join(project_dir(id), dest_name)
-      File.write!(dest_path, binary)
+      write_layer!(id, dest_path, binary)
 
       rig =
         rig
@@ -182,7 +182,7 @@ defmodule FramerWeb.RigStore do
       ext = extension(filename, binary, info.format)
       dest_name = "character_replaced.#{ext}"
       dest_path = Path.join(project_dir(id), dest_name)
-      File.write!(dest_path, binary)
+      write_layer!(id, dest_path, binary)
 
       rig =
         rig
@@ -200,7 +200,7 @@ defmodule FramerWeb.RigStore do
       ext = extension(filename, binary, info.format)
       dest_name = "background_replaced.#{ext}"
       dest_path = Path.join(project_dir(id), dest_name)
-      File.write!(dest_path, binary)
+      write_layer!(id, dest_path, binary)
 
       rig =
         rig
@@ -260,6 +260,15 @@ defmodule FramerWeb.RigStore do
 
   defp character_layer_for(rig, id) do
     Path.join(project_dir(id), Rig.character_layer(rig) || Rig.layer_filename())
+  end
+
+  # The one place a layer's content changes.  The patch is built from that
+  # content, so it is stale the moment the bytes change - even when the
+  # document that names the layer stays exactly the same - and it goes with
+  # them.
+  defp write_layer!(id, path, binary) do
+    File.write!(path, binary)
+    remove_patch_layer(id)
   end
 
   @doc "Absolute path of a project's exported result, if it exists."

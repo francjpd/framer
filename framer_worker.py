@@ -468,7 +468,7 @@ _OPTION_KEYS: dict[str, set[str]] = {
         "cycle_frames", "hold_frames", "blend_mode", "ramp_factor",
         "analyze_only", "progress", "until", "workers",
     },
-    "deform": {"rig", "rig_path", "iterations", "weights", "still", "radius_scale"},
+    "deform": {"rig", "rig_path", "iterations", "weights", "still", "radius_scale", "patch"},
     "patch": {"rig", "rig_path", "iterations", "weights", "still"},
     "merge": {"chunks"},
 }

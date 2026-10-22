@@ -230,6 +230,35 @@ defmodule FramerWeb.RigStoreTest do
     assert RigStore.patch_meta(id) == nil
   end
 
+  test "replacing a layer's content drops the patch, even when the document does not change" do
+    {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+    id = rig["id"]
+
+    _saved =
+      RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", id) |> Rig.enable_split())
+
+    patch = Path.join(RigStore.project_dir(id), Rig.patch_filename())
+    meta = Path.join(RigStore.project_dir(id), Rig.patch_meta_filename())
+
+    # The plate is replaced once: the document changes with it, so the patch
+    # goes with it.
+    assert {:ok, first} = RigStore.replace_layer(id, :background, Fixtures.png(32, 32), "b.png")
+    refute File.exists?(patch)
+
+    # A patch computed from that plate...
+    File.write!(patch, "patch")
+    File.write!(meta, ~s({"fade": 12}))
+
+    # ...is stale as soon as the plate's bytes change again, even though the
+    # document names the same file and stays exactly the same.
+    assert {:ok, second} = RigStore.replace_layer(id, :background, Fixtures.png(16, 16), "b.png")
+
+    assert second["layers"] == first["layers"]
+    refute File.exists?(patch)
+    refute File.exists?(meta)
+    assert RigStore.patch_path(id) == nil
+  end
+
   test "character layer paths honour the declared layer path" do
     {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
     id = rig["id"]

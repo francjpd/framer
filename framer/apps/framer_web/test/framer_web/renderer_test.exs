@@ -33,6 +33,25 @@ defmodule FramerWeb.RendererTest do
     refute message =~ ":"
   end
 
+  test "a failure reason reaches the user as words, never as a term" do
+    # The engine's own message is already a sentence.
+    assert Renderer.failure_message("the engine could not read the layer") ==
+             "the engine could not read the layer"
+
+    # The app's own reasons are translated.
+    assert Renderer.failure_message(:missing_source) =~ "source image"
+    assert Renderer.failure_message(:job_in_progress) =~ "already running"
+
+    # A worker's failure is a sentence, not the term it carries.
+    worker_failure = Renderer.failure_message({:worker_exit, 1})
+    assert worker_failure =~ "render engine"
+    refute worker_failure =~ ":"
+
+    task_failure = Renderer.failure_message({:task_down, :killed})
+    assert task_failure =~ "render engine"
+    refute task_failure =~ ":"
+  end
+
   test "a patch the engine cannot build is reported as a failure" do
     {:ok, project} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
 

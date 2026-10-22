@@ -344,6 +344,31 @@ defmodule FramerWeb.Renderer do
   end
 
   @doc """
+  Why a render or an export failed, in words.
+
+  The engine's own message is already a sentence; the reasons the app raises
+  itself - a missing source, an export that is already running - are not, so
+  they are translated here.  Anything the vocabulary does not know is the
+  worker's own failure vocabulary, and a term never reaches the user.
+  """
+  def failure_message(reason) when is_binary(reason), do: reason
+  def failure_message(:missing_source), do: "a source image or a canvas size is required"
+  def failure_message(:escaping_path), do: "the source path escapes the project directory"
+  def failure_message(:enoent), do: "unknown rig"
+  def failure_message(:unsupported_image), do: "the file is not an image the editor can read"
+
+  def failure_message(:layer_not_materialised),
+    do: "the engine did not materialise the character layer"
+
+  def failure_message(:patch_not_materialised),
+    do: "the engine could not build a patch for this rig"
+
+  def failure_message(:job_in_progress), do: "another export is already running"
+  def failure_message(:no_workers), do: "no render workers are available"
+  def failure_message(:unknown_frame_count), do: "the frame count of the rig is unknown"
+  def failure_message(reason), do: PortWorker.failure_message(reason)
+
+  @doc """
   Why the job failed, in words.
 
   A chunk that could not be rendered - the patch could not be built, the
@@ -377,8 +402,7 @@ defmodule FramerWeb.Renderer do
     }
   end
 
-  defp event_error({:error, reason}) when is_binary(reason), do: reason
-  defp event_error({:error, reason}), do: inspect(reason)
+  defp event_error({:error, reason}), do: failure_message(reason)
   defp event_error(_), do: nil
 
   defp broadcast(rig_id, payload) do

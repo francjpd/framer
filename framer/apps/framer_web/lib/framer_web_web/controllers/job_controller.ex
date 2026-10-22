@@ -66,13 +66,15 @@ defmodule FramerWebWeb.JobController do
             conn |> put_status(:accepted) |> json(%{job_id: job_id, status: "processing"})
 
           {:error, reason} ->
-            conn |> put_status(:conflict) |> json(%{error: inspect(reason)})
+            conn
+            |> put_status(:conflict)
+            |> json(%{error: Renderer.failure_message(reason)})
         end
 
       {:error, reason} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "could not read video: #{inspect(reason)}"})
+        |> json(%{error: "could not read video: " <> Renderer.failure_message(reason)})
     end
   end
 

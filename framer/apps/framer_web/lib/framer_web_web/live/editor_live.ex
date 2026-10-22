@@ -721,7 +721,7 @@ defmodule FramerWebWeb.EditorLive do
     {:noreply,
      socket
      |> assign(:blocking_loader, nil)
-     |> assign(:error, "Render failed: #{inspect(reason)}")}
+     |> assign(:error, "Render failed: #{format_reason(reason)}")}
   end
 
   def handle_async(:compute_patch, {:ok, {:ok, _path}}, socket) do
@@ -742,7 +742,7 @@ defmodule FramerWebWeb.EditorLive do
     {:noreply,
      socket
      |> assign(:status, nil)
-     |> assign(:error, "Could not compute the patch: #{inspect(reason)}")}
+     |> assign(:error, "Could not compute the patch: #{format_reason(reason)}")}
   end
 
   # --- layer extraction -----------------------------------------------------
@@ -861,7 +861,7 @@ defmodule FramerWebWeb.EditorLive do
           assign(socket, :error, "Choose an image first")
 
         other ->
-          assign(socket, :error, "Could not replace layer: #{inspect(other)}")
+          assign(socket, :error, "Could not replace layer: #{format_reason(other)}")
       end
     end
   end
@@ -2483,11 +2483,6 @@ defmodule FramerWebWeb.EditorLive do
 
   defp to_int(_), do: 0
 
-  defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason({:invalid_rig, reason}), do: reason
-
-  defp format_reason(:patch_not_materialised),
-    do: "the engine could not build a patch for this rig"
-
-  defp format_reason(reason), do: inspect(reason)
+  defp format_reason(reason), do: Renderer.failure_message(reason)
 end

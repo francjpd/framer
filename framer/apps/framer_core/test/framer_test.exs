@@ -4,6 +4,7 @@ defmodule FramerCoreTest do
   alias FramerCore.Dispatch
   alias FramerCore.Job
   alias FramerCore.Job.Chunk
+  alias FramerCore.PortWorker
 
   doctest FramerCore
 
@@ -41,6 +42,17 @@ defmodule FramerCoreTest do
     assert job.operation == "fps-boost"
     assert job.options == %{"target_fps" => 60}
     assert Job.total_chunks(job) == 2
+  end
+
+  test "a worker failure is reported as words, never as the term it carries" do
+    assert PortWorker.failure_message("the engine said so") == "the engine said so"
+
+    assert PortWorker.failure_message({:worker_exit, 3}) =~ "stopped while it was working"
+    assert PortWorker.failure_message({:port_worker_exit, :noproc}) =~ "could not be reached"
+    assert PortWorker.failure_message(:timeout) =~ "did not answer in time"
+
+    refute PortWorker.failure_message({:task_down, :killed}) =~ ":"
+    refute PortWorker.failure_message({:worker_exit, 3}) =~ "{"
   end
 
   test "dispatch builds local and remote worker targets" do

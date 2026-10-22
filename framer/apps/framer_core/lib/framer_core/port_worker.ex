@@ -51,6 +51,31 @@ defmodule FramerCore.PortWorker do
   end
 
   @doc """
+  Why a request failed, in words.
+
+  The Port contract reports a failure as a term - the worker exited, the call
+  timed out, the task that ran it died - and a term is not something to show a
+  person.  The known shapes become a sentence and anything else is an unknown
+  failure; the raw term belongs in the log.
+  """
+  @spec failure_message(term()) :: String.t()
+  def failure_message(reason) when is_binary(reason), do: reason
+
+  def failure_message({:worker_exit, status}),
+    do: "the render engine stopped while it was working (exit status #{status})"
+
+  def failure_message({:port_worker_exit, _reason}),
+    do: "the render engine could not be reached"
+
+  def failure_message({:task_down, _reason}),
+    do: "the render engine stopped while it was working"
+
+  def failure_message(:timeout), do: "the render engine did not answer in time"
+  def failure_message({:timeout, _}), do: "the render engine did not answer in time"
+
+  def failure_message(_reason), do: "the render engine failed for an unknown reason"
+
+  @doc """
   Start a throwaway worker, run a single request and stop it.
 
   Used for one-off operations such as `merge` or `info` that do not belong

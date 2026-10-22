@@ -260,14 +260,11 @@ defmodule FramerWebWeb.RigController do
     end
   end
 
-  defp error_message(%{__struct__: _} = error), do: inspect(error)
-  defp error_message(:missing_source), do: "a source image or a canvas size is required"
   defp error_message(:enoent), do: "unknown rig"
   defp error_message(:invalid_canvas), do: "width and height must be positive integers"
   defp error_message(:invalid_base64), do: "source_base64 is not valid base64"
   defp error_message(:invalid_id), do: "invalid rig id"
-  defp error_message(:escaping_path), do: "the source path escapes the project directory"
   defp error_message({:invalid_rig, reason}), do: reason
   defp error_message({:invalid_json, _}), do: "rig.json is not valid JSON"
-  defp error_message(reason), do: inspect(reason)
+  defp error_message(reason), do: Renderer.failure_message(reason)
 end
