@@ -139,9 +139,9 @@ layer between the character and the plate: the **patch** (`patch.png` beside
 the still). The stack is *character -> feathered patch -> opaque plate*.
 
 * **The region** is the character's *swept area*: the union of its warped
-  footprints over the timeline, minus its own rest footprint, dilated by a few
-  pixels so the timeline sampling cannot leave holes in it. It is computed from
-  the skeleton with the engine's own LBS (`compute_dense_weights` ->
+  footprints over the whole timeline, minus its own rest footprint, dilated by
+  a few pixels as a margin for the feather. It is computed from the
+  skeleton with the engine's own LBS (`compute_dense_weights` ->
   `evaluate_bones` -> `apply_lbs` over the character mask), so it is exactly
   the ground the character can uncover.
 * **The reconstruction** fills that region from the *plate*, never from the
@@ -161,10 +161,12 @@ opaque patch keeps the frame fully opaque (measured: 0 transparent pixels).
 
 The patch is a **project-level artefact**: it is computed once from the
 skeleton, written beside the still and reused by every frame, every preview and
-every export. It is only computed for a rig that records a fade *and* has a
-skeleton - the region is only known once the bones and the timeline exist. The
-engine records what the patch was built from in `patch.json` beside it, so a rig
-that changed rebuilds the patch instead of reusing a stale file.
+every export. It is only computed for a rig that records a fade, has a
+skeleton - the region is only known once the bones and the timeline exist - and
+has the background plate to heal against. The engine records what the patch
+was built from in `patch.json` beside it - the rig, the feather and the two
+layer files it is built from - so a rig that changed, or a layer that was
+replaced, rebuilds the patch instead of reusing a stale file.
 
 **What it promises, honestly**: on a flat or gradient background the patch
 reproduces the background almost exactly. On a textured background it is a

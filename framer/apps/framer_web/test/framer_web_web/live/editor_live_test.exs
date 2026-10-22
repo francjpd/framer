@@ -829,8 +829,30 @@ defmodule FramerWebWeb.EditorLiveTest do
       # Asking for it again reuses the materialised patch rather than
       # recomputing it.
       render_click(view, "compute_patch", %{})
-      assert render(view) =~ "Patch computed"
+      assert render_async(view, 60_000) =~ "Patch computed"
       assert has_element?(view, "#viewport[data-patch-url]")
+    end
+
+    test "a patch that no longer matches the document is reported as stale", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # The materialised patch was built with the feather the document records.
+      assert has_element?(view, "#layer-row-patch .badge-success")
+
+      # Moving the feather leaves the materialised patch behind: the new
+      # feather applies when the patch is computed again.
+      render_change(view, "set_patch_fade", %{"fade" => "20"})
+      assert has_element?(view, "#layer-row-patch .badge-warning")
+      assert render(view) =~ "Stale - compute it again"
+
+      # Computing it again rebuilds the patch with the new feather.
+      render_click(view, "compute_patch", %{})
+      assert render_async(view, 60_000) =~ "Patch computed"
+      assert has_element?(view, "#layer-row-patch .badge-success")
     end
 
     test "the patch waits for a skeleton", %{conn: conn} do

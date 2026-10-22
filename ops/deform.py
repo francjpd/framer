@@ -128,10 +128,15 @@ def deform_video(
             background_layer = resolve_background_layer(
                 rig_document, source, input_path, character_layer
             )
-            if character_layer is not None and has_patch_layer(rig_document):
+            if (
+                character_layer is not None
+                and background_layer is not None
+                and has_patch_layer(rig_document)
+            ):
                 # The patch is computed from the skeleton, so it needs the same
                 # dense weights the renderer uses.  They are built once here and
-                # handed to both.
+                # handed to both.  Without the plate there is no background to
+                # heal against, so there is no patch to build.
                 shared_weights = load_or_build_weights(
                     rig_document, width=width, height=height, cache_path=weights
                 )

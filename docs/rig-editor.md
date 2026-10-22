@@ -232,9 +232,9 @@ The Layers panel (`#layers-panel`) lists every layer belonging to the project:
 1. **Source still** (`#layer-row-source`) - the original uploaded image. Can be replaced with **Change** to point the rig at an updated source.
 2. **Character layer** (`#layer-row-character`) - the segmented character cut-out. Shows whether it is extracted, kept, or removed. Can be removed, restored with **Keep**, or replaced with **Change**.
 3. **Background layer** (`#layer-row-background`) - the background plate. Can be removed, restored with **Keep**, or replaced with **Change**. On an unsplit rig, clicking **Remove** on the background layer extracts the character and drops the background in a single step.
-4. **Patch layer** (`#layer-row-patch`) - the feathered reconstruction of the ground the character uncovers. It is materialised by the engine, and **Compute patch** asks for it. The row says whether it is ready, still to be computed, waiting for a skeleton, or off.
+4. **Patch layer** (`#layer-row-patch`) - the feathered reconstruction of the ground the character uncovers. It is materialised by the engine, and **Compute patch** asks for it. The row says whether it is ready, still to be computed, waiting for a skeleton, off, or stale - a patch that was built with another feather than the document records.
 
-**The patch feather** (`#layer-fade-form`) is a 0-40 px slider, recorded in the document as `layers.fade`. It is the width of the feather at the region's edge, and it is saved with the project, so it travels with the rig. `0` is a valid width: the patch without a feather. A rig that records no fade at all has no patch layer and renders exactly as it did before the patch existed.
+**The patch feather** (`#layer-fade-form`) is a 0-40 px slider, recorded in the document as `layers.fade`. It is the width of the feather at the region's edge, and it is saved with the project, so it travels with the rig. `0` is a valid width: the patch without a feather. A rig that records no fade at all has no patch layer and renders exactly as it did before the patch existed. The feather applies when the patch is recomputed: moving the slider marks the materialised patch stale, and **Compute patch** (or the next render or export) rebuilds it with the new feather.
 
 **No-background outcome**: When the background layer is removed (`layers.background: false`), the deformed character layer renders alone against a transparent background. The viewport preview, frame render, and video export (WebM with alpha) all reflect this transparent outcome. The patch is a heal against the plate, so it is not used in that outcome either.
 
@@ -265,7 +265,8 @@ beside the still as `patch.png`, and reused by every frame, every preview and
 every export. It needs a skeleton - the region the character can uncover is
 only known once the bones and the timeline exist - so **Compute patch** is
 disabled until the rig has one, and the engine rebuilds the patch when the rig
-it came from changes.
+it came from changes. The patch is built from the character layer and the
+background plate, so replacing either of them rebuilds it as well.
 
 **What it promises, honestly**: on a flat or gradient background the patch
 reproduces the background almost exactly. On a textured background it is a

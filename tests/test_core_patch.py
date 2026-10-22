@@ -23,7 +23,10 @@ What is pinned:
 5. **An old rig is untouched.** A document that records no fade renders
    byte-for-byte as it did before the patch existed.
 6. **The patch is a project-level artefact.** It is materialised once, reused
-   by every later render, and rebuilt when the rig it came from changes.
+   by every later render, and rebuilt when the rig it came from changes - or
+   when either of the layers it is built from is replaced.
+7. **The region is the whole swept area.** It has no hole where the character
+   travels, and a rig without the plate has no patch at all.
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.bg_removal import character_alpha
-from core.deform import DeformRenderer, load_or_build_weights
+from core.deform import DeformRenderer, load_or_build_weights, validate_rig
 from core.layers import (
     PATCH_FILENAME,
     PLATE_FILENAME,
@@ -74,6 +77,66 @@ def scene_rig(fade: int | None = FADE) -> tuple[dict, np.ndarray]:
 def scene_alpha(source: np.ndarray) -> np.ndarray:
     """The character's mask, as the engine computes it."""
     return character_alpha(source, tolerance=40, soft_edges=0, edge_cleanup=0)
+
+
+def fast_scene() -> tuple[dict, np.ndarray]:
+    """
+    A character that travels almost its own width in a single frame.
+
+    The region is the union of the character's warped footprints over the
+    *whole* timeline, so the footprints have to overlap for the union to be
+    continuous.  A timeline sampled with a stride would leave a hole wherever
+    the character moved further between two sampled frames than its own
+    footprint is wide.
+    """
+    size = 64
+    frames = 5
+    shift = 10
+
+    source = np.zeros((size, size, 4), dtype=np.uint8)
+    band = 190 + (np.arange(size) % 3)
+    source[:, :, 1] = band[None, :]
+    source[:, :, 3] = 255
+    source[16:28, 4:16] = (0, 0, 255, 255)
+
+    rig = {
+        "schema": "framer.rig",
+        "version": 1,
+        "id": "fast-scene",
+        "name": "Fast scene",
+        "canvas": {"width": size, "height": size},
+        "source": {"kind": "image", "path": "source.png", "frame": 0},
+        "duration": {"fps": 12, "frames": frames},
+        "mesh": {"mode": "grid", "vertices": [], "triangles": [], "weights": []},
+        "bones": [
+            {
+                "id": "b0",
+                "name": "spine",
+                "parent": None,
+                "rest": {"head": [10, 28], "tail": [10, 16]},
+                "radius": size,
+                "falloff": "smooth",
+            }
+        ],
+        "bind": {"mode": "auto", "power": 2.0, "radius_scale": 1.0},
+        "keyframes": [
+            {"frame": 0, "pose": {"b0": {"rot": 0.0, "tx": 0, "ty": 0}}},
+            {
+                "frame": frames - 1,
+                "pose": {"b0": {"rot": 0.0, "tx": shift * (frames - 1), "ty": 0}},
+            },
+        ],
+        "playback": {"loop": True},
+        "layers": {
+            "split": True,
+            "character": "character.png",
+            "tolerance": 40,
+            "soft_edges": 0,
+            "edge_cleanup": 0,
+        },
+    }
+    validate_rig(rig)
+    return rig, source
 
 
 def render(directory: Path, rig: dict, frame: int, tag: str) -> np.ndarray:
@@ -276,7 +339,7 @@ def test_the_patch_is_materialised_once_beside_the_still_and_then_reused(project
 
     meta = read_patch_meta(patch)
     assert meta is not None
-    assert meta["fingerprint"] == patch_fingerprint(rig)
+    assert meta["fingerprint"] == patch_fingerprint(rig, project / "source.png")
     assert meta["fade"] == FADE
 
     # A later render reads the file rather than rebuilding it.
@@ -332,7 +395,9 @@ def test_the_patch_is_rebuilt_when_the_rig_it_came_from_changes(project: Path):
     assert result["success"], result.get("error")
     assert result["patch"] == str(patch)
     assert patch.stat().st_mtime_ns != first
-    assert read_patch_meta(patch)["fingerprint"] == patch_fingerprint(moved)
+    assert read_patch_meta(patch)["fingerprint"] == patch_fingerprint(
+        moved, project / "source.png"
+    )
 
 
 def test_removing_the_background_layer_keeps_the_character_transparent(project: Path):
@@ -345,6 +410,60 @@ def test_removing_the_background_layer_keeps_the_character_transparent(project: 
     # The character itself is still solid, where it moved to.
     moved = image[CHARACTER_ROWS, CHARACTER_COLUMNS.start + SHIFT : CHARACTER_COLUMNS.stop + SHIFT]
     assert (moved[:, :, 3] == 255).all()
+    # And there is no patch: with no plate there is no background to heal
+    # against, so no patch is materialised at all.
+    assert not (project / PATCH_FILENAME).exists()
+    assert read_patch_meta(project / PATCH_FILENAME) is None
+
+
+def test_replacing_the_plate_rebuilds_the_patch(project: Path):
+    """
+    The patch is built from the plate, so a new plate is a new patch.
+
+    The Layers panel's "Change" action on the background layer writes a new
+    plate; the materialised patch still holds the old plate's material, so it
+    has to be rebuilt rather than reused.
+    """
+    rig, _source = scene_rig()
+    render(project, rig, 0, "replaced")
+
+    patch = project / PATCH_FILENAME
+    assert patch.exists()
+
+    # The user replaces the background layer by hand.
+    plate = np.zeros((SIZE, SIZE, 4), np.uint8)
+    plate[:, :, 0] = 200  # a blue plate, nothing like the still's green band
+    plate[:, :, 3] = 255
+    assert cv2.imwrite(str(project / PLATE_FILENAME), plate)
+
+    render(project, rig, 0, "replaced")
+
+    # The patch now carries the new plate's material, not the old one's.
+    materialised = cv2.imread(str(patch), cv2.IMREAD_UNCHANGED)
+    covered = materialised[:, :, 3] > 128
+    assert covered.any()
+    assert materialised[:, :, 1][covered].max() < 30  # the old plate's green
+
+
+def test_the_region_covers_the_whole_swept_path():
+    """
+    The region is the union of the footprints over the *whole* timeline.
+
+    A character that moves almost its own width in a frame leaves a hole in
+    the region if the timeline is sampled with a stride - and the character
+    would slide from the reconstructed material onto the untouched background.
+    """
+    rig, source = fast_scene()
+    alpha = scene_alpha(source)
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+
+    region = character_region(rig, alpha, weights=weights)
+
+    # The whole corridor the character travels through is covered.
+    assert (region[22, 16:56] > 0).all()
+    # And the region stops where the character stops (plus the margin the
+    # dilation adds around it).
+    assert not (region[22, 59:] > 0).any()
 
 
 def test_the_renderer_composites_character_over_patch_over_plate():

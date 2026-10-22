@@ -510,21 +510,14 @@ defmodule FramerWebWeb.EditorLive do
             rig
           end
 
-        socket = assign(socket, :status, "Computing the patch...")
+        # The engine sweeps the whole timeline to build the patch, so the
+        # build runs outside the LiveView process, the way a frame render does.
+        socket =
+          socket
+          |> finalize_mutation(rig, status: "Computing the patch...")
+          |> start_async(:compute_patch, fn -> Renderer.build_patch(rig) end)
 
-        case Renderer.build_patch(rig) do
-          {:ok, _path} ->
-            {:noreply,
-             socket
-             |> finalize_mutation(rig, status: "Patch computed")
-             |> assign(:error, nil)}
-
-          {:error, reason} ->
-            {:noreply,
-             socket
-             |> assign(:status, nil)
-             |> assign(:error, "Could not compute the patch: #{format_reason(reason)}")}
-        end
+        {:noreply, socket}
     end
   end
 
@@ -707,6 +700,27 @@ defmodule FramerWebWeb.EditorLive do
      socket
      |> assign(:blocking_loader, nil)
      |> assign(:error, "Render failed: #{inspect(reason)}")}
+  end
+
+  def handle_async(:compute_patch, {:ok, {:ok, _path}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:status, "Patch computed")
+     |> assign(:error, nil)}
+  end
+
+  def handle_async(:compute_patch, {:ok, {:error, reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:status, nil)
+     |> assign(:error, "Could not compute the patch: #{format_reason(reason)}")}
+  end
+
+  def handle_async(:compute_patch, {:exit, reason}, socket) do
+    {:noreply,
+     socket
+     |> assign(:status, nil)
+     |> assign(:error, "Could not compute the patch: #{inspect(reason)}")}
   end
 
   # --- layer extraction -----------------------------------------------------
@@ -896,6 +910,8 @@ defmodule FramerWebWeb.EditorLive do
 
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :patch_state, patch_state(assigns.rig))
+
     ~H"""
     <div
       id="editor-shell"
@@ -934,6 +950,7 @@ defmodule FramerWebWeb.EditorLive do
       <div class="flex min-h-0 flex-1">
         <.palette
           rig={@rig}
+          patch_state={@patch_state}
           projects={@projects}
           upload={@uploads.source}
           uploads={@uploads}
@@ -1087,6 +1104,7 @@ defmodule FramerWebWeb.EditorLive do
   end
 
   attr :rig, :map, default: nil
+  attr :patch_state, :atom, required: true
   attr :projects, :list, default: []
   attr :upload, :any, required: true
   attr :uploads, :any, default: %{}
@@ -1544,30 +1562,15 @@ defmodule FramerWebWeb.EditorLive do
               </div>
               <div class="flex items-center justify-between opacity-70 text-[11px]">
                 <span class="truncate max-w-[130px]">
-                  <%= cond do %>
-                    <% not Rig.split?(@rig) -> %>
-                      Needs the character layer
-                    <% Rig.bones(@rig) == [] -> %>
-                      Needs a skeleton
-                    <% Rig.patch_fade(@rig) == nil -> %>
-                      Off
-                    <% RigStore.patch_path(@rig["id"]) != nil -> %>
-                      patch.png
-                    <% true -> %>
-                      Not computed yet
-                  <% end %>
+                  <%= patch_label(@patch_state) %>
                 </span>
                 <%= cond do %>
-                  <% not Rig.split?(@rig) -> %>
-                    <span class="badge badge-ghost badge-xs">unsplit</span>
-                  <% Rig.bones(@rig) == [] -> %>
-                    <span class="badge badge-ghost badge-xs">no skeleton</span>
-                  <% Rig.patch_fade(@rig) == nil -> %>
-                    <span class="badge badge-ghost badge-xs">off</span>
-                  <% RigStore.patch_path(@rig["id"]) != nil -> %>
+                  <% @patch_state == :ready -> %>
                     <span class="badge badge-success badge-xs">ready</span>
+                  <% @patch_state in [:stale, :pending] -> %>
+                    <span class="badge badge-warning badge-xs"><%= patch_badge_text(@patch_state) %></span>
                   <% true -> %>
-                    <span class="badge badge-warning badge-xs">pending</span>
+                    <span class="badge badge-ghost badge-xs"><%= patch_badge_text(@patch_state) %></span>
                 <% end %>
               </div>
               <div class="mt-1">
@@ -1623,7 +1626,8 @@ defmodule FramerWebWeb.EditorLive do
             <p class="opacity-60">{layer_fade(@rig)} px</p>
             <p class="opacity-60">
               The patch reconstructs the ground the character uncovers as it moves and feathers
-              it into the background, so the character slides over one material.
+              it into the background, so the character slides over one material. The feather
+              applies when the patch is computed again.
             </p>
           </form>
         </div>
@@ -2363,6 +2367,44 @@ defmodule FramerWebWeb.EditorLive do
       fade -> fade
     end
   end
+
+  # The state of the patch layer in the panel. A materialised patch is only
+  # "ready" when it still matches the document: the sidecar next to it records
+  # the feather it was built with, so a patch built with another feather is
+  # stale and has to be computed again.
+  defp patch_state(nil), do: :unsplit
+
+  defp patch_state(rig) do
+    cond do
+      not Rig.split?(rig) -> :unsplit
+      Rig.bones(rig) == [] -> :no_skeleton
+      Rig.patch_fade(rig) == nil -> :off
+      RigStore.patch_path(rig["id"]) == nil -> :pending
+      patch_matches_rig?(rig) -> :ready
+      true -> :stale
+    end
+  end
+
+  defp patch_matches_rig?(rig) do
+    case RigStore.patch_meta(rig["id"]) do
+      %{"fade" => fade} -> fade == Rig.patch_fade(rig)
+      _ -> false
+    end
+  end
+
+  defp patch_label(:unsplit), do: "Needs the character layer"
+  defp patch_label(:no_skeleton), do: "Needs a skeleton"
+  defp patch_label(:off), do: "Off"
+  defp patch_label(:pending), do: "Not computed yet"
+  defp patch_label(:stale), do: "Stale - compute it again"
+  defp patch_label(:ready), do: "patch.png"
+
+  defp patch_badge_text(:ready), do: "ready"
+  defp patch_badge_text(:stale), do: "stale"
+  defp patch_badge_text(:pending), do: "pending"
+  defp patch_badge_text(:off), do: "off"
+  defp patch_badge_text(:no_skeleton), do: "no skeleton"
+  defp patch_badge_text(:unsplit), do: "unsplit"
 
   defp clamp_frame(socket, frame) do
     frames = if socket.assigns.rig, do: Rig.frame_count(socket.assigns.rig), else: 1

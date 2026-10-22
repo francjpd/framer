@@ -77,6 +77,7 @@ __all__ = [
     "DeformRenderer",
     "RigError",
     "apply_lbs",
+    "bind_poses",
     "bone_local_matrix",
     "build_grid_mesh",
     "compute_backward_map",
@@ -711,7 +712,8 @@ def evaluate_bones(
     return [resolve(bone, ()) for bone in rig["bones"]]
 
 
-def _bind_poses(rig: dict[str, Any]) -> dict[str, dict[str, float]]:
+def bind_poses(rig: dict[str, Any]) -> dict[str, dict[str, float]]:
+    """The identity pose of every bone - the bind pose the rig is cut at."""
     return {bone["id"]: {"rot": 0.0, "tx": 0.0, "ty": 0.0} for bone in rig["bones"]}
 
 
@@ -1117,7 +1119,7 @@ class DeformRenderer:
             )
         self.weights = weights
 
-        poses = _bind_poses(self.rig)
+        poses = bind_poses(self.rig)
         self.bind = evaluate_bones(self.rig, 0, poses=poses)
 
     def _fit(self, layer: np.ndarray) -> np.ndarray:

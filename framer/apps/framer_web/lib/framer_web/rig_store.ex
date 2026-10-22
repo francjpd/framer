@@ -103,6 +103,32 @@ defmodule FramerWeb.RigStore do
   end
 
   @doc """
+  What the materialised patch records about itself, if anything.
+
+  The sidecar the engine writes next to the patch holds the feather the patch
+  was built with, so the editor can tell a patch that still matches the
+  document from a stale one.
+  """
+  def patch_meta(id) do
+    with :ok <- validate_id(id) do
+      path = Path.join(project_dir(id), Rig.patch_meta_filename())
+
+      case File.read(path) do
+        {:ok, body} ->
+          case Jason.decode(body) do
+            {:ok, meta} when is_map(meta) -> meta
+            _ -> nil
+          end
+
+        {:error, _} ->
+          nil
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
   A cache-busting version for the materialised patch layer.
 
   The patch is rebuilt whenever the rig it came from changes, so the file's

@@ -235,26 +235,28 @@ export const LbsPreview = {
     }
 
     // A split rig's layers appear (and change) as the editor extracts them, so
-    // the preview follows the URLs rather than caching them.
+    // the preview follows the URLs rather than caching them.  All three layers
+    // are synced in one pass: an update can carry new URLs for several of them
+    // at once - the extract flow materialises the cut-out, the plate and the
+    // patch together, and turning the split off removes all three.
     const characterUrl = this.el.dataset.characterUrl || null;
     const backgroundUrl = this.el.dataset.backgroundUrl || null;
     // The patch is rebuilt in place, so its URL carries the file's timestamp
     // and is compared whole: a new patch means new bytes behind the same path.
     const patchUrl = this.el.dataset.patchUrl || null;
-    if (patchUrl !== this.patchUrl) {
-      this.loadPatchLayer(patchUrl);
-      return;
-    }
+    const characterChanged = characterUrl !== layerName(this.characterUrl);
+    const backgroundChanged = backgroundUrl !== layerName(this.backgroundUrl);
+    const patchChanged = patchUrl !== this.patchUrl;
 
-    if (
-      characterUrl !== layerName(this.characterUrl) ||
-      backgroundUrl !== layerName(this.backgroundUrl)
-    ) {
-      if (characterUrl !== layerName(this.characterUrl)) {
+    if (characterChanged || backgroundChanged || patchChanged) {
+      if (characterChanged) {
         this.loadCharacterLayer(characterUrl);
       }
-      if (backgroundUrl !== layerName(this.backgroundUrl)) {
+      if (backgroundChanged) {
         this.loadBackgroundLayer(backgroundUrl);
+      }
+      if (patchChanged) {
+        this.loadPatchLayer(patchUrl);
       }
       return;
     }
@@ -866,12 +868,6 @@ export const LbsPreview = {
     gl.clear(gl.COLOR_BUFFER_BIT);
 
     // A split rig deforms only the character layer and composites the untouched
-    // background plate underneath with a plain source-over, exactly as the
-    // engine's `core.layers.composite` does. One fragment shader reads both
-    // layers and the backward map so the per-pixel alpha weighting stays exact.
-    // If the background layer is removed, only the character layer is rendered
-    // with its transparent alpha.
-    // A split rig deforms only its character layer and composites the untouched
     // background plate underneath with a plain source-over, exactly as the
     // engine's `core.layers.composite` does. One fragment shader reads both
     // layers and the backward map so the per-pixel alpha weighting stays exact.

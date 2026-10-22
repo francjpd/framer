@@ -202,7 +202,9 @@ defmodule FramerWeb.Renderer do
             {:error, reason}
         end
       after
-        File.rm(output)
+        # The engine writes the output only when it succeeds, so removing a
+        # file that is not there would raise and hide the error above.
+        if File.exists?(output), do: File.rm(output)
       end
     end
   end
