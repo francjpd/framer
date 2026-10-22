@@ -277,13 +277,20 @@ def _validate_layers(rig: dict[str, Any]) -> None:
             "rig.layers.background must be a non-empty string or false",
         )
 
-    for key in ("tolerance", "num_ranges", "edge_cleanup", "soft_edges", "fade"):
+    for key in ("tolerance", "num_ranges", "edge_cleanup", "soft_edges"):
         value = layers.get(key)
         if value is not None:
             _require(
                 isinstance(value, int) and not isinstance(value, bool),
                 f"rig.layers.{key} must be an integer",
             )
+
+    fade = layers.get("fade")
+    if fade is not None:
+        _require(
+            isinstance(fade, int) and not isinstance(fade, bool) and fade >= 0,
+            "rig.layers.fade must be a non-negative integer",
+        )
 
     for key in ("auto_ranges", "adaptive_bg"):
         value = layers.get(key)

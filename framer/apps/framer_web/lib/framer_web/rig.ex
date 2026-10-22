@@ -467,6 +467,17 @@ defmodule FramerWeb.Rig do
   def has_patch_layer?(rig), do: split?(rig) and patch_fade(rig) != nil
 
   @doc """
+  Whether the rig can have a patch layer at all.
+
+  The patch reconstructs the ground the character uncovers, so it needs the
+  background plate to heal against, a skeleton to know the swept area and a
+  feather to enable the layer.
+  """
+  def patch_buildable?(rig) do
+    has_patch_layer?(rig) and has_background_layer?(rig) and bones(rig) != []
+  end
+
+  @doc """
   Record the patch's feather width, in pixels.
 
   A split rig without a recorded fade has no patch layer at all, so the fade is

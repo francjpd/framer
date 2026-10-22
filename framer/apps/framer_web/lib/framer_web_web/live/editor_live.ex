@@ -472,7 +472,6 @@ defmodule FramerWebWeb.EditorLive do
   def handle_event("set_patch_fade", %{"fade" => fade}, socket) do
     case to_float(fade) do
       value when is_number(value) and value >= 0 ->
-        socket = maybe_push_undo(socket, [])
         rig = Rig.set_patch_fade(socket.assigns.rig, trunc(value))
 
         {:noreply,
@@ -499,6 +498,10 @@ defmodule FramerWebWeb.EditorLive do
 
       Rig.bones(rig) == [] ->
         {:noreply, assign(socket, :error, "The patch needs a skeleton: add a bone first")}
+
+      not Rig.has_background_layer?(rig) ->
+        {:noreply,
+         assign(socket, :error, "The patch needs the background layer: keep it to heal the background")}
 
       true ->
         # The patch is enabled by recording a feather, so a document saved
@@ -2409,6 +2412,7 @@ defmodule FramerWebWeb.EditorLive do
       not Rig.split?(rig) -> :unsplit
       Rig.bones(rig) == [] -> :no_skeleton
       Rig.patch_fade(rig) == nil -> :off
+      not Rig.has_background_layer?(rig) -> :no_plate
       RigStore.patch_path(rig["id"]) == nil -> :pending
       patch_built_with_other_fade?(rig) -> :stale
       true -> :ready
@@ -2427,6 +2431,7 @@ defmodule FramerWebWeb.EditorLive do
 
   defp patch_label(:unsplit), do: "Needs the character layer"
   defp patch_label(:no_skeleton), do: "Needs a skeleton"
+  defp patch_label(:no_plate), do: "Needs the background layer"
   defp patch_label(:off), do: "Off"
   defp patch_label(:pending), do: "Not computed yet"
   defp patch_label(:stale), do: "Stale - compute it again"
@@ -2437,6 +2442,7 @@ defmodule FramerWebWeb.EditorLive do
   defp patch_badge_text(:pending), do: "pending"
   defp patch_badge_text(:off), do: "off"
   defp patch_badge_text(:no_skeleton), do: "no skeleton"
+  defp patch_badge_text(:no_plate), do: "no plate"
   defp patch_badge_text(:unsplit), do: "unsplit"
 
   defp clamp_frame(socket, frame) do

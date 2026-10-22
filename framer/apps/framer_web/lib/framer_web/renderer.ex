@@ -161,6 +161,10 @@ defmodule FramerWeb.Renderer do
   render that produces it is frame 0 of the very rig being patched, so the
   composited still the editor shows afterwards is exactly what the first render
   will produce.
+
+  A rig the engine cannot build a patch for - one without the background plate
+  the reconstruction is made from - has no patch to report, and this says so
+  instead of answering with a file that is in no render.
   """
   def build_patch(rig, opts \\ []) do
     with {:ok, source} <- source_path(rig) do
@@ -191,12 +195,9 @@ defmodule FramerWeb.Renderer do
             {:ok, path}
 
           {:ok, _response} ->
-            # The patch was already materialised and is still current, so the
-            # engine reused it instead of writing a new one.
-            case RigStore.patch_path(rig["id"]) do
-              nil -> {:error, :patch_not_materialised}
-              path -> {:ok, path}
-            end
+            # The engine has no patch for this rig: it either could not build
+            # one or there is none to report.
+            {:error, :patch_not_materialised}
 
           {:error, reason} ->
             {:error, reason}
@@ -217,7 +218,8 @@ defmodule FramerWeb.Renderer do
   """
   def submit_export(rig, opts \\ []) do
     with {:ok, source} <- source_path(rig),
-         :ok <- ensure_saved(rig) do
+         :ok <- ensure_saved(rig),
+         :ok <- materialise_project_patch(rig) do
       format = opts[:format] || "webm"
       output = RigStore.output_path(rig["id"], format)
       frames = to_int(opts[:frames]) || Rig.frame_count(rig)
@@ -329,6 +331,22 @@ defmodule FramerWeb.Renderer do
     case RigStore.save(rig) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # The patch is a project-level artefact, so the export composites the very
+  # file the editor's preview shows.  It is materialised in the project first
+  # - the engine rebuilds it when the rig no longer matches it - and the export
+  # directory gets a copy of it, so every chunk reuses that one file instead of
+  # sweeping the timeline again.
+  defp materialise_project_patch(rig) do
+    if Rig.patch_buildable?(rig) do
+      case build_patch(rig) do
+        {:ok, _path} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :ok
     end
   end
 

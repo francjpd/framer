@@ -267,10 +267,18 @@ beside the still as `patch.png`, and reused by every frame, every preview and
 every export. It needs a skeleton - the region the character can uncover is
 only known once the bones and the timeline exist - so **Compute patch** is
 disabled until the rig has one, and the engine rebuilds the patch when the rig
-it came from changes. The patch is built from the character layer and the
-background plate, so replacing either of them rebuilds it as well. The editor
-drops the materialised patch as soon as one of its inputs changes, so the
-preview never shows a patch the engine would rebuild.
+it came from changes. It also needs the background plate to heal against, so
+**Compute patch** refuses a rig whose background layer was removed, and no
+patch is materialised for it. The patch is built from the character layer and
+the background plate, so replacing either of them rebuilds it as well. The
+editor drops the materialised patch as soon as one of its inputs changes, so
+the preview never shows a patch the engine would rebuild.
+
+An export composites the *project's* patch: the export materialises it in the
+project first (the engine rebuilds it when the rig changed) and copies it into
+the export directory, so every chunk of the job reuses that one file instead of
+sweeping the timeline again - and the exported frames are the ones the preview
+showed.
 
 **What it promises, honestly**: on a flat or gradient background the patch
 reproduces the background almost exactly. On a textured background it is a

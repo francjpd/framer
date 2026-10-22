@@ -879,6 +879,77 @@ defmodule FramerWebWeb.EditorLiveTest do
       refute has_element?(view, "#viewport[data-patch-url]")
     end
 
+    test "the patch waits for the background plate it heals against", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # Without the background layer there is no plate to heal against, so the
+      # engine builds no patch and the editor says so instead of claiming one.
+      render_click(view, "remove_layer", %{"layer" => "background"})
+      render_click(view, "compute_patch", %{})
+
+      assert render(view) =~ "The patch needs the background layer"
+      assert render(view) =~ "Needs the background layer"
+    end
+
+    test "the feather slider does not evict the undo history", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      # A bone edit the user wants to be able to undo.
+      render_click(view, "bone_moved", %{
+        "id" => "b0",
+        "head" => [20.0, 16.0],
+        "tail" => [20.0, 8.0]
+      })
+
+      # A drag of the feather slider, one event per step.
+      for fade <- 13..20 do
+        render_change(view, "set_patch_fade", %{"fade" => to_string(fade)})
+      end
+
+      # Undo still steps back to the bone edit, not one pixel of the feather.
+      render_click(view, "undo")
+
+      {:ok, saved} = RigStore.load(rig["id"])
+      assert FramerWeb.Rig.bone(saved, "b0")["rest"]["head"] == [16.0, 16.0]
+    end
+
+    test "the export materialises the patch in the project", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      id = rig["id"]
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # The project's patch is gone, so the export has to materialise it: the
+      # exported frames and the preview then composite the very same patch.
+      RigStore.remove_patch_layer(id)
+      refute RigStore.patch_path(id)
+
+      render_submit(form(view, "#export-form"), %{"format" => "webm"})
+
+      assert RigStore.patch_path(id)
+
+      # Stop the orchestrator so the job does not outlive the test.
+      if Process.whereis(FramerCore.Orchestrator) do
+        try do
+          state = FramerCore.Orchestrator.get_status()
+
+          if state.job && state.job.status == :processing do
+            GenServer.stop(FramerCore.Orchestrator, :shutdown, 2000)
+          end
+        catch
+          :exit, _ -> :ok
+        end
+      end
+    end
+
     test "the patch waits for a skeleton", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
 

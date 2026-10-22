@@ -354,7 +354,7 @@ def test_the_patch_is_materialised_once_beside_the_still_and_then_reused(project
         still=True,
     )
     assert again["success"], again.get("error")
-    assert "patch" not in again
+    assert again["patch"] == str(patch)
     assert patch.stat().st_mtime_ns == mtime
 
 

@@ -26,6 +26,7 @@ from core.deform import (
 from core.layers import (
     has_patch_layer,
     is_split,
+    patch_path,
     resolve_background_layer,
     resolve_character_layer,
 )
@@ -176,8 +177,8 @@ def deform_video(
             }
             if materialised is not None:
                 result["character"] = str(materialised)
-            if patch_materialised is not None:
-                result["patch"] = str(patch_materialised)
+            if patch_layer is not None:
+                result["patch"] = str(patch_materialised or patch_path(rig_document, input_path))
             return result
 
         # MP4 drops alpha on encode, so the *rendered* frame is what decides
@@ -219,7 +220,11 @@ def deform_video(
             "end_frame": end,
             "fps": resolved_fps,
             **({"character": str(materialised)} if materialised is not None else {}),
-            **({"patch": str(patch_materialised)} if patch_materialised is not None else {}),
+            **(
+                {"patch": str(patch_materialised or patch_path(rig_document, input_path))}
+                if patch_layer is not None
+                else {}
+            ),
         }
 
     except (RigError, cv2.error, OSError, ValueError) as exc:

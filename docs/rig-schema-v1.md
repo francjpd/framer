@@ -207,7 +207,7 @@ The operation travels through the normal Port contract
 * `options.weights` is an optional dense-weight `.npz` cache path.
 * The response reports the materialised character-layer path when the engine
   wrote it (the plate is written beside it under its own fixed name), and the
-  materialised patch path when the engine built one.
+  patch layer in effect - the file the engine built or the one it reused.
 * The renderer is stateless per chunk: it reloads the rig/weights from disk, so
   a failed chunk can be retried on any worker.
 

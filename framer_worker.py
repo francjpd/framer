@@ -368,6 +368,8 @@ def op_deform(req: dict[str, Any]) -> dict[str, Any]:
     response = {"output": result["output_path"], "frames": result.get("frames", 0)}
     if result.get("character"):
         response["character"] = result["character"]
+    if result.get("patch"):
+        response["patch"] = result["patch"]
     return response
 
 
