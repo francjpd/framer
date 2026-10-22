@@ -132,8 +132,9 @@ defmodule FramerWeb.RigStore do
   A cache-busting version for the materialised patch layer.
 
   The patch is rebuilt whenever the rig it came from changes, so the file's
-  timestamp is what tells the editor's preview that the bytes behind the same
-  URL are new.
+  timestamp and size are what tell the editor's preview that the bytes behind
+  the same URL are new. The token is plain text, so it survives the URL it is
+  interpolated into.
   """
   def patch_version(id) do
     case patch_path(id) do
@@ -141,8 +142,8 @@ defmodule FramerWeb.RigStore do
         nil
 
       path ->
-        case File.stat(path) do
-          {:ok, stat} -> inspect(stat.mtime)
+        case File.stat(path, time: :posix) do
+          {:ok, stat} -> "#{stat.mtime}-#{stat.size}"
           _ -> nil
         end
     end

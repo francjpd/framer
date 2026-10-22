@@ -187,6 +187,8 @@ defmodule FramerWeb.RigStoreTest do
 
     assert RigStore.patch_path(id) == patch
     assert is_binary(RigStore.patch_version(id))
+    # The version travels in a URL, so it must not carry a fragment marker.
+    refute String.contains?(RigStore.patch_version(id), "#")
     assert RigStore.patch_path("../escape") == nil
   end
 

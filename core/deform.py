@@ -51,7 +51,6 @@ from core.bg_removal import character_alpha
 from core.errors import RigError
 from core.layers import (
     LAYER_FILENAME,
-    PATCH_FILENAME,
     background_plate,
     composite_layers,
     declared_character_path,
@@ -61,6 +60,7 @@ from core.layers import (
     is_split,
     layer_settings,
     load_layer,
+    patch_path,
     resolve_background_layer,
     split_layers,
 )
@@ -1026,6 +1026,7 @@ class DeformRenderer:
         character: np.ndarray | None = None,
         background: np.ndarray | None = None,
         patch: np.ndarray | None = None,
+        source_path: str | os.PathLike[str] | None = None,
     ):
         self.rig = validate_rig(rig)
 
@@ -1039,6 +1040,12 @@ class DeformRenderer:
         self.width = canvas_width
         self.height = canvas_height
         self.iterations = max(1, int(iterations))
+        # The layers live beside the still that is being rendered, so they are
+        # resolved against that path and not against the document's, which may
+        # be relative to the project.
+        self.source_path = str(
+            source_path or (self.rig.get("source", {}).get("path") or "")
+        )
 
         self.character = None
         self.background = None
@@ -1056,9 +1063,8 @@ class DeformRenderer:
             if self.character is None and has_character_layer(self.rig):
                 char_declared = declared_character_path(self.rig) or LAYER_FILENAME
                 char_path = Path(char_declared)
-                source_path = self.rig.get("source", {}).get("path") or ""
-                if not char_path.is_absolute() and source_path:
-                    char_path = Path(source_path).parent / char_path
+                if not char_path.is_absolute() and self.source_path:
+                    char_path = Path(self.source_path).parent / char_path
                 if char_path.exists():
                     char = load_layer(char_path)
                 else:
@@ -1083,9 +1089,8 @@ class DeformRenderer:
                     # The plate is resolved by the same rule the engine uses
                     # everywhere else, so the frame and the patch are built
                     # from the very same file.
-                    source_path = self.rig.get("source", {}).get("path") or ""
                     bg = resolve_background_layer(
-                        self.rig, self.source, source_path, self.character
+                        self.rig, self.source, self.source_path, self.character
                     )
 
                 if bg is not None:
@@ -1098,10 +1103,9 @@ class DeformRenderer:
                 if patch is not None:
                     self.patch = self._fit(patch)
                 else:
-                    source_path = self.rig.get("source", {}).get("path") or ""
-                    patch_path = Path(source_path).parent / PATCH_FILENAME
-                    if patch_path.exists():
-                        self.patch = self._fit(load_layer(patch_path))
+                    patch_file = patch_path(self.rig, self.source_path)
+                    if patch_file.exists():
+                        self.patch = self._fit(load_layer(patch_file))
         elif character is not None:
             self.background = background_plate(self.source, self.character[:, :, 3])
 

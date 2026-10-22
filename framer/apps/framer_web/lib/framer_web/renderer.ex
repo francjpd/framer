@@ -50,6 +50,10 @@ defmodule FramerWeb.Renderer do
 
   The in-memory rig is written to a private temp file so the engine reads
   exactly what the editor is showing, even before the next autosave lands.
+
+  The frame is rendered with the materialised patch when there is one and
+  without building one, so a single frame never pays for the whole-timeline
+  region sweep.
   """
   def render_frame(rig, frame, opts \\ []) do
     with {:ok, source} <- source_path(rig) do
@@ -71,7 +75,8 @@ defmodule FramerWeb.Renderer do
         "options" => %{
           "rig" => rig_path,
           "still" => true,
-          "iterations" => opts[:iterations] || 6
+          "iterations" => opts[:iterations] || 6,
+          "patch" => "reuse"
         }
       }
 
@@ -106,6 +111,11 @@ defmodule FramerWeb.Renderer do
   composited still the editor shows afterwards is exactly what the first render
   will produce. The response carries the materialised path, which is what the
   editor records in `rig.layers.character` and persists.
+
+  The extraction never builds the patch: it asks the engine to reuse the
+  materialised one, so extracting never pays for the whole-timeline region
+  sweep. The patch is built by the compute action, the export or a render that
+  asks for it.
   """
   def split_character(rig, opts \\ []) do
     with {:ok, source} <- source_path(rig) do
@@ -126,7 +136,8 @@ defmodule FramerWeb.Renderer do
         "options" => %{
           "rig" => rig_path,
           "still" => true,
-          "iterations" => opts[:iterations] || 6
+          "iterations" => opts[:iterations] || 6,
+          "patch" => "reuse"
         }
       }
 

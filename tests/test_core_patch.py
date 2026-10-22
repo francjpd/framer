@@ -358,6 +358,66 @@ def test_the_patch_is_materialised_once_beside_the_still_and_then_reused(project
     assert patch.stat().st_mtime_ns == mtime
 
 
+def test_the_reuse_mode_never_builds_the_patch(project: Path):
+    """A caller that must not pay for the region sweep gets no patch."""
+    rig, _source = scene_rig()
+    rig_path = project / "rig.json"
+    rig_path.write_text(json.dumps(rig))
+
+    result = deform_video(
+        input_path=str(project / "source.png"),
+        output_path=str(project / "frame.png"),
+        rig=str(rig_path),
+        start_frame=0,
+        end_frame=0,
+        fps=12.0,
+        iterations=6,
+        still=True,
+        patch="reuse",
+    )
+
+    assert result["success"], result.get("error")
+    assert "patch" not in result
+    assert not (project / PATCH_FILENAME).exists()
+
+
+def test_the_reuse_mode_uses_the_materialised_patch(project: Path):
+    """The materialised patch is used as it is, and never rebuilt."""
+    rig, _source = scene_rig()
+    rig_path = project / "rig.json"
+    rig_path.write_text(json.dumps(rig))
+
+    built = deform_video(
+        input_path=str(project / "source.png"),
+        output_path=str(project / "frame.png"),
+        rig=str(rig_path),
+        start_frame=0,
+        end_frame=0,
+        fps=12.0,
+        iterations=6,
+        still=True,
+    )
+    assert built["success"], built.get("error")
+    patch = project / PATCH_FILENAME
+    mtime = patch.stat().st_mtime_ns
+
+    reused = deform_video(
+        input_path=str(project / "source.png"),
+        output_path=str(project / "frame2.png"),
+        rig=str(rig_path),
+        start_frame=FRAMES - 1,
+        end_frame=FRAMES - 1,
+        fps=12.0,
+        iterations=6,
+        still=True,
+        patch="reuse",
+    )
+
+    assert reused["success"], reused.get("error")
+    assert reused["patch"] == str(patch)
+    assert patch.stat().st_mtime_ns == mtime
+
+
 def test_the_patch_is_rebuilt_when_the_rig_it_came_from_changes(project: Path):
     """A rig that moved is a different region, so the patch is rebuilt."""
     rig, _source = scene_rig()

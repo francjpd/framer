@@ -193,7 +193,8 @@ The operation travels through the normal Port contract
     "weights": null,
     "iterations": 5,
     "radius_scale": 1.0,
-    "still": true
+    "still": true,
+    "patch": "auto"
   }
 }
 ```
@@ -205,6 +206,11 @@ The operation travels through the normal Port contract
 * `output` keeps the chunk extension.  An image extension (`.png`, `.jpg`, ...)
   renders a single frame instead of a video.
 * `options.weights` is an optional dense-weight `.npz` cache path.
+* `options.patch` decides what happens with the patch layer: `auto` (the
+  default) materialises it when it is missing or stale, `reuse` uses the
+  materialised patch and never builds one.  The editor's extraction and its
+  single-frame render pass `reuse`, so they never pay for the whole-timeline
+  region sweep.
 * The response reports the materialised character-layer path when the engine
   wrote it (the plate is written beside it under its own fixed name), and the
   patch layer in effect - the file the engine built or the one it reused.

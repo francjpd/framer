@@ -326,6 +326,7 @@ def resolve_patch_layer(
     *,
     weights: np.ndarray | None = None,
     iterations: int = 5,
+    build: bool = True,
 ) -> tuple[np.ndarray | None, Path | None]:
     """
     Return the patch layer for a rig, materialising it when it is missing.
@@ -337,6 +338,10 @@ def resolve_patch_layer(
     once the bones and the timeline exist.  It also needs the background plate:
     the reconstruction is made from the plate, so a rig without one has no
     patch at all (and the renderer skips the patch in that case anyway).
+
+    With ``build=False`` the materialised patch is used when it is there and
+    current, and nothing is ever built: a caller that must not pay for the
+    whole-timeline sweep gets no patch instead of one.
 
     Returns:
         ``(patch, written_path)``; ``written_path`` is ``None`` when an
@@ -371,6 +376,11 @@ def resolve_patch_layer(
         if meta and meta.get("fingerprint") == fingerprint:
             return load_layer(path), None
         # The rig changed since the patch was built: rebuild it.
+
+    if not build:
+        # The caller asked for the materialised patch only: it is missing or
+        # stale, and this call never builds one.
+        return None, None
 
     size = int(rig["canvas"]["width"])
     height = int(rig["canvas"]["height"])

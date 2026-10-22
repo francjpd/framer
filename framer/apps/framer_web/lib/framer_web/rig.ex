@@ -470,11 +470,12 @@ defmodule FramerWeb.Rig do
   Whether the rig can have a patch layer at all.
 
   The patch reconstructs the ground the character uncovers, so it needs the
-  background plate to heal against, a skeleton to know the swept area and a
-  feather to enable the layer.
+  character layer it is built from, the background plate to heal against, a
+  skeleton to know the swept area and a feather to enable the layer.
   """
   def patch_buildable?(rig) do
-    has_patch_layer?(rig) and has_background_layer?(rig) and bones(rig) != []
+    has_patch_layer?(rig) and has_character_layer?(rig) and has_background_layer?(rig) and
+      bones(rig) != []
   end
 
   @doc """

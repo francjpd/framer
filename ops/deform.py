@@ -79,6 +79,7 @@ def deform_video(
     still: bool | None = None,
     radius_scale: float | None = None,
     progress: bool = False,
+    patch: str = "auto",
     **_: Any,
 ) -> dict[str, Any]:
     """
@@ -92,6 +93,11 @@ def deform_video(
     When ``output_path`` is an image extension a single PNG (the ``start_frame``
     pose) is written instead of a video, which is the editor's "render one frame"
     path and the golden-image test path.
+
+    ``patch`` decides what happens with the patch layer: ``auto`` materialises
+    it when it is missing or stale, ``reuse`` uses the materialised patch and
+    never builds one.  The editor's extraction and its single-frame render pass
+    ``reuse``, so they never pay for the whole-timeline region sweep.
 
     A rig document that declares ``layers.split`` renders split: the character
     layer is deformed and the untouched background plate is composited under it
@@ -148,6 +154,7 @@ def deform_video(
                     character_layer,
                     weights=shared_weights,
                     iterations=iterations,
+                    build=patch != "reuse",
                 )
 
         renderer = DeformRenderer(
@@ -160,6 +167,7 @@ def deform_video(
             character=character_layer,
             background=background_layer,
             patch=patch_layer,
+            source_path=input_path,
         )
 
         output = Path(output_path)

@@ -820,16 +820,18 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       render_click(view, "toggle_background_layer", %{})
 
-      # The rig has a skeleton now, so the engine materialised the patch beside
-      # the still and the preview composites the very same bytes.
-      assert RigStore.patch_path(rig["id"])
-      assert File.exists?(RigStore.patch_path(rig["id"]))
-      assert has_element?(view, "#viewport[data-patch-url]")
+      # The extraction does not build the patch: the row says so and the
+      # preview composites no patch.
+      refute RigStore.patch_path(rig["id"])
+      assert render(view) =~ "Not computed yet"
+      refute has_element?(view, "#viewport[data-patch-url]")
 
-      # Asking for it again reuses the materialised patch rather than
-      # recomputing it.
+      # The compute action builds it beside the still, and the preview
+      # composites the very same bytes.
       render_click(view, "compute_patch", %{})
       assert render_async(view, 60_000) =~ "Patch computed"
+      assert RigStore.patch_path(rig["id"])
+      assert File.exists?(RigStore.patch_path(rig["id"]))
       assert has_element?(view, "#viewport[data-patch-url]")
     end
 
@@ -839,6 +841,8 @@ defmodule FramerWebWeb.EditorLiveTest do
       {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
 
       render_click(view, "toggle_background_layer", %{})
+      render_click(view, "compute_patch", %{})
+      assert render_async(view, 60_000) =~ "Patch computed"
 
       # The materialised patch was built with the feather the document records.
       assert has_element?(view, "#layer-row-patch .badge-success")
@@ -864,6 +868,8 @@ defmodule FramerWebWeb.EditorLiveTest do
       {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
 
       render_click(view, "toggle_background_layer", %{})
+      render_click(view, "compute_patch", %{})
+      assert render_async(view, 60_000) =~ "Patch computed"
       assert RigStore.patch_path(rig["id"])
 
       # Moving a bone changes the swept region, so the materialised patch no
@@ -877,6 +883,42 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert render(view) =~ "Not computed yet"
       refute RigStore.patch_path(rig["id"])
       refute has_element?(view, "#viewport[data-patch-url]")
+    end
+
+    test "the patch needs the character layer it is built from", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # Without the character layer there is nothing to sweep, so the engine
+      # builds no patch and the editor says so instead of claiming one.
+      render_click(view, "remove_layer", %{"layer" => "character"})
+      render_click(view, "compute_patch", %{})
+
+      assert render(view) =~ "The patch needs the character layer"
+      assert render(view) =~ "Needs the character layer"
+    end
+
+    test "the export carries on for a rig that cannot have a patch", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      id = rig["id"]
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+      render_click(view, "toggle_background_layer", %{})
+
+      # The character layer goes: there is nothing to build a patch from, so
+      # the export carries on without one.
+      render_click(view, "remove_layer", %{"layer" => "character"})
+
+      render_submit(form(view, "#export-form"), %{"format" => "webm"})
+
+      assert render(view) =~ "Exporting animation"
+      refute RigStore.patch_path(id)
+
+      stop_orchestrator()
     end
 
     test "the patch waits for the background plate it heals against", %{conn: conn} do
@@ -936,18 +978,7 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       assert RigStore.patch_path(id)
 
-      # Stop the orchestrator so the job does not outlive the test.
-      if Process.whereis(FramerCore.Orchestrator) do
-        try do
-          state = FramerCore.Orchestrator.get_status()
-
-          if state.job && state.job.status == :processing do
-            GenServer.stop(FramerCore.Orchestrator, :shutdown, 2000)
-          end
-        catch
-          :exit, _ -> :ok
-        end
-      end
+      stop_orchestrator()
     end
 
     test "the patch waits for a skeleton", %{conn: conn} do
@@ -1252,16 +1283,22 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert render(view) =~ "Encoding failed: out of memory"
 
       # Stop orchestrator if still processing so subsequent tests have a clean idle worker
-      if Process.whereis(FramerCore.Orchestrator) do
-        try do
-          state = FramerCore.Orchestrator.get_status()
+      stop_orchestrator()
+    end
+  end
 
-          if state.job && state.job.status == :processing do
-            GenServer.stop(FramerCore.Orchestrator, :shutdown, 2000)
-          end
-        catch
-          :exit, _ -> :ok
+  # Stop the orchestrator if a job is still processing, so the next test has a
+  # clean idle worker.
+  defp stop_orchestrator do
+    if Process.whereis(FramerCore.Orchestrator) do
+      try do
+        state = FramerCore.Orchestrator.get_status()
+
+        if state.job && state.job.status == :processing do
+          GenServer.stop(FramerCore.Orchestrator, :shutdown, 2000)
         end
+      catch
+        :exit, _ -> :ok
       end
     end
   end
