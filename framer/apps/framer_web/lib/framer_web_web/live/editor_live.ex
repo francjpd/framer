@@ -491,34 +491,38 @@ defmodule FramerWebWeb.EditorLive do
   def handle_event("compute_patch", _params, socket) do
     rig = socket.assigns.rig
 
-    cond do
-      not Rig.split?(rig) ->
+    # The patch is enabled by recording a feather, so a document saved before
+    # the patch existed gets the default when the user asks for it.
+    rig =
+      if Rig.patch_fade(rig) == nil do
+        Rig.set_patch_fade(rig, Rig.default_fade())
+      else
+        rig
+      end
+
+    case Rig.patch_blocker(rig) do
+      :no_split ->
         {:noreply,
          assign(socket, :error, "Extract the character first: the patch heals the background")}
 
-      Rig.bones(rig) == [] ->
+      :no_skeleton ->
         {:noreply, assign(socket, :error, "The patch needs a skeleton: add a bone first")}
 
-      not Rig.has_background_layer?(rig) ->
+      :no_background ->
         {:noreply,
          assign(socket, :error, "The patch needs the background layer: keep it to heal the background")}
 
-      not Rig.has_character_layer?(rig) ->
+      :no_character ->
         {:noreply,
          assign(socket, :error, "The patch needs the character layer: extract the character first")}
 
-      true ->
-        # The patch is enabled by recording a feather, so a document saved
-        # before the patch existed gets the default when the user asks for it.
-        rig =
-          if Rig.patch_fade(rig) == nil do
-            Rig.set_patch_fade(rig, Rig.default_fade())
-          else
-            rig
-          end
+      :no_timeline ->
+        {:noreply, assign(socket, :error, "The patch needs a timeline: set the frame count")}
 
-        # The engine sweeps the whole timeline to build the patch, so the
-        # build runs outside the LiveView process, the way a frame render does.
+      # The rig can have a patch, so the engine builds one.  It sweeps the
+      # whole timeline, so the build runs outside the LiveView process, the way
+      # a frame render does.
+      _ ->
         socket =
           socket
           |> finalize_mutation(rig, status: "Computing the patch...")
@@ -652,12 +656,7 @@ defmodule FramerWebWeb.EditorLive do
     socket =
       socket
       |> assign(:error, nil)
-      |> start_async(:export, fn ->
-        with :ok <- Renderer.materialise_project_patch(rig),
-             {:ok, export} <- Renderer.submit_export(rig, format: format) do
-          {:ok, export}
-        end
-      end)
+      |> start_async(:export, fn -> Renderer.submit_export(rig, format: format) end)
 
     {:noreply, socket}
   end
@@ -1603,7 +1602,7 @@ defmodule FramerWebWeb.EditorLive do
                   <% @patch_state == :ready -> %>
                     <span class="badge badge-success badge-xs">ready</span>
                   <% @patch_state == :pending -> %>
-                    <span class="badge badge-warning badge-xs">pending</span>
+                    <span class="badge badge-warning badge-xs"><%= patch_badge_text(@patch_state) %></span>
                   <% true -> %>
                     <span class="badge badge-ghost badge-xs"><%= patch_badge_text(@patch_state) %></span>
                 <% end %>
@@ -2265,7 +2264,6 @@ defmodule FramerWebWeb.EditorLive do
 
   defp finalize_mutation(socket, rig, opts) do
     socket
-    |> invalidate_stale_patch(rig)
     |> assign(:rig, rig)
     |> assign(:status, opts[:status])
     |> assign(:error, nil)
@@ -2273,29 +2271,6 @@ defmodule FramerWebWeb.EditorLive do
     |> persist(rig)
     |> push_rig()
   end
-
-  # The materialised patch is built from the rig's skeleton, bind and motion,
-  # and from the feather and the layer files, so a change to any of them makes
-  # it stale: it is dropped, and the engine rebuilds it on the next render or
-  # when the compute action asks for it.  Every route that can change the rig
-  # goes through this mutation path, so this is the one place the rig inputs
-  # are compared.
-  defp invalidate_stale_patch(socket, rig) do
-    previous = socket.assigns.rig
-
-    inputs_changed =
-      previous && previous["id"] == rig["id"] && patch_inputs(previous) != patch_inputs(rig)
-
-    if inputs_changed || patch_built_with_other_fade?(rig) do
-      RigStore.remove_patch_layer(rig["id"])
-    end
-
-    socket
-  end
-
-  # The rig inputs the region is computed from: the skeleton, the bind the
-  # weights are built with and the motion over the timeline.
-  defp patch_inputs(rig), do: {rig["bones"], rig["bind"], rig["keyframes"]}
 
   defp persist(socket, rig) do
     case RigStore.save(rig) do
@@ -2447,17 +2422,7 @@ defmodule FramerWebWeb.EditorLive do
     end
   end
 
-  # Whether the materialised patch was built with another feather than the
-  # document records.  The sidecar the engine writes next to the patch holds
-  # the feather it was built with.
-  defp patch_built_with_other_fade?(rig) do
-    case RigStore.patch_meta(rig["id"]) do
-      %{"fade" => fade} -> fade != Rig.patch_fade(rig)
-      _ -> false
-    end
-  end
-
-  defp patch_label(:unsplit), do: "Needs the character layer"
+  defp patch_label(:unsplit), do: "Not split yet"
   defp patch_label(:no_skeleton), do: "Needs a skeleton"
   defp patch_label(:no_plate), do: "Needs the background layer"
   defp patch_label(:no_character), do: "Needs the character layer"

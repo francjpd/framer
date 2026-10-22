@@ -177,8 +177,6 @@ defmodule FramerWeb.RigStore do
         |> put_in(["canvas", "width"], info.width)
         |> put_in(["canvas", "height"], info.height)
 
-      remove_patch_layer(id)
-
       save(rig)
     end
   end
@@ -197,8 +195,6 @@ defmodule FramerWeb.RigStore do
         |> then(fn r -> if Rig.split?(r), do: r, else: Rig.enable_split(r) end)
         |> Rig.set_character_layer(dest_name)
 
-      remove_patch_layer(id)
-
       save(rig)
     end
   end
@@ -216,8 +212,6 @@ defmodule FramerWeb.RigStore do
         rig
         |> then(fn r -> if Rig.split?(r), do: r, else: Rig.enable_split(r) end)
         |> Rig.set_background_layer(dest_name)
-
-      remove_patch_layer(id)
 
       save(rig)
     end
@@ -352,6 +346,8 @@ defmodule FramerWeb.RigStore do
       dir = project_dir(id)
       File.mkdir_p!(dir)
 
+      drop_stale_patch(id, rig)
+
       body = Jason.encode!(rig, pretty: true)
       target = Path.join(dir, "rig.json")
       temp = Path.join(dir, ".rig.json.tmp.#{System.unique_integer([:positive])}")
@@ -362,6 +358,36 @@ defmodule FramerWeb.RigStore do
   end
 
   def save(_rig), do: {:error, :missing_id}
+
+  # The materialised patch is built from the rig's motion, the feather and the
+  # layer files, so a document that changes any of them makes it stale.  It is
+  # dropped here, at the one write path every writer passes through, so the
+  # editor never presents a patch the engine would rebuild - not after a change
+  # made through the editor and not after one made through the API.
+  defp drop_stale_patch(id, rig) do
+    case load(id) do
+      {:ok, previous} ->
+        if patch_inputs(previous) != patch_inputs(rig), do: remove_patch_layer(id)
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  # The inputs the patch is built from.  The engine's own fingerprint is the
+  # authority on them; this is the editor's view of the same ones.
+  defp patch_inputs(rig) do
+    %{
+      canvas: rig["canvas"],
+      duration: rig["duration"],
+      bones: rig["bones"],
+      bind: rig["bind"],
+      keyframes: rig["keyframes"],
+      mask: rig["layers"],
+      fade: Rig.patch_fade(rig)
+    }
+  end
 
   @doc "Load and validate a stored rig."
   def load(id) do

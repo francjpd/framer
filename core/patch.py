@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,10 @@ PATCH_META_FILENAME = "patch.json"
 # The alpha above which a pixel counts as character.  Named, not magic: a
 # soft-edged character mask makes this a real choice.
 ALPHA_THRESHOLD = 127
+
+# The frame count a rig without a duration falls back to, the same default the
+# editor shows for it, so the two never disagree about the same document.
+DEFAULT_FRAMES = 48
 
 # The inpaint radius for the reconstruction.  The plate uses 3; the region is
 # larger and softer, so it gets a slightly wider fill.
@@ -185,7 +190,11 @@ def write_patch_meta(path: str | Path, payload: dict[str, Any]) -> Path:
     """Record what the materialised patch was built from."""
     meta = Path(path).parent / PATCH_META_FILENAME
     meta.parent.mkdir(parents=True, exist_ok=True)
-    meta.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    # The sidecar is written atomically: a reader never sees a half-written
+    # file, which would read as "no sidecar" and force another rebuild.
+    temp = meta.with_name(f".{meta.name}.tmp.{uuid.uuid4().hex}")
+    temp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    temp.replace(meta)
     return meta
 
 
@@ -195,10 +204,12 @@ def timeline_frames(rig: dict[str, Any]) -> list[int]:
 
     Every frame of the timeline is sampled: the region is the character's
     swept area, and a stride would leave a hole wherever the character travels
-    further between two sampled frames than its own footprint is wide.
+    further between two sampled frames than its own footprint is wide.  A rig
+    without a duration falls back to the same frame count the editor shows for
+    it, so the two never disagree about the same document.
     """
     duration = rig.get("duration") or {}
-    frames = int(duration.get("frames") or 0)
+    frames = int(duration.get("frames") or DEFAULT_FRAMES)
     if frames <= 0:
         return []
     return list(range(frames))
@@ -307,7 +318,7 @@ def resolve_patch_layer(
         # have bones rather than guessing one.
         return None, None
 
-    if not (rig.get("duration") or {}).get("frames"):
+    if not timeline_frames(rig):
         # No timeline to sweep over, so there is no region to reconstruct.
         return None, None
 
@@ -362,6 +373,7 @@ def _resize(layer: np.ndarray, width: int, height: int) -> np.ndarray:
 __all__ = [
     "ALPHA_THRESHOLD",
     "DEFAULT_FADE",
+    "DEFAULT_FRAMES",
     "INPAINT_RADIUS",
     "PATCH_FILENAME",
     "build_patch",

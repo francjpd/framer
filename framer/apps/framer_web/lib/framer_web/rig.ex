@@ -467,16 +467,26 @@ defmodule FramerWeb.Rig do
   def has_patch_layer?(rig), do: split?(rig) and patch_fade(rig) != nil
 
   @doc """
-  Whether the rig can have a patch layer at all.
+  Why the rig cannot have a patch layer yet, or nil when it can.
 
-  The patch reconstructs the ground the character uncovers, so it needs the
-  character layer it is built from, the background plate to heal against, a
-  skeleton to know the swept area and a feather to enable the layer.
+  The patch is built from the character layer and the background plate, it
+  needs a skeleton to know the swept area, a timeline to sweep and a feather to
+  be enabled at all.  This is the one rule both the editor and the export use.
   """
-  def patch_buildable?(rig) do
-    has_patch_layer?(rig) and has_character_layer?(rig) and has_background_layer?(rig) and
-      bones(rig) != []
+  def patch_blocker(rig) do
+    cond do
+      not split?(rig) -> :no_split
+      bones(rig) == [] -> :no_skeleton
+      not has_character_layer?(rig) -> :no_character
+      not has_background_layer?(rig) -> :no_background
+      frame_count(rig) <= 0 -> :no_timeline
+      patch_fade(rig) == nil -> :no_fade
+      true -> nil
+    end
   end
+
+  @doc "Whether the rig can have a patch layer at all."
+  def patch_buildable?(rig), do: patch_blocker(rig) == nil
 
   @doc """
   Record the patch's feather width, in pixels.

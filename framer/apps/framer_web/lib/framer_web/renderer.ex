@@ -229,7 +229,8 @@ defmodule FramerWeb.Renderer do
   """
   def submit_export(rig, opts \\ []) do
     with {:ok, source} <- source_path(rig),
-         :ok <- ensure_saved(rig) do
+         :ok <- ensure_saved(rig),
+         :ok <- materialise_project_patch(rig) do
       format = opts[:format] || "webm"
       output = RigStore.output_path(rig["id"], format)
       frames = to_int(opts[:frames]) || Rig.frame_count(rig)
@@ -251,7 +252,8 @@ defmodule FramerWeb.Renderer do
         %{
           "rig" => snapshotted_rig_path,
           "still" => true,
-          "iterations" => opts[:iterations] || 5
+          "iterations" => opts[:iterations] || 5,
+          "patch" => "reuse"
         }
         |> maybe_put("weights", opts[:weights])
 
@@ -349,19 +351,34 @@ defmodule FramerWeb.Renderer do
   none.
 
   The patch is a project-level artefact, so the export composites the very
-  file the editor's preview shows.  When the project has no materialised patch
-  - the editor drops the stale one when the rig changes - it is built here,
-  once, before the job runs: the export directory gets a copy of it and every
-  chunk reuses that copy.
+  file the editor's preview shows.  It is built here, once, before the job
+  runs - the export directory gets a copy of it and every chunk reuses that
+  copy, so no chunk sweeps the timeline and no two workers write the same file.
+
+  A rig that records a feather but cannot have a patch is refused: an export
+  that ships the character-over-plate stack is the defect this feature exists
+  to fix.
   """
   def materialise_project_patch(rig) do
-    if Rig.patch_buildable?(rig) and RigStore.patch_path(rig["id"]) == nil do
-      case build_patch(rig) do
-        {:ok, _path} -> :ok
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      :ok
+    cond do
+      Rig.patch_fade(rig) == nil ->
+        :ok
+
+      not Rig.has_background_layer?(rig) ->
+        # The character-only stack: the patch is not part of it.
+        :ok
+
+      not Rig.patch_buildable?(rig) ->
+        {:error, :patch_not_buildable}
+
+      RigStore.patch_path(rig["id"]) != nil ->
+        :ok
+
+      true ->
+        case build_patch(rig) do
+          {:ok, _path} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 

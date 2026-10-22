@@ -236,7 +236,7 @@ The Layers panel (`#layers-panel`) lists every layer belonging to the project:
 
 **The patch feather** (`#layer-fade-form`) is a 0-40 px slider, recorded in the document as `layers.fade`. It is the width of the feather at the region's edge, and it is saved with the project, so it travels with the rig. `0` is a valid width: the patch without a feather. A rig that records no fade at all has no patch layer and renders exactly as it did before the patch existed.
 
-**When the patch applies**: the patch is built from the rig's motion, the feather and the layer files, so a change to any of them makes the materialised patch stale and the editor drops it - the row then says *not computed* and the preview stops compositing it. That happens when the slider moves, when the motion changes (a bone is moved, a keyframe is recorded) and when a layer is replaced or re-extracted. The feather and the motion apply when the patch is computed again: **Compute patch** computes it, and so does an export of a project that has no materialised patch (once, before the job runs). The extraction and the single-frame render use the materialised patch as it is, so neither pays for the whole-timeline region sweep. Dragging the slider never triggers an engine call of its own - the patch is a project-level artefact, so it is built once and reused.
+**When the patch applies**: the patch is built from the rig's motion, the feather and the layer files, so a change to any of them makes the materialised patch stale and the editor drops it - the row then says *not computed* and the preview stops compositing it. That happens when the slider moves, when the motion changes (a bone is moved, a keyframe is recorded) and when a layer is replaced or re-extracted. The drop happens where the document is written, so it covers a change made through the editor and one made through the API alike. The feather and the motion apply when the patch is computed again: **Compute patch** computes it, and so does an export of a project that has no materialised patch (once, before the job runs). The extraction and the single-frame render use the materialised patch as it is, so neither pays for the whole-timeline region sweep. Dragging the slider never triggers an engine call of its own - the patch is a project-level artefact, so it is built once and reused.
 
 The engine is the authority on whether a materialised patch still matches the rig: the sidecar's fingerprint decides, and a patch built for another rig is never composited. So the three editor surfaces tell the same story - a project with no materialised patch has no patch in the preview and in the rendered frame, and an export builds it in the project first, so the exported frames carry the same patch the preview would show.
 
@@ -276,11 +276,13 @@ the background plate, so replacing either of them rebuilds it as well. The
 editor drops the materialised patch as soon as one of its inputs changes, so
 the preview never shows a patch the engine would rebuild.
 
-An export composites the *project's* patch: the editor's export builds it in the
-project first when the project has none - one region sweep for the whole
-export, not one per chunk - and then copies the patch and its sidecar into
-the export directory, so every chunk of the job composites that one file, the
-same one the preview shows.
+An export composites the *project's* patch: the export builds it in the project
+first when the project has none - one region sweep for the whole export, not
+one per chunk, and never two workers writing the same file - and then copies
+the patch and its sidecar into the export directory, so every chunk of the job
+composites that one file, the same one the preview shows. A rig that records a
+feather but cannot have a patch at all is refused by the export, loudly, rather
+than shipped without one.
 
 **What it promises, honestly**: on a flat or gradient background the patch
 reproduces the background almost exactly. On a textured background it is a
