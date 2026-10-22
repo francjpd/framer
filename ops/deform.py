@@ -149,9 +149,9 @@ def deform_video(
                 )
                 patch_layer, patch_materialised = resolve_patch_layer(
                     rig_document,
-                    source,
                     input_path,
                     character_layer,
+                    background_layer,
                     weights=shared_weights,
                     iterations=iterations,
                     build=patch != "reuse",
@@ -186,7 +186,7 @@ def deform_video(
             if materialised is not None:
                 result["character"] = str(materialised)
             if patch_layer is not None:
-                result["patch"] = str(patch_materialised or patch_path(rig_document, input_path))
+                result["patch"] = str(patch_materialised or patch_path(input_path))
             return result
 
         # MP4 drops alpha on encode, so the *rendered* frame is what decides
@@ -229,7 +229,7 @@ def deform_video(
             "fps": resolved_fps,
             **({"character": str(materialised)} if materialised is not None else {}),
             **(
-                {"patch": str(patch_materialised or patch_path(rig_document, input_path))}
+                {"patch": str(patch_materialised or patch_path(input_path))}
                 if patch_layer is not None
                 else {}
             ),

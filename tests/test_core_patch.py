@@ -47,6 +47,7 @@ from core.layers import (
     PATCH_FILENAME,
     PLATE_FILENAME,
     has_patch_layer,
+    load_layer,
     patch_fade,
     split_layers,
 )
@@ -307,11 +308,12 @@ def test_an_old_rig_without_a_fade_renders_exactly_as_before(project: Path):
     assert (legacy[:, :, 3] == 255).all()
     assert not (project / PATCH_FILENAME).exists()
 
-    # The very same rig with a fade recorded is a different render, and the
-    # difference is confined to the region the patch covers.
+    # The very same rig with a fade recorded renders the same frame: on a flat
+    # background the patch reproduces the ground the character uncovers, so it
+    # changes nothing.
     patched_rig, _ = scene_rig()
     patched = render(project, patched_rig, FRAMES - 1, "patched")
-    assert not np.array_equal(legacy, patched)
+    assert np.array_equal(legacy, patched)
 
 
 def test_the_patch_is_materialised_once_beside_the_still_and_then_reused(project: Path):
@@ -338,7 +340,9 @@ def test_the_patch_is_materialised_once_beside_the_still_and_then_reused(project
 
     meta = read_patch_meta(patch)
     assert meta is not None
-    assert meta["fingerprint"] == patch_fingerprint(rig, project / "source.png")
+    assert meta["fingerprint"] == patch_fingerprint(
+        rig, load_layer(project / "character.png"), load_layer(project / PLATE_FILENAME)
+    )
     assert meta["fade"] == FADE
 
     # A later render reads the file rather than rebuilding it.
@@ -455,7 +459,9 @@ def test_the_patch_is_rebuilt_when_the_rig_it_came_from_changes(project: Path):
     assert result["patch"] == str(patch)
     assert patch.stat().st_mtime_ns != first
     assert read_patch_meta(patch)["fingerprint"] == patch_fingerprint(
-        moved, project / "source.png"
+        moved,
+        load_layer(project / "character.png"),
+        load_layer(project / PLATE_FILENAME),
     )
 
 
@@ -499,7 +505,7 @@ def test_replacing_the_plate_rebuilds_the_patch(project: Path):
 
     # The patch now carries the new plate's material, not the old one's.
     materialised = cv2.imread(str(patch), cv2.IMREAD_UNCHANGED)
-    covered = materialised[:, :, 3] > 128
+    covered = materialised[:, :, 3] > 0
     assert covered.any()
     assert materialised[:, :, 1][covered].max() < 30  # the old plate's green
 
@@ -520,9 +526,9 @@ def test_the_region_covers_the_whole_swept_path():
 
     # The whole corridor the character travels through is covered.
     assert (region[22, 16:56] > 0).all()
-    # And the region stops where the character stops (plus the margin the
-    # dilation adds around it).
-    assert not (region[22, 59:] > 0).any()
+    # And the region stops exactly where the character stops: the swept area,
+    # with no margin around it.
+    assert not (region[22, 56:] > 0).any()
 
 
 def test_the_rest_footprint_keeps_the_plates_own_reconstruction():

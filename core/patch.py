@@ -14,8 +14,7 @@ This module builds the third materialised layer that closes that gap:
 
 * ``character_region`` - the region, computed from the skeleton with the
   engine's own LBS: the union of the character's warped footprints over the
-  whole timeline, grown by a few pixels as a margin for the feather, minus its
-  own rest footprint.
+  whole timeline, minus its own rest footprint.
 * ``reconstruct`` - the region reconstructed from the *plate*, never from the
   still: inpainting from the still leaks the character's own pixels into the
   synthesis (measured, textured background: 46.9 vs 34.5 mean error).
@@ -45,18 +44,13 @@ from core.deform import apply_lbs, bind_poses, evaluate_bones, load_or_build_wei
 from core.errors import RigError
 from core.layers import (
     DEFAULT_FADE,
-    LAYER_FILENAME,
     PATCH_FILENAME,
-    PLATE_FILENAME,
-    declared_background_path,
-    declared_character_path,
     has_background_layer,
     has_patch_layer,
     layer_settings,
     load_layer,
     patch_fade,
     patch_path,
-    resolve_background_layer,
     write_layer,
 )
 
@@ -68,24 +62,9 @@ PATCH_META_FILENAME = "patch.json"
 # soft-edged character mask makes this a real choice.
 ALPHA_THRESHOLD = 127
 
-# How far the region is dilated past the union of the warped footprints.  The
-# dilation is a margin on top of the exact union: it gives the feather
-# something to ramp over and absorbs a pixel of edge jitter.
-REGION_GROW = 3
-
 # The inpaint radius for the reconstruction.  The plate uses 3; the region is
 # larger and softer, so it gets a slightly wider fill.
 INPAINT_RADIUS = 5
-
-# How often the timeline is sampled when looking for the region's extent.
-# The region is the union of the character's warped footprints over the *whole*
-# timeline, so every frame is sampled: a stride would leave a hole wherever the
-# character travels further between two sampled frames than its own footprint
-# is wide, and the character would slide from the reconstructed material onto
-# untouched background.  The timeline is finite and the patch is built once per
-# project, so the cost is acceptable; a caller that wants the cheaper
-# approximation can ask for a wider stride.
-DEFAULT_SAMPLE = 1
 
 
 def character_region(
@@ -93,25 +72,19 @@ def character_region(
     alpha: np.ndarray,
     *,
     weights: np.ndarray | None = None,
-    sample: int = DEFAULT_SAMPLE,
-    grow: int = REGION_GROW,
     iterations: int = 5,
 ) -> np.ndarray:
     """
     The region the character can uncover: the union of its warped footprints
     over the timeline, minus its own rest footprint.
 
-    The union is grown by ``grow`` pixels *before* the rest footprint is
-    subtracted, so the region is the swept area grown outwards and the rest
-    footprint keeps the plate's own reconstruction of it rather than a second
-    inpaint of it.  The grown edge is what the feather ramps over.
+    The region is exactly the swept area: the rest footprint keeps the plate's
+    own reconstruction of it, and the feather ramps from the swept area's edge.
 
     Args:
         rig: the rig document, whose bones and keyframes define the motion.
         alpha: ``(H, W)`` uint8 character mask in canvas space.
         weights: dense bone weights, reused when the caller already has them.
-        sample: sample the timeline every ``sample`` frames.
-        grow: dilation radius in pixels.
         iterations: fixed-point iterations of the backward map.
 
     Returns:
@@ -131,53 +104,33 @@ def character_region(
         [np.zeros((height, size, 3), np.uint8), alpha[:, :, None]], axis=2
     )
 
-    for frame in timeline_frames(rig, sample):
+    for frame in timeline_frames(rig):
         world = evaluate_bones(rig, frame)
         warped = apply_lbs(mask, weights, world, bind, iterations)
         union = np.maximum(union, (warped[:, :, 3] > ALPHA_THRESHOLD).astype(np.uint8) * 255)
 
     rest = (alpha > ALPHA_THRESHOLD).astype(np.uint8) * 255
-    swept = (union > 0).astype(np.uint8)
-
-    if grow > 0 and swept.any():
-        kernel = np.ones((2 * grow + 1, 2 * grow + 1), np.uint8)
-        swept = cv2.dilate(swept, kernel, iterations=1)
-
-    region = ((swept > 0) & (rest == 0)).astype(np.uint8) * 255
+    region = ((union > 0) & (rest == 0)).astype(np.uint8) * 255
     return region
 
 
-def _layer_file(
-    source_path: str | Path | None,
-    declared: str | None,
-    default: str,
-) -> Path | None:
-    """The path a rig's layer file lives at, the way the renderer resolves it."""
-    name = declared or default
-    if not name:
-        return None
-    path = Path(name)
-    if source_path is not None and not path.is_absolute():
-        path = Path(source_path).parent / path
-    return path
-
-
-def _file_digest(path: Path | None) -> str | None:
+def _layer_digest(layer: np.ndarray | None) -> str | None:
     """
-    The content digest of a layer file, or None when there is no such file.
+    The content digest of a layer, or None when there is no layer.
 
-    A layer that is not there yet has no identity, so the patch is rebuilt
-    once the file appears.
+    The digest is of the decoded pixels, so it does not depend on how the
+    layer file is encoded and a copy of the same layer has the same identity.
     """
-    if path is None:
+    if layer is None:
         return None
-    try:
-        return hashlib.sha1(path.read_bytes()).hexdigest()
-    except OSError:
-        return None
+    return hashlib.sha1(np.ascontiguousarray(layer).tobytes()).hexdigest()
 
 
-def patch_fingerprint(rig: dict[str, Any], source_path: str | Path | None = None) -> str:
+def patch_fingerprint(
+    rig: dict[str, Any],
+    character: np.ndarray | None = None,
+    plate: np.ndarray | None = None,
+) -> str:
     """
     A stable fingerprint of everything the patch is built from.
 
@@ -186,11 +139,11 @@ def patch_fingerprint(rig: dict[str, Any], source_path: str | Path | None = None
     plate, and the feather depends on the fade - so a change to any of them
     means the materialised patch is stale.
 
-    The two layer files are part of it by their *content*, so replacing either
+    The two layers are part of it by their *content*, so replacing either
     layer (the editor's "Change" action) rebuilds the patch instead of reusing
-    a patch built from the old material.  The digest is of the content rather
-    than of the file's timestamp, so a copy of the same layer - the export
-    snapshots the layers beside the still - keeps the patch reusable.
+    a patch built from the old material.  The digest is of the decoded pixels,
+    so a copy of the same layer - the export snapshots the layers beside the
+    still - keeps the patch reusable.
     """
     relevant = {
         "canvas": rig.get("canvas"),
@@ -209,12 +162,8 @@ def patch_fingerprint(rig: dict[str, Any], source_path: str | Path | None = None
         "keyframes": rig.get("keyframes"),
         "mask": layer_settings(rig),
         "fade": patch_fade(rig),
-        "plate": _file_digest(
-            _layer_file(source_path, declared_background_path(rig), PLATE_FILENAME)
-        ),
-        "character": _file_digest(
-            _layer_file(source_path, declared_character_path(rig), LAYER_FILENAME)
-        ),
+        "plate": _layer_digest(plate),
+        "character": _layer_digest(character),
     }
     blob = json.dumps(relevant, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha1(blob).hexdigest()
@@ -240,23 +189,19 @@ def write_patch_meta(path: str | Path, payload: dict[str, Any]) -> Path:
     return meta
 
 
-def timeline_frames(rig: dict[str, Any], sample: int = DEFAULT_SAMPLE) -> list[int]:
+def timeline_frames(rig: dict[str, Any]) -> list[int]:
     """
-    The frames the region's union is sampled over.
+    The frames the region's union is taken over.
 
-    The timeline is sampled every ``sample`` frames and the last frame is
-    always included, so the pose the character ends on is inside the region
-    however coarse the sampling is.
+    Every frame of the timeline is sampled: the region is the character's
+    swept area, and a stride would leave a hole wherever the character travels
+    further between two sampled frames than its own footprint is wide.
     """
     duration = rig.get("duration") or {}
     frames = int(duration.get("frames") or 0)
     if frames <= 0:
         return []
-    step = max(1, int(sample))
-    sampled = list(range(0, frames, step))
-    if sampled[-1] != frames - 1:
-        sampled.append(frames - 1)
-    return sampled
+    return list(range(frames))
 
 
 def reconstruct(plate: np.ndarray, region: np.ndarray, radius: int = INPAINT_RADIUS) -> np.ndarray:
@@ -297,7 +242,6 @@ def build_patch(
     *,
     fade: int = DEFAULT_FADE,
     weights: np.ndarray | None = None,
-    sample: int = DEFAULT_SAMPLE,
     iterations: int = 5,
 ) -> np.ndarray:
     """
@@ -310,9 +254,7 @@ def build_patch(
     character travels and merges into the untouched background at the region's
     edge.
     """
-    region = character_region(
-        rig, alpha, weights=weights, sample=sample, iterations=iterations
-    )
+    region = character_region(rig, alpha, weights=weights, iterations=iterations)
     colour = reconstruct(plate, region)
     ramp = feather_ramp(region, fade)
     return np.concatenate([colour, ramp[:, :, None]], axis=2)
@@ -320,9 +262,9 @@ def build_patch(
 
 def resolve_patch_layer(
     rig: dict[str, Any],
-    source: np.ndarray,
     source_path: str | Path,
     character: np.ndarray,
+    plate: np.ndarray,
     *,
     weights: np.ndarray | None = None,
     iterations: int = 5,
@@ -338,6 +280,9 @@ def resolve_patch_layer(
     once the bones and the timeline exist.  It also needs the background plate:
     the reconstruction is made from the plate, so a rig without one has no
     patch at all (and the renderer skips the patch in that case anyway).
+
+    The character layer and the plate are the ones the caller resolved, so the
+    layer files are decoded once per operation.
 
     With ``build=False`` the materialised patch is used as it is - when the
     file is there - and nothing is ever built: a caller that must not pay for
@@ -369,7 +314,7 @@ def resolve_patch_layer(
         # no patch to build.
         return None, None
 
-    path = patch_path(rig, source_path)
+    path = patch_path(source_path)
 
     if not build:
         # The caller asked for the materialised patch only: it is used as it
@@ -378,7 +323,7 @@ def resolve_patch_layer(
             return load_layer(path), None
         return None, None
 
-    fingerprint = patch_fingerprint(rig, source_path)
+    fingerprint = patch_fingerprint(rig, character, plate)
     if path.exists():
         meta = read_patch_meta(path)
         if meta and meta.get("fingerprint") == fingerprint:
@@ -389,10 +334,6 @@ def resolve_patch_layer(
     height = int(rig["canvas"]["height"])
 
     alpha = _resize(character[:, :, 3], size, height)
-    plate = resolve_background_layer(rig, source, source_path, character)
-    if plate is None:
-        # No materialised plate: there is no background to reconstruct from.
-        return None, None
     plate = _resize(plate, size, height)
 
     patch = build_patch(
@@ -420,10 +361,8 @@ def _resize(layer: np.ndarray, width: int, height: int) -> np.ndarray:
 __all__ = [
     "ALPHA_THRESHOLD",
     "DEFAULT_FADE",
-    "DEFAULT_SAMPLE",
     "INPAINT_RADIUS",
     "PATCH_FILENAME",
-    "REGION_GROW",
     "build_patch",
     "character_region",
     "feather_ramp",

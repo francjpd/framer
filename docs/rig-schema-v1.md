@@ -139,11 +139,11 @@ layer between the character and the plate: the **patch** (`patch.png` beside
 the still). The stack is *character -> feathered patch -> opaque plate*.
 
 * **The region** is the character's *swept area*: the union of its warped
-  footprints over the whole timeline, grown by a few pixels as a margin for the
-  feather, minus its own rest footprint. It is computed from the
-  skeleton with the engine's own LBS (`compute_dense_weights` ->
-  `evaluate_bones` -> `apply_lbs` over the character mask), so it is exactly
-  the ground the character can uncover.
+  footprints over the whole timeline, minus its own rest footprint. It is
+  computed from the skeleton with the engine's own LBS (`compute_dense_weights`
+  -> `evaluate_bones` -> `apply_lbs` over the character mask), so it is exactly
+  the ground the character can uncover. Every frame of the timeline is
+  sampled, so the union has no hole where the character travels.
 * **The reconstruction** fills that region from the *plate*, never from the
   still: inpainting from the still leaks the character's own pixels into the
   result. The ordering is the measured one - the rest footprint is reconstructed

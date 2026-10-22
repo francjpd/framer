@@ -300,9 +300,9 @@ def has_patch_layer(rig: dict[str, Any]) -> bool:
     return patch_fade(rig) is not None
 
 
-def patch_path(rig: dict[str, Any], source_path: str | Path) -> Path:
+def patch_path(source_path: str | Path) -> Path:
     """
-    Where the patch layer lives for this rig: `patch.png` beside the still.
+    Where the patch layer lives: `patch.png` beside the still.
 
     The patch is derived from the rig and the still rather than being a file
     the user chooses, so it always has one home.
