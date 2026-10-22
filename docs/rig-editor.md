@@ -51,8 +51,10 @@ path, a frame range and JSON options - exactly the existing Port contract.
   * **Bind** - the global bind **power** / **radius scale** and `Auto-bind
     mesh`, which rebuilds the control mesh and per-vertex weights.
   * **Layers panel** - lists the project's layers (source still, character layer,
-    and background layer) with their active state and file paths. Each layer provides
-    actions to **Keep**, **Remove**, or **Change** (upload replacement image). Removing
+    background layer, and the materialised patch layer) with their active state and file paths. Each of
+    the three image layers can be replaced with **Change** (upload replacement image), and the
+    character and background layers can also be **Removed** and restored with **Keep**; the patch layer is
+    materialised by the engine and has its own **Compute patch** action. Removing
     the background layer drops the background entirely, leaving only the character
     layer rendered and exported with transparency (the no-background outcome). See
     [Character and background layers](#character-and-background-layers).
@@ -194,7 +196,8 @@ It skips when Node is absent; the Python golden test (`tests/test_golden_deform.
 still covers the authoritative render. The same file proves the layering agrees:
 it renders the split scene from `tests/layer_scene.py` through the preview with
 both layers (as well as character-only with transparency when the background is
-removed) and compares against the engine's layered render. The server-side timeline value/velocity
+removed, and with the patch stacked between the character and the plate) and
+compares against the engine's layered render. The server-side timeline value/velocity
 graph interpolates poses with `FramerWeb.Rig.interpolate_pose/3`, which mirrors
 `core.deform.interpolate_keyframes` and `lbs.mjs` `interpolatePoses`; an Elixir
 test (`framer/apps/framer_web/test/framer_web/rig_test.exs`) keeps it tied to
@@ -232,11 +235,11 @@ The Layers panel (`#layers-panel`) lists every layer belonging to the project:
 1. **Source still** (`#layer-row-source`) - the original uploaded image. Can be replaced with **Change** to point the rig at an updated source.
 2. **Character layer** (`#layer-row-character`) - the segmented character cut-out. Shows whether it is extracted, kept, or removed. Can be removed, restored with **Keep**, or replaced with **Change**.
 3. **Background layer** (`#layer-row-background`) - the background plate. Can be removed, restored with **Keep**, or replaced with **Change**. On an unsplit rig, clicking **Remove** on the background layer extracts the character and drops the background in a single step.
-4. **Patch layer** (`#layer-row-patch`) - the feathered reconstruction of the ground the character uncovers. It is materialised by the engine, and **Compute patch** asks for it. The row says whether it is ready, still to be computed, stale (built with another feather than the document records), waiting for a skeleton, off, or waiting for the character or background layer it is built from.
+4. **Patch layer** (`#layer-row-patch`) - the feathered reconstruction of the ground the character uncovers. It is materialised by the engine, and **Compute patch** asks for it. The row says whether it is ready, still to be computed, stale (built with another feather than the document records), waiting for a skeleton, off, waiting for the character or background layer it is built from, or not split yet.
 
 **The patch feather** (`#layer-fade-form`) is a 0-40 px slider, recorded in the document as `layers.fade`. It is the width of the feather at the region's edge, and it is saved with the project, so it travels with the rig. `0` is a valid width: the patch without a feather. A rig that records no fade at all has no patch layer and renders exactly as it did before the patch existed.
 
-**When the patch applies**: the patch is built from the rig's motion, the feather and the layer files, so a change to any of them makes the materialised patch stale and the editor drops it - the row then says *not computed* and the preview stops compositing it. That happens when the slider moves, when the motion changes (a bone is moved, a keyframe is recorded) and when a layer is replaced or re-extracted. The drop happens where the document is written, so it covers a change made through the editor and one made through the API alike. The feather and the motion apply when the patch is computed again: **Compute patch** computes it, and the export's job builds one for the export if the project has none. The extraction and the single-frame render use the materialised patch as it is, so neither pays for the whole-timeline region sweep. Dragging the slider never triggers an engine call of its own - the patch is a project-level artefact, so it is built once and reused.
+**When the patch applies**: the patch is built from the rig's motion, the feather and the layer files, so a change to any of them makes the materialised patch stale and the editor drops it - the row then says *not computed* and the preview stops compositing it. That happens when the slider moves, when the motion changes (a bone is moved, a keyframe is recorded) and when a layer is replaced or re-extracted. The drop happens where the change happens: where the document is written - so it covers a change made through the editor and one made through the API alike - and where a layer's bytes are written. The second one matters because the patch is built from those bytes: replacing a layer a second time with an image of the same format leaves the document byte-identical, and the patch is dropped even then. The feather and the motion apply when the patch is computed again: **Compute patch** computes it, and the export's job builds one for the export if the project has none. The extraction and the single-frame render use the materialised patch as it is, so neither pays for the whole-timeline region sweep. Dragging the slider never triggers an engine call of its own - the patch is a project-level artefact, so it is built once and reused.
 
 The engine is the authority on whether a materialised patch still matches the rig: the sidecar's fingerprint decides, and a patch built for another rig is never composited. So the three editor surfaces tell the same story - a project with no materialised patch has no patch in the preview and in the rendered frame, and an export composites the same patch the preview would show.
 
@@ -268,13 +271,14 @@ It is a *project-level* artefact: computed once from the skeleton, written
 beside the still as `patch.png`, and reused by every frame, every preview and
 every export. It needs a skeleton - the region the character can uncover is
 only known once the bones and the timeline exist - so **Compute patch** is
-disabled until the rig has one, and the engine rebuilds the patch when the rig
-it came from changes. It also needs the background plate to heal against, so
-**Compute patch** refuses a rig whose background layer was removed, and no
-patch is materialised for it. The patch is built from the character layer and
-the background plate, so replacing either of them rebuilds it as well. The
-editor drops the materialised patch as soon as one of its inputs changes, so
-the preview never shows a patch the engine would rebuild.
+disabled until the character is extracted and the rig has one, and the engine
+rebuilds the patch when the rig it came from changes. It also needs the
+character layer to sweep and the background plate to heal against, so
+**Compute patch** refuses a rig without either, and no patch is materialised
+for it. The patch is built from the character layer and the background plate,
+so replacing either of them rebuilds it as well. The editor drops the
+materialised patch as soon as one of its inputs changes, so the preview never
+shows a patch the engine would rebuild.
 
 An export composites a patch: it copies the project's patch and its sidecar
 into the export directory, so every chunk of the job composites that one file,
@@ -298,8 +302,10 @@ with the plate alone.
 
 ### Fill of a vacated region
 
-When the background layer is kept, the two layers are recomposited with a plain source-over (the character over the
-plate), so an opaque character pixel wins outright wherever it moves - including
+When the background layer is kept, the layers are recomposited with a plain
+source-over (the character over the patch over the plate, or the character over
+the plate when the rig has no patch), so an opaque character pixel wins
+outright wherever it moves - including
 over background it did not occupy at rest, where no blending happens. Where the
 character moves away from, the plate shows through: the vacated region is never
 transparent and never the character's original pixels, it is the reconstructed
@@ -364,7 +370,10 @@ Extends the existing `/api` surface (`FramerWebWeb.RigController`):
 | `GET` | `/api/rigs/:id/patch` | the materialised background patch of a split rig |
 | `GET` | `/api/rigs/:id/result` | the merged export (download) |
 
-Export progress is polled from the existing `GET /api/jobs/:id`; the server-side
+Export progress is polled from the existing `GET /api/jobs/:id`; a failed job
+carries the reason in its `error` field, in words - a job whose background
+patch could not be built says so instead of shipping a video without it. The
+server-side
 watcher merges the finished chunks and broadcasts completion on the
 `rig:<id>` PubSub topic.
 

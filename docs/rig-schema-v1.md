@@ -58,7 +58,8 @@ normal Port error; a document that does not validate never renders.
     "num_ranges": 5,
     "adaptive_bg": false,
     "edge_cleanup": 3,
-    "soft_edges": 5
+    "soft_edges": 5,
+    "fade": 12
   }
 }
 ```
@@ -120,7 +121,9 @@ resampled; the plate is composited underneath it untouched, so the background is
 identical in every frame. The two files (`layers.character`, default
 `character.png` beside the still, and `layers.background`, default `background.png`) are materialised once
 with the engine's existing background-removal segmentation and reused by later
-renders, exports and the editor's preview.
+renders, exports and the editor's preview. A document that records a feather
+adds a third layer between the two - the background patch, described in
+[The background patch](#the-background-patch).
 
 Each layer can be independently kept, removed, or changed. In particular, when the background layer is removed (`layers.background: false`), the engine skips compositing over the plate and renders only the deformed character layer with its transparent alpha channel intact (the no-background outcome), which carries through to preview, frame render, and video export (e.g. WebM with alpha).
 
@@ -129,8 +132,9 @@ outright wherever it moves - including over background it did not occupy at
 rest. Where the character moves away from, the plate shows through: the
 vacated region carries the reconstructed background, never the character's
 original pixels, and because the plate is opaque the composited frame is opaque
-too. The preview (`assets/js/lbs.mjs`) mirrors the split, layer visibility, and composite
-exactly, and `tests/test_preview_parity.py` keeps the two in agreement.
+too. The preview (`assets/js/lbs.mjs`) mirrors the split, the layer visibility,
+the patch layer and the composite exactly, and `tests/test_preview_parity.py`
+keeps the two in agreement.
 
 ## The background patch
 
@@ -165,9 +169,10 @@ skeleton, written beside the still and reused by every frame, every preview and
 every export. It is only computed for a rig that records a fade, has a
 skeleton - the region is only known once the bones and the timeline exist - and
 has the background plate to heal against. The engine records what the patch
-was built from in `patch.json` beside it - the rig, the feather and the two
-layer files it is built from - so a rig that changed, or a layer that was
-replaced, rebuilds the patch instead of reusing a stale file.
+was built from in `patch.json` beside it: a fingerprint of the rig's skeleton
+and motion, of the feather, and of the *content* of the character layer and the
+background plate it was built from - so a rig that changed, or a layer whose
+bytes changed, rebuilds the patch instead of reusing a stale file.
 
 **What it promises, honestly**: on a flat or gradient background the patch
 reproduces the background almost exactly. On a textured background it is a

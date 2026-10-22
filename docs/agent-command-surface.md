@@ -117,8 +117,8 @@ every operation accepts it: it sizes the player pool the job is chunked across.
 
 The catalog lists what the `framer` command can run: the operations the Python
 Port worker implements (`framer_worker.py`'s `_OPERATIONS`). That is
-`remove-bg`, `fps-boost`, `loop` and `deform`, plus the internal `info` and
-`merge` Port operations that framer drives on a caller's behalf.
+`remove-bg`, `fps-boost`, `loop` and `deform`, plus the internal `info`,
+`merge` and `patch` Port operations that framer drives on a caller's behalf.
 
 The standalone Python CLI operations (`resize`, `trim`, `export`, `recolor`,
 `glow`, `outline`) are **not** catalogued, because the Port worker has no
@@ -128,15 +128,16 @@ exists for one of them, adding a catalog entry is the whole change.
 
 ## Worker-internal tunables
 
-Two knobs the worker reads are deliberately not catalogued, because neither is
-a flag an agent can set: the Python CLI never exposed them either, so adding
-them would widen the command surface beyond what the catalog is meant to own.
-They are fixed worker defaults, not options.
+Three knobs the worker reads are deliberately not catalogued, because none of
+them is a flag an agent can set: the Python CLI never exposed them either, so
+adding them would widen the command surface beyond what the catalog is meant
+to own. They are fixed worker defaults, not options.
 
 | operation | key | default | meaning |
 | --- | --- | --- | --- |
 | `remove-bg` | `motion_threshold` | `15` | motion-detection threshold used when `--method motion` or `--method combined`; the fixed complement to the exposed `--motion-frames` |
 | `deform` | `still` | auto | whether the source is treated as a still image; unset, the worker decides from the input extension (an image path is a still, a video path is read as its first frame) |
+| `deform` | `patch` | auto | what happens with a rig's background patch layer: `auto` materialises it when it is missing or stale, `reuse` uses the materialised one and never builds one. The editor's frame renders and an export's chunks pass `reuse`, so neither pays for the whole-timeline region sweep |
 
 ## Keeping it honest
 
