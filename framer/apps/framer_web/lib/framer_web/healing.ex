@@ -84,6 +84,65 @@ defmodule FramerWeb.Healing do
     }
   end
 
+  @doc """
+  Add a correction to the project's corrections, so a rebuilt patch re-applies it.
+
+  The corpus is where a correction's material lives; the project's own file is
+  what the engine reads when it builds the patch, so a correction the user
+  painted is never painted over by a patch that is rebuilt.
+
+  Each correction travels as the content that was painted, the mask it
+  covered and the rectangle they are cropped to - the very material the
+  corpus holds - so the engine re-applies it exactly as it was applied to
+  the plate.
+  """
+  def append_correction(correction, path) do
+    write_corrections(read_corrections(path) ++ [correction_entry(correction)], path)
+  end
+
+  defp write_corrections(corrections, path) when is_list(corrections) do
+    body = Jason.encode!(%{"corrections" => corrections})
+    target = Path.dirname(path)
+    File.mkdir_p!(target)
+
+    # The file is written atomically: the engine reads it while the editor
+    # is running, and a half-written file would read as "no corrections".
+    temp = Path.join(target, ".#{Path.basename(path)}.tmp.#{System.unique_integer([:positive])}")
+    File.write!(temp, body)
+    File.rename!(temp, path)
+
+    :ok
+  rescue
+    error -> {:error, Exception.message(error)}
+  end
+
+  defp correction_entry(correction) do
+    %{
+      "bbox" => %{
+        "x" => correction.bbox_x,
+        "y" => correction.bbox_y,
+        "width" => correction.bbox_width,
+        "height" => correction.bbox_height
+      },
+      "fade" => correction.fade,
+      "mask" => Base.encode64(correction.mask),
+      "content" => Base.encode64(correction.content)
+    }
+  end
+
+  defp read_corrections(path) do
+    case File.read(path) do
+      {:ok, body} ->
+        case Jason.decode(body) do
+          {:ok, %{"corrections" => corrections}} when is_list(corrections) -> corrections
+          _ -> []
+        end
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
   defp read_artifact(dir, name) do
     case File.read(Path.join(dir, name)) do
       {:ok, binary} -> {:ok, binary}

@@ -12,21 +12,32 @@ What is pinned:
 
 1. **The bad area is repaired.** The painted area is filled from the
    surrounding background, so the artefact the user painted over is gone.
-2. **The falloff is the patch's falloff.** The correction is composited with
-   `core.patch.feather_ramp`, the very ramp the automatic patch feathers with,
-   so the two are the same kind of fix.
+2. **The correction is opaque where the user painted.** The falloff is the
+   patch's own ramp, but it is measured from the area the user painted, so
+   the pixels they covered are replaced outright - a brush-sized area is
+   smaller than the feather the rig records, and the feather may not swallow
+   the whole correction.
 3. **There is no hard edge.** The transition from the untouched background
    into the correction is gradual, and the background outside the painted area
-   is byte-for-byte untouched.
+   is byte-for-byte untouched.  A rig with no feather of its own still gets a
+   soft edge.
 4. **The plate stays opaque.** The feather lives on the correction, never as a
    hole in the plate.
-5. **The correction is material.** The content that was painted, the mask it
+5. **The correction lands where the user painted.** The strokes are painted
+   in the canvas's own pixels, and the plate is fitted to the canvas before
+   it is healed, so a plate that is not the canvas's size is still corrected
+   in the right place.
+6. **The correction is material.** The content that was painted, the mask it
    covered and the pixels it replaced are written out, cropped to the painted
    rectangle - the training material, stored from the first use.
+7. **The patch shows the correction.** The patch is the ground the character
+   uncovers; a correction painted into that ground is what the frame shows,
+   and it is still what the frame shows after the patch is rebuilt.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import sys
 from pathlib import Path
@@ -37,15 +48,27 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.bg_removal import character_alpha
+from core.deform import load_or_build_weights
 from core.healing import (
     CONTENT_FILENAME,
     MASK_FILENAME,
+    MIN_BAND,
     REPLACED_FILENAME,
+    correction_band,
     heal_file,
     heal_plate,
     read_strokes,
+    stroke_mask,
 )
-from core.patch import feather_ramp, reconstruct
+from core.layers import split_layers, write_layer
+from core.patch import (
+    character_region,
+    corrections_path,
+    feather_ramp,
+    resolve_patch_layer,
+)
+from ops.deform import deform_video
 
 SIZE = 64
 FADE = 12
@@ -69,6 +92,12 @@ def make_plate() -> np.ndarray:
 def stroke() -> list[dict]:
     """One stroke over the artefact, wide enough to reach the good ground."""
     return [{"points": [[32, 32]], "radius": BRUSH}]
+
+
+def opaque_core(mask: np.ndarray, band: int) -> np.ndarray:
+    """The pixels the correction is fully opaque on: the painted middle."""
+    distance = cv2.distanceTransform((mask > 0).astype(np.uint8), cv2.DIST_L2, 3)
+    return (distance >= band + 1) & (mask > 0)
 
 
 def test_the_painted_area_is_repaired() -> None:
@@ -96,20 +125,84 @@ def test_the_untouched_background_is_untouched() -> None:
     assert np.array_equal(healed[56:64, 56:64], plate[56:64, 56:64])
 
 
-def test_the_correction_uses_the_patch_falloff() -> None:
+def test_the_correction_is_opaque_where_the_user_painted() -> None:
+    """The painted pixels are replaced outright, not tinted."""
     plate = make_plate()
-    strokes = stroke()
-    result = heal_plate(plate, strokes, fade=FADE, radius=BRUSH)
+    result = heal_plate(plate, stroke(), fade=FADE, radius=BRUSH)
 
     mask = result["mask"]
-    ramp = feather_ramp(mask, FADE)
-    content = reconstruct(plate, mask)
+    content = result["content"]
+    healed = result["plate"]
+    band = result["band"]
 
-    expected = plate[:, :, :3].astype(np.float32) * (1 - ramp[:, :, None] / 255.0) + content.astype(
-        np.float32
-    ) * (ramp[:, :, None] / 255.0)
+    # The middle of the painted area is the painted content at full
+    # strength: the artefact the user covered is gone, not merely faded.
+    core = opaque_core(mask, band)
+    ys, xs = np.nonzero(core)
+    assert len(ys) > 0
+    assert np.array_equal(healed[ys, xs, :3], content[ys, xs, :3])
 
-    assert np.allclose(result["plate"][:, :, :3], np.clip(expected, 0, 255), atol=1.0)
+
+def test_the_falloff_is_measured_from_the_painted_area() -> None:
+    """The rig's feather shapes the edge, but it cannot swallow the brush."""
+    plate = make_plate()
+    result = heal_plate(plate, stroke(), fade=FADE, radius=BRUSH)
+
+    band = result["band"]
+    mask = result["mask"]
+
+    # The band is the rig's own feather, narrowed to what the painted area
+    # can carry: the correction keeps an opaque middle.
+    assert 0 < band < FADE
+    assert band == correction_band(mask, FADE)
+
+    # The ramp is the patch's own ramp over that band.
+    ramp = feather_ramp(mask, band)
+    assert (ramp[mask == 0] == 0).all()
+    assert ramp.max() == 255
+    # The middle of the painted area is fully opaque.
+    core = opaque_core(mask, band)
+    assert (ramp[core] == 255).all()
+
+
+def test_a_brush_smaller_than_the_feather_is_opaque_inside() -> None:
+    """A small brush with the rig's big feather is still a full correction."""
+    plate = make_plate()
+    small = [{"points": [[32, 32]], "radius": 4}]
+    result = heal_plate(plate, small, fade=FADE, radius=4)
+
+    mask = result["mask"]
+    band = result["band"]
+    assert band < FADE, "the feather was not scaled down to the painted area"
+
+    core = opaque_core(mask, band)
+    ys, xs = np.nonzero(core)
+    assert len(ys) > 0
+    assert np.array_equal(result["plate"][ys, xs, :3], result["content"][ys, xs, :3])
+
+
+def test_a_rig_without_a_feather_still_softens_the_edge() -> None:
+    """A rig with no feather of its own still gets a soft-edged correction."""
+    plate = make_plate()
+    result = heal_plate(plate, stroke(), fade=0, radius=BRUSH)
+
+    mask = result["mask"]
+    band = result["band"]
+
+    # The band is never zero: a correction is never a hard-edged blob.
+    assert band == MIN_BAND
+    assert band >= 1
+
+    # The edge is a gradient, not a step: the ramp has values in between.
+    ramp = feather_ramp(mask, band)
+    middle = ramp[(ramp > 0) & (ramp < 255)]
+    assert middle.size > 0, "the correction was pasted on with a hard edge"
+
+    # And the painted area is still fully replaced in its middle.
+    core = opaque_core(mask, band)
+    ys, xs = np.nonzero(core)
+    assert len(ys) > 0
+    assert np.array_equal(result["plate"][ys, xs, :3], result["content"][ys, xs, :3])
 
 
 def test_the_correction_merges_into_the_untouched_background() -> None:
@@ -135,7 +228,7 @@ def test_the_correction_merges_into_the_untouched_background() -> None:
 
     # The middle of the painted area: the correction is fully opaque there, so
     # those pixels are the painted content and nothing else.
-    core = cv2.erode(mask, kernel, iterations=FADE + 2)
+    core = opaque_core(mask, result["band"])
     ys, xs = np.nonzero(core)
     assert len(ys) > 0
     assert np.array_equal(healed[ys, xs, :3], content[ys, xs, :3])
@@ -146,6 +239,41 @@ def test_the_plate_stays_opaque() -> None:
     result = heal_plate(plate, stroke(), fade=FADE, radius=BRUSH)
 
     assert (result["plate"][:, :, 3] == 255).all()
+
+
+def test_the_correction_lands_where_the_user_painted(tmp_path: Path) -> None:
+    """The strokes are canvas pixels: the plate is fitted to the canvas."""
+    # A plate that is not the canvas's size: the user replaced the
+    # background with an image of another resolution.
+    plate = cv2.resize(make_plate(), (SIZE * 2, SIZE * 2), interpolation=cv2.INTER_NEAREST)
+    plate_path = tmp_path / "background.png"
+    cv2.imwrite(str(plate_path), plate)
+
+    strokes_path = tmp_path / "strokes.json"
+    strokes_path.write_text(json.dumps({"strokes": stroke()}))
+
+    result = heal_file(
+        plate_path,
+        read_strokes(strokes_path),
+        target_path=tmp_path / "healed.png",
+        artifacts_dir=tmp_path / "artifacts",
+        fade=FADE,
+        radius=BRUSH,
+        canvas=(SIZE, SIZE),
+    )
+
+    # The plate is healed at the canvas's size, so the correction is where
+    # the user painted it: the artefact's own pixels.
+    healed = cv2.imread(str(tmp_path / "healed.png"), cv2.IMREAD_UNCHANGED)
+    assert healed.shape[:2] == (SIZE, SIZE)
+    assert healed[32, 32, 2] < 40, "the artefact is still red after healing"
+    assert healed[32, 32, 1] > 150, "the surrounding background was not painted over it"
+
+    # And the rectangle the correction is cropped to is a rectangle in canvas
+    # pixels, so the corpus never mixes a canvas size with plate pixels.
+    bbox = result["bbox"]
+    assert bbox["width"] <= SIZE
+    assert bbox["height"] <= SIZE
 
 
 def test_the_correction_is_written_out_as_material(tmp_path: Path) -> None:
@@ -207,3 +335,216 @@ def test_an_empty_stroke_is_refused() -> None:
 
     with pytest.raises(RigError):
         heal_plate(make_plate(), [], fade=FADE, radius=BRUSH)
+
+
+# --- the correction and the patch -------------------------------------------
+
+
+def _rig() -> dict:
+    """A rig whose character travels across the canvas."""
+    return {
+        "schema": "framer.rig",
+        "version": 1,
+        "id": "healing-scene",
+        "name": "Healing scene",
+        "canvas": {"width": SIZE, "height": SIZE},
+        "source": {"kind": "image", "path": "source.png", "frame": 0},
+        "duration": {"fps": 12, "frames": 6},
+        "mesh": {"mode": "grid", "vertices": [], "triangles": [], "weights": []},
+        "bones": [
+            {
+                "id": "b0",
+                "name": "spine",
+                "parent": None,
+                "rest": {"head": [16, 48], "tail": [16, 32]},
+                "radius": SIZE,
+                "falloff": "smooth",
+            }
+        ],
+        "bind": {"mode": "auto", "power": 2.0, "radius_scale": 1.0},
+        "keyframes": [
+            {"frame": 0, "pose": {"b0": {"rot": 0.0, "tx": 0, "ty": 0}}},
+            {"frame": 5, "pose": {"b0": {"rot": 0.0, "tx": 40, "ty": 0}}},
+        ],
+        "playback": {"loop": True},
+        "layers": {
+            "split": True,
+            "character": "character.png",
+            "tolerance": 40,
+            "soft_edges": 0,
+            "edge_cleanup": 0,
+            "fade": 4,
+        },
+    }
+
+
+def _scene() -> tuple[dict, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The rig, its still, its character, and a plate the user replaced."""
+    rig = _rig()
+
+    source = np.zeros((SIZE, SIZE, 4), dtype=np.uint8)
+    source[:, :, 1] = 190
+    source[:, :, 3] = 255
+    source[32:48, 8:24] = (0, 0, 255, 255)
+
+    alpha = character_alpha(source, tolerance=40, soft_edges=0, edge_cleanup=0)
+    character, plate = split_layers(source, alpha)
+
+    # A background the user replaced by hand, with a red mark in the strip
+    # the character travels into: the automatic reconstruction smears a mark
+    # like this one, which is exactly why the brush is there.
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+    region = character_region(rig, alpha, weights=weights)
+    ys, xs = np.nonzero(region)
+    centre_x = (int(xs.min()) + int(xs.max())) // 2
+    centre_y = (int(ys.min()) + int(ys.max())) // 2
+    plate[centre_y - 8 : centre_y + 8, centre_x - 8 : centre_x + 8] = (0, 0, 255, 255)
+
+    return rig, source, character, plate, alpha
+
+
+def _write_corrections(path: Path, result: dict) -> None:
+    """The project's corrections, in the shape the editor writes them."""
+    bbox = result["bbox"]
+    mask = cv2.imread(str(Path(result["mask"])), cv2.IMREAD_UNCHANGED)
+    content = cv2.imread(str(Path(result["content"])), cv2.IMREAD_UNCHANGED)
+
+    entry = {
+        "bbox": bbox,
+        "fade": result["fade"],
+        "mask": base64.b64encode(cv2.imencode(".png", mask)[1].tobytes()).decode(),
+        "content": base64.b64encode(cv2.imencode(".png", content)[1].tobytes()).decode(),
+    }
+    path.write_text(json.dumps({"corrections": [entry]}))
+
+
+def test_the_patch_shows_the_correction_and_keeps_it(tmp_path: Path) -> None:
+    """
+    The correction is what the frame shows - before and after a rebuild.
+
+    The patch is the ground the character uncovers, reconstructed from the
+    plate.  A correction the user painted into that ground is the very case
+    the brush exists for, so the patch has to show it - and a patch that is
+    rebuilt (the feather changed, the motion changed) has to show it again.
+    """
+    rig, source, character, plate, alpha = _scene()
+    source_path = tmp_path / "source.png"
+    cv2.imwrite(str(source_path), source)
+    write_layer(tmp_path / "character.png", character)
+    write_layer(tmp_path / "background.png", plate)
+
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+    region = character_region(rig, alpha, weights=weights)
+    ys, xs = np.nonzero(region)
+    assert xs.size > 0, "the scene has no swept area to correct"
+
+    # The user paints over the ground the patch invents, in the middle of the
+    # swept area, and heals it.
+    centre_x = (int(xs.min()) + int(xs.max())) // 2
+    centre_y = (int(ys.min()) + int(ys.max())) // 2
+    strokes = [{"points": [[centre_x, centre_y]], "radius": 6}]
+
+    healed = heal_file(
+        tmp_path / "background.png",
+        strokes,
+        target_path=tmp_path / "background.png",
+        artifacts_dir=tmp_path / "artifacts",
+        fade=FADE,
+        radius=6,
+        canvas=(SIZE, SIZE),
+    )
+    _write_corrections(corrections_path(source_path), healed)
+
+    healed_plate = cv2.imread(str(tmp_path / "background.png"), cv2.IMREAD_UNCHANGED)
+
+    def frame_for(rig_document: dict) -> np.ndarray:
+        """One frame through the engine's own render, as the editor runs it."""
+        rig_path = tmp_path / f"rig_{rig_document['layers']['fade']}.json"
+        rig_path.write_text(json.dumps(rig_document))
+        output = tmp_path / f"frame_{rig_document['layers']['fade']}.png"
+
+        result = deform_video(
+            input_path=str(source_path),
+            output_path=str(output),
+            rig=str(rig_path),
+            start_frame=0,
+            end_frame=0,
+            fps=12.0,
+            iterations=6,
+            still=True,
+        )
+        assert result["success"], result.get("error")
+
+        image = cv2.imread(str(output), cv2.IMREAD_UNCHANGED)
+        assert image is not None
+        return image
+
+    def ground_frame(rig_document: dict) -> np.ndarray:
+        """The same frame without the correction: the ground the engine invented."""
+        corrections = corrections_path(source_path)
+        saved = corrections.read_bytes()
+        corrections.unlink()
+
+        try:
+            return frame_for(rig_document)
+        finally:
+            corrections.write_bytes(saved)
+
+    def assert_shows_the_correction(frame: np.ndarray, ground_frame: np.ndarray) -> None:
+        """The painted area carries the correction, not the invented ground."""
+        mask = stroke_mask((SIZE, SIZE), strokes, 6)
+        ys, xs = np.nonzero(mask > 0)
+        assert len(ys) > 0
+
+        moved = np.abs(frame[ys, xs, :3].astype(int) - ground_frame[ys, xs, :3].astype(int))
+        assert moved.mean() > 20, "the patch painted over the correction"
+
+        # And the frame moved towards the correction, not away from it.
+        to_correction = np.abs(frame[ys, xs, :3].astype(int) - healed_plate[ys, xs, :3].astype(int))
+        to_ground = np.abs(
+            ground_frame[ys, xs, :3].astype(int) - healed_plate[ys, xs, :3].astype(int)
+        )
+        assert to_correction.mean() < to_ground.mean()
+
+    # The frame the user sees shows the correction ...
+    frame = frame_for(rig)
+    assert_shows_the_correction(frame, ground_frame(rig))
+
+    # ... and it still shows it after the patch is rebuilt: the feather
+    # changed, so the patch is built again - with the correction in it.
+    rebuilt = dict(rig)
+    rebuilt["layers"] = dict(rig["layers"], fade=8)
+    frame_after = frame_for(rebuilt)
+    assert_shows_the_correction(frame_after, ground_frame(rebuilt))
+
+
+def test_the_patch_is_rebuilt_when_a_correction_is_added(tmp_path: Path) -> None:
+    """A correction is part of the patch's identity, so the patch is stale."""
+    rig, source, character, plate, _alpha = _scene()
+    source_path = tmp_path / "source.png"
+    cv2.imwrite(str(source_path), source)
+    write_layer(tmp_path / "background.png", plate)
+
+    weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
+
+    _patch, path = resolve_patch_layer(rig, source_path, character, plate, weights=weights)
+    assert path is not None and path.exists()
+
+    # The same rig, with a correction painted into the ground: the patch is
+    # stale now, because the ground it shows is not the ground any more.
+    strokes = [{"points": [[32, 40]], "radius": 6}]
+    healed = heal_file(
+        tmp_path / "background.png",
+        strokes,
+        target_path=tmp_path / "background.png",
+        artifacts_dir=tmp_path / "artifacts",
+        fade=FADE,
+        radius=6,
+        canvas=(SIZE, SIZE),
+    )
+    _write_corrections(corrections_path(source_path), healed)
+
+    stale, path = resolve_patch_layer(
+        rig, source_path, character, plate, weights=weights, build=False
+    )
+    assert stale is None, "the patch was not stale after a correction"

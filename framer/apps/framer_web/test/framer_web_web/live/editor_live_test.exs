@@ -1361,6 +1361,46 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       await_idle_orchestrator()
     end
+
+    test "a stroke without a painted point is refused", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      render_click(view, "select_tool", %{"tool" => "heal"})
+
+      # A stroke the user never painted: there is nothing to heal.
+      render_hook(view, "heal_stroke", %{"stroke" => %{"points" => [], "radius" => 12}})
+
+      render_click(view, "apply_healing", %{})
+
+      assert render(view) =~ "Paint over the area you want to heal first"
+    end
+
+    test "a failed correction keeps the strokes, so the paint can be tried again", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      render_click(view, "select_tool", %{"tool" => "heal"})
+
+      render_hook(view, "heal_stroke", %{"stroke" => %{"points" => [[16, 16]], "radius" => 12}})
+      assert render(view) =~ "1 stroke painted"
+
+      # The correction failed: the strokes are still the user's - on the
+      # server and in the browser - so the paint can be tried again.
+      Phoenix.PubSub.broadcast(
+        FramerWeb.PubSub,
+        FramerWeb.Renderer.topic(rig["id"]),
+        {:heal, %{status: :failed, error: "the engine could not heal the background"}}
+      )
+
+      assert wait_for(fn -> render(view) =~ "Healing failed" end)
+      assert render(view) =~ "1 stroke painted"
+      refute has_element?(view, "#apply-healing-btn[disabled]")
+    end
   end
 
   # Wait for something the editor shows: the export's outcome arrives over

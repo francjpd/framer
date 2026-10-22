@@ -430,6 +430,9 @@ def op_heal(req: dict[str, Any]) -> dict[str, Any]:
             "heal requires 'plate', 'strokes', 'target' and 'artifacts' options"
         )
 
+    canvas = opts.get("canvas")
+    canvas_size = (int(canvas[0]), int(canvas[1])) if canvas else None
+
     result = heal_file(
         plate,
         read_strokes(strokes_path),
@@ -437,6 +440,7 @@ def op_heal(req: dict[str, Any]) -> dict[str, Any]:
         artifacts_dir=artifacts,
         fade=int(opts.get("fade", 12)),
         radius=int(opts.get("radius", 12)),
+        canvas=canvas_size,
     )
 
     return {"output": req.get("output"), "healed": result}
@@ -508,7 +512,7 @@ _OPTION_KEYS: dict[str, set[str]] = {
     },
     "deform": {"rig", "rig_path", "iterations", "weights", "still", "radius_scale", "patch"},
     "patch": {"rig", "rig_path", "iterations", "weights", "still"},
-    "heal": {"plate", "strokes", "target", "artifacts", "fade", "radius"},
+    "heal": {"plate", "strokes", "target", "artifacts", "fade", "radius", "canvas"},
     "merge": {"chunks"},
 }
 

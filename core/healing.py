@@ -14,7 +14,11 @@ The brush is the same kind of fix, done by hand:
   reconstruction the automatic patch uses (`core.patch.reconstruct`);
 * the correction merges into the untouched background with the very same
   falloff (`core.patch.feather_ramp`) - the alpha ramp that is opaque in the
-  middle of the area and transparent at its edge.
+  middle of the area and transparent at its edge.  The ramp is measured from
+  the area the user painted, not from the rig's absolute feather width: the
+  correction is fully opaque across the painted area's middle, so the pixels
+  the user covered are actually replaced, and it feathers into the untouched
+  background at the edge of the painted area, never as a hard-edged blob.
 
 So a hand-painted correction is not a blob pasted on top of the plate: it
 behaves exactly like the patch the engine builds, and the plate stays fully
@@ -39,10 +43,15 @@ import numpy as np
 
 from core.errors import RigError
 from core.layers import DEFAULT_FADE, write_layer
-from core.patch import feather_ramp, reconstruct
+from core.patch import feather_ramp, reconstruct, region_radius
 
 # The radius of the round brush, in pixels, when a stroke does not name one.
 DEFAULT_BRUSH_RADIUS = 12
+
+# The narrowest falloff band a manual correction may have, in pixels.  A
+# correction is never a hard-edged blob, so the band is never zero, whatever
+# the rig's own feather says.
+MIN_BAND = 3
 
 # The inpaint radius for the reconstruction.  The same width the automatic
 # patch uses, so a hand-painted correction is synthesised exactly like the
@@ -116,6 +125,31 @@ def stroke_mask(
     return mask
 
 
+def correction_band(mask: np.ndarray, fade: int) -> int:
+    """
+    The width of the falloff band of a manual correction, in pixels.
+
+    The ramp is the patch's own ramp, so a correction merges into the
+    untouched background exactly like the automatic patch does - but it is
+    measured from the area the user painted, not from the rig's absolute
+    feather width.  A brush-sized area is smaller than the feather the rig
+    records, so the band is scaled down to what the painted area can carry:
+    the correction is fully opaque across its middle and only its edge
+    feathers into the background.
+
+    The band is never zero: a rig with no feather of its own still gets a
+    correction with a soft edge, never a hard-edged blob.
+    """
+    radius = region_radius(mask)
+    # The widest band that still leaves the painted area opaque across its
+    # middle: the ramp reaches full opacity half way into the area.
+    limit = max(1, int(radius) // 2)
+
+    if fade <= 0:
+        return max(1, min(MIN_BAND, limit))
+    return max(1, min(int(fade), limit))
+
+
 def heal_plate(
     plate: np.ndarray,
     strokes: Iterable[Any],
@@ -135,7 +169,7 @@ def heal_plate(
     Args:
         plate: the background plate, BGRA.
         strokes: the strokes the user painted.
-        fade: the width of the feather, in pixels.
+        fade: the width of the feather the rig records, in pixels.
         radius: the brush radius for strokes that do not name one.
 
     Returns:
@@ -147,6 +181,7 @@ def heal_plate(
         * ``replaced`` - what it replaced: the plate's own pixels there, BGRA.
         * ``bbox`` - the rectangle the correction covers, as
           ``(x, y, width, height)``.
+        * ``band`` - the width of the falloff band, in pixels.
     """
     if plate.ndim != 3 or plate.shape[2] != 4:
         raise RigError(f"the healing brush needs a BGRA plate, got shape {plate.shape}")
@@ -155,16 +190,18 @@ def heal_plate(
     if mask.max() == 0:
         raise RigError("the healing brush needs at least one painted point")
 
+    # The very same ramp the automatic patch feathers with: opaque in the
+    # middle of the area, transparent at its edge - measured from the area
+    # the user painted, so the correction is opaque where they painted.
+    band = correction_band(mask, fade)
+    ramp = feather_ramp(mask, band)
+    alpha = (ramp.astype(np.float32) / 255.0)[:, :, np.newaxis]
+
     bgr = plate[:, :, :3]
     content_bgr = reconstruct(plate, mask, INPAINT_RADIUS)
     content = np.concatenate(
         [content_bgr, np.full(plate.shape[:2] + (1,), 255, dtype=np.uint8)], axis=2
     )
-
-    # The very same ramp the automatic patch feathers with: opaque in the
-    # middle of the area, transparent at its edge.
-    ramp = feather_ramp(mask, fade)
-    alpha = (ramp.astype(np.float32) / 255.0)[:, :, np.newaxis]
 
     healed = bgr.astype(np.float32) * (1.0 - alpha) + content_bgr.astype(np.float32) * alpha
     healed = np.clip(healed, 0, 255).astype(np.uint8)
@@ -178,6 +215,7 @@ def heal_plate(
         "content": content,
         "replaced": plate.copy(),
         "bbox": mask_bbox(mask),
+        "band": band,
     }
 
 
@@ -211,6 +249,7 @@ def heal_file(
     artifacts_dir: str | Path,
     fade: int = DEFAULT_FADE,
     radius: int = DEFAULT_BRUSH_RADIUS,
+    canvas: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """
     Heal a plate on disk and write the training artefacts beside it.
@@ -218,6 +257,21 @@ def heal_file(
     The three artefacts - the content that was painted, the mask it covered
     and the pixels it replaced - are written as PNGs, cropped to the painted
     rectangle, so the editor can store them the moment the brush is used.
+
+    The strokes are painted in the canvas's own pixels, and the plate the
+    editor shows is fitted to the canvas, so the plate is fitted to the
+    canvas too before it is healed: the correction then lands exactly where
+    the user painted it, and the rectangle the artefacts are cropped to is a
+    rectangle in canvas pixels.
+
+    Args:
+        plate_path: the background plate to heal.
+        strokes: the strokes the user painted, in canvas pixels.
+        target_path: where the healed plate is written.
+        artifacts_dir: where the training artefacts are written.
+        fade: the width of the feather the rig records, in pixels.
+        radius: the brush radius for strokes that do not name one.
+        canvas: the canvas size, as ``(width, height)``.
 
     Returns:
         A map with the healed plate's path, the artefacts' paths and the
@@ -231,8 +285,14 @@ def heal_file(
             [plate, np.full(plate.shape[:2] + (1,), 255, dtype=np.uint8)], axis=2
         )
 
+    if canvas is not None:
+        width, height = int(canvas[0]), int(canvas[1])
+        if width > 0 and height > 0 and (plate.shape[1], plate.shape[0]) != (width, height):
+            plate = cv2.resize(plate, (width, height), interpolation=cv2.INTER_LINEAR)
+
     result = heal_plate(plate, strokes, fade=fade, radius=radius)
     bbox = result["bbox"]
+    band = result["band"]
 
     artifacts = Path(artifacts_dir)
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -251,7 +311,7 @@ def heal_file(
 
     meta = {
         "bbox": {"x": bbox[0], "y": bbox[1], "width": bbox[2], "height": bbox[3]},
-        "fade": fade,
+        "fade": band,
         "radius": radius,
     }
     meta_path = artifacts / META_FILENAME
@@ -264,7 +324,7 @@ def heal_file(
         "replaced": str(replaced_path),
         "meta": str(meta_path),
         "bbox": meta["bbox"],
-        "fade": fade,
+        "fade": band,
     }
 
 
@@ -289,7 +349,9 @@ __all__ = [
     "INPAINT_RADIUS",
     "MASK_FILENAME",
     "META_FILENAME",
+    "MIN_BAND",
     "REPLACED_FILENAME",
+    "correction_band",
     "crop",
     "heal_file",
     "heal_plate",

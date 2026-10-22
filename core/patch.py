@@ -32,6 +32,7 @@ keeps the frame fully opaque.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import uuid
@@ -58,6 +59,13 @@ from core.layers import (
 # The sidecar that records what the patch was built from, so a rig that
 # changed rebuilds it instead of reusing a stale file.
 PATCH_META_FILENAME = "patch.json"
+
+# The manual corrections a project holds, beside the still: the fixes the
+# user painted into the background layer with the healing brush.  The editor
+# writes them from the corpus, and the engine re-applies them when it builds
+# the patch, so a correction is never painted over by a patch that is
+# rebuilt.
+CORRECTIONS_FILENAME = "corrections.json"
 
 # The alpha above which a pixel counts as character.  Named, not magic: a
 # soft-edged character mask makes this a real choice.
@@ -131,10 +139,19 @@ def _layer_digest(layer: np.ndarray | None) -> str | None:
     return hashlib.sha1(np.ascontiguousarray(layer).tobytes()).hexdigest()
 
 
+def _file_digest(path: str | Path) -> str | None:
+    """The digest of a file, or None when there is no file."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    return hashlib.sha1(path.read_bytes()).hexdigest()
+
+
 def patch_fingerprint(
     rig: dict[str, Any],
     character: np.ndarray | None = None,
     plate: np.ndarray | None = None,
+    corrections: str | None = None,
 ) -> str:
     """
     A stable fingerprint of everything the patch is built from.
@@ -148,7 +165,8 @@ def patch_fingerprint(
     layer (the editor's "Change" action) rebuilds the patch instead of reusing
     a patch built from the old material.  The digest is of the decoded pixels,
     so a copy of the same layer - the export snapshots the layers beside the
-    still - keeps the patch reusable.
+    still - keeps the patch reusable.  The manual corrections are part of it
+    too: a correction the user painted is part of the ground the patch shows.
     """
     relevant = {
         "canvas": rig.get("canvas"),
@@ -169,6 +187,7 @@ def patch_fingerprint(
         "fade": patch_fade(rig),
         "plate": _layer_digest(plate),
         "character": _layer_digest(character),
+        "corrections": corrections,
     }
     blob = json.dumps(relevant, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha1(blob).hexdigest()
@@ -246,6 +265,126 @@ def feather_ramp(region: np.ndarray, fade: int) -> np.ndarray:
     return (inner * 255).astype(np.uint8)
 
 
+def region_radius(region: np.ndarray) -> float:
+    """
+    The inscribed radius of a region: the largest distance from a covered
+    pixel to the region's edge.
+
+    It is how wide a falloff band a region can carry and still have an
+    opaque middle, so the healing brush uses it to size its own band.
+    """
+    if region.max() == 0:
+        return 0.0
+    distance = cv2.distanceTransform((region > 0).astype(np.uint8), cv2.DIST_L2, 3)
+    return float(distance.max())
+
+
+def corrections_path(source_path: str | Path) -> Path:
+    """Where a project's manual corrections live: beside the still."""
+    return Path(source_path).parent / CORRECTIONS_FILENAME
+
+
+def _decode_png(encoded: Any) -> np.ndarray | None:
+    """Decode a base64 PNG out of a corrections bundle, or None."""
+    if not isinstance(encoded, str) or not encoded:
+        return None
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        return None
+    image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        return None
+    if image.ndim == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGRA)
+    if image.shape[2] == 3:
+        alpha = np.full(image.shape[:2] + (1,), 255, dtype=np.uint8)
+        return np.concatenate([image, alpha], axis=2)
+    return image
+
+
+def _decode_mask(encoded: Any) -> np.ndarray | None:
+    """Decode the mask of a correction: the area the brush covered."""
+    image = _decode_png(encoded)
+    if image is None:
+        return None
+    return image[:, :, 0] if image.ndim == 3 else image
+
+
+def load_corrections(path: str | Path, shape: tuple[int, int]) -> list[dict[str, Any]]:
+    """
+    The manual corrections a project holds, in canvas space.
+
+    Each correction carries the content that was painted and the area it
+    covered - both cropped to the painted rectangle - and the width of the
+    band it was feathered with.  The editor writes them from the corpus, so
+    a patch that is rebuilt re-applies the user's own fixes instead of
+    painting over them.
+    """
+    path = Path(path)
+    if not path.exists():
+        return []
+
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+
+    if not isinstance(payload, dict):
+        return []
+
+    height, width = shape
+    corrections: list[dict[str, Any]] = []
+
+    for entry in payload.get("corrections") or []:
+        if not isinstance(entry, dict):
+            continue
+
+        mask = _decode_mask(entry.get("mask"))
+        content = _decode_png(entry.get("content"))
+        if mask is None or content is None:
+            continue
+
+        bbox = entry.get("bbox") or {}
+        x = int(bbox.get("x") or 0)
+        y = int(bbox.get("y") or 0)
+        w = int(bbox.get("width") or 0)
+        h = int(bbox.get("height") or 0)
+
+        full_mask = np.zeros((height, width), np.uint8)
+        full_content = np.zeros((height, width, 4), np.uint8)
+        full_mask[y : y + h, x : x + w] = mask[:h, :w]
+        full_content[y : y + h, x : x + w] = content[:h, :w]
+
+        corrections.append(
+            {
+                "mask": full_mask,
+                "content": full_content,
+                "band": max(1, int(entry.get("fade") or 0)),
+            }
+        )
+
+    return corrections
+
+
+def apply_corrections(colour: np.ndarray, corrections: list[dict[str, Any]]) -> np.ndarray:
+    """
+    The manual corrections painted over the background, applied to the ground.
+
+    A correction is the user's own fix for a piece of the ground the patch
+    invents: the surrounding background painted over the bad area, feathered
+    at its edge.  It is applied here with the very same ramp it was applied
+    to the plate with, so a patch that is rebuilt shows the correction
+    instead of the ground it replaced.
+    """
+    for correction in corrections:
+        ramp = feather_ramp(correction["mask"], correction["band"])
+        alpha = (ramp.astype(np.float32) / 255.0)[:, :, np.newaxis]
+        content = correction["content"][:, :, :3].astype(np.float32)
+        colour = colour.astype(np.float32) * (1.0 - alpha) + content * alpha
+    return np.clip(colour, 0, 255).astype(np.uint8)
+
+
 def build_patch(
     rig: dict[str, Any],
     alpha: np.ndarray,
@@ -254,6 +393,7 @@ def build_patch(
     fade: int = DEFAULT_FADE,
     weights: np.ndarray | None = None,
     iterations: int = 5,
+    corrections: list[dict[str, Any]] | None = None,
 ) -> np.ndarray:
     """
     The patch layer: BGRA, the reconstructed region with the feathered alpha.
@@ -264,9 +404,13 @@ def build_patch(
     The alpha ramps over the region, so the patch is opaque where the
     character travels and merges into the untouched background at the region's
     edge.
+
+    The manual corrections the user painted are applied over that ground, so
+    the patch shows the user's own fix where there is one.
     """
     region = character_region(rig, alpha, weights=weights, iterations=iterations)
     colour = reconstruct(plate, region)
+    colour = apply_corrections(colour, corrections or [])
     ramp = feather_ramp(region, fade)
     return np.concatenate([colour, ramp[:, :, None]], axis=2)
 
@@ -328,7 +472,15 @@ def resolve_patch_layer(
         return None, None
 
     path = patch_path(source_path)
-    fingerprint = patch_fingerprint(rig, character, plate)
+    size = int(rig["canvas"]["width"])
+    height = int(rig["canvas"]["height"])
+
+    # The manual corrections the user painted are part of the ground the
+    # patch shows, so they are part of the patch's identity: a correction
+    # that is added makes the materialised patch stale.
+    corrections_path_ = corrections_path(source_path)
+    corrections_digest = _file_digest(corrections_path_)
+    fingerprint = patch_fingerprint(rig, character, plate, corrections_digest)
 
     if path.exists():
         meta = read_patch_meta(path)
@@ -342,14 +494,18 @@ def resolve_patch_layer(
         # what decides, so a patch built for another rig is never composited.
         return None, None
 
-    size = int(rig["canvas"]["width"])
-    height = int(rig["canvas"]["height"])
-
     alpha = _resize(character[:, :, 3], size, height)
     plate = _resize(plate, size, height)
+    corrections = load_corrections(corrections_path_, (height, size))
 
     patch = build_patch(
-        rig, alpha, plate, fade=fade, weights=weights, iterations=iterations
+        rig,
+        alpha,
+        plate,
+        fade=fade,
+        weights=weights,
+        iterations=iterations,
+        corrections=corrections,
     )
     write_layer(path, patch)
     write_patch_meta(
@@ -372,14 +528,19 @@ def _resize(layer: np.ndarray, width: int, height: int) -> np.ndarray:
 
 __all__ = [
     "ALPHA_THRESHOLD",
+    "CORRECTIONS_FILENAME",
     "DEFAULT_FADE",
     "DEFAULT_FRAMES",
     "INPAINT_RADIUS",
     "PATCH_FILENAME",
+    "apply_corrections",
     "build_patch",
     "character_region",
+    "corrections_path",
     "feather_ramp",
+    "load_corrections",
     "reconstruct",
+    "region_radius",
     "resolve_patch_layer",
     "timeline_frames",
 ]

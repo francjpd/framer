@@ -617,7 +617,7 @@ defmodule FramerWebWeb.EditorLive do
            "The healing brush needs the background layer: keep it to heal the background"
          )}
 
-      strokes == [] ->
+      Renderer.validate_strokes(strokes) != :ok ->
         {:noreply, assign(socket, :error, "Paint over the area you want to heal first")}
 
       true ->
@@ -1801,8 +1801,9 @@ defmodule FramerWebWeb.EditorLive do
         <h2 class="mb-2 font-semibold uppercase tracking-wide opacity-70">Healing brush</h2>
         <p class="opacity-60">
           Paint over a bad area of the background layer: the surrounding background is
-          painted over it, feathered with the patch's own falloff, so the fix merges into
-          the untouched background instead of sitting on it as a hard-edged blob.
+          painted over it, opaque where you painted and feathered with the patch's own
+          falloff at its edge, so the fix merges into the untouched background instead of
+          sitting on it as a hard-edged blob.
         </p>
         <form id="heal-radius-form">
           <label class="label-text" for="heal-radius">Brush size</label>
@@ -2541,16 +2542,17 @@ defmodule FramerWebWeb.EditorLive do
   # The healing brush's result.  A completed correction is on the plate, so
   # the preview re-fetches the background layer and the strokes are spent; the
   # correction itself is in the corpus, which is where the training material
-  # lives from now on.
+  # lives from now on.  A failed correction leaves the strokes alone - on both
+  # sides - so the user can try again or clear them.
   defp apply_heal_result(socket, payload) do
     socket =
       socket
       |> assign(:blocking_loader, nil)
-      |> assign(:heal_strokes, [])
       |> assign(:corpus_count, Corpus.count())
 
     if payload[:status] == :completed do
       socket
+      |> assign(:heal_strokes, [])
       |> assign(:status, "Background healed - the correction is stored for training")
       |> assign(:error, payload[:error])
       |> push_event("reload_background", %{})

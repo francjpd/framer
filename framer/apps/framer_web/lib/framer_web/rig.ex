@@ -36,6 +36,10 @@ defmodule FramerWeb.Rig do
   # was built from. A rig that changed rebuilds the patch instead of reusing a
   # stale file.
   @patch_meta_filename "patch.json"
+  # The manual corrections a project holds, beside the still: the fixes the
+  # user painted into the background layer. The engine re-applies them when
+  # it rebuilds the patch, so a correction is never painted over.
+  @corrections_filename "corrections.json"
   @default_tolerance 30
   @default_soft_edges 0
   @default_edge_cleanup 0
@@ -66,6 +70,7 @@ defmodule FramerWeb.Rig do
   def plate_filename, do: @plate_filename
   def patch_filename, do: @patch_filename
   def patch_meta_filename, do: @patch_meta_filename
+  def corrections_filename, do: @corrections_filename
   def default_fade, do: @default_fade
   def layers_key, do: @layers_key
 
