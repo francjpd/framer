@@ -208,10 +208,12 @@ The operation travels through the normal Port contract
 * `options.weights` is an optional dense-weight `.npz` cache path.
 * `options.patch` decides what happens with the patch layer: `auto` (the
   default) materialises it when it is missing or stale, `reuse` uses the
-  materialised patch and never builds one.  The editor's extraction, its
-  single-frame render and its export pass `reuse`, so none of them pays for
-  the whole-timeline region sweep; only the compute action materialises the
-  patch.
+  materialised patch and never builds one.  The editor's extraction and its
+  single-frame render pass `reuse`, and so do the chunks of an export, so none
+  of them pays for the whole-timeline region sweep.  The patch is materialised
+  by the compute action, for the project, and by an export's job, for the
+  export: it builds one in the export directory before it dispatches the
+  chunks, so every chunk of that job composites the same file.
 * The response reports the materialised character-layer path when the engine
   wrote it (the plate is written beside it under its own fixed name), and the
   patch layer in effect - the file the engine built or the one it reused.

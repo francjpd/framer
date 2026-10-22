@@ -278,7 +278,39 @@ defmodule FramerWebWeb.RigControllerTest do
       assert body["job_id"]
       refute RigStore.patch_path(id)
 
-      stop_orchestrator()
+      await_idle_orchestrator()
+    end
+
+    test "a rig whose patch cannot be built fails the job with a readable message", %{
+      conn: conn
+    } do
+      {:ok, project} =
+        RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+
+      id = project["id"]
+
+      rig =
+        Fixtures.simple_rig(32)
+        |> Map.put("id", id)
+        |> FramerWeb.Rig.enable_split()
+
+      _saved = RigStore.save(rig)
+
+      # The cut-out the patch is built from cannot be read, so the job's
+      # preparation fails - and the export must say so rather than ship the
+      # character over the plate.
+      File.write!(Path.join(RigStore.project_dir(id), "character.png"), "not a png")
+
+      body = conn |> post(~p"/api/rigs/#{id}/export", %{"format" => "webm"}) |> json_response(202)
+      assert body["job_id"]
+
+      state = await_job_status(:failed)
+
+      assert state.job.status == :failed
+      assert state.job.error =~ "patch"
+      refute state.job.error =~ ~r/^:[a-z_]+$/
+
+      await_idle_orchestrator()
     end
   end
 

@@ -49,6 +49,18 @@ defmodule FramerCore.Player do
     GenServer.cast(via_tuple(player_id), {:process_chunk, chunk})
   end
 
+  @doc """
+  Run a job's preparation request.
+
+  The preparation is the work every chunk of the job needs before any chunk
+  can run - the export's patch, for instance.  It is not a chunk: it has no
+  frame range and it is not merged into the output, so it is reported back
+  under its own name.
+  """
+  def prepare(player_id, request) do
+    GenServer.cast(via_tuple(player_id), {:prepare, request})
+  end
+
   def get_status(player_id) do
     GenServer.call(via_tuple(player_id), :get_status)
   end
@@ -99,6 +111,18 @@ defmodule FramerCore.Player do
   end
 
   @impl true
+  def handle_cast({:prepare, request}, state) do
+    target = target(state)
+
+    task =
+      Task.async(fn ->
+        Dispatch.execute(target, request)
+      end)
+
+    {:noreply, %{state | status: :busy, current_chunk: nil, current_task_ref: task.ref}}
+  end
+
+  @impl true
   def handle_call(:get_status, _from, state) do
     {:reply, state, state}
   end
@@ -106,27 +130,12 @@ defmodule FramerCore.Player do
   @impl true
   def handle_info({ref, result}, %{current_task_ref: ref} = state) do
     Process.demonitor(ref, [:flush])
-    chunk = state.current_chunk
-    notify({:chunk_finished, state.id, chunk.id, result})
-    notify({:prefetch_request, state.id})
-
-    {:noreply,
-     %{
-       state
-       | status: :idle,
-         current_chunk: nil,
-         current_task_ref: nil,
-         total_processed: state.total_processed + 1
-     }}
+    {:noreply, finish_work(state, result)}
   end
 
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{current_task_ref: ref} = state) do
-    chunk = state.current_chunk
-    notify({:chunk_finished, state.id, chunk.id, {:error, {:task_down, reason}}})
-    notify({:prefetch_request, state.id})
-
-    {:noreply, %{state | status: :idle, current_chunk: nil, current_task_ref: nil}}
+    {:noreply, finish_work(state, {:error, {:task_down, reason}})}
   end
 
   @impl true
@@ -136,6 +145,28 @@ defmodule FramerCore.Player do
 
   defp target(%__MODULE__{backend: :local, worker: worker}), do: Dispatch.local(worker)
   defp target(%__MODULE__{backend: :remote, worker: worker}), do: worker
+
+  # The work that finished was either a chunk - which the orchestrator counts
+  # and retries - or the job's preparation, which the orchestrator waits for
+  # before it dispatches any chunk.
+  defp finish_work(state, result) do
+    case state.current_chunk do
+      nil ->
+        notify({:prepare_finished, state.id, result})
+
+      chunk ->
+        notify({:chunk_finished, state.id, chunk.id, result})
+        notify({:prefetch_request, state.id})
+    end
+
+    %{
+      state
+      | status: :idle,
+        current_chunk: nil,
+        current_task_ref: nil,
+        total_processed: state.total_processed + 1
+    }
+  end
 
   defp notify(message) do
     case FramerCore.Orchestrator.pid() do

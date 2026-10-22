@@ -486,6 +486,15 @@ defmodule FramerWeb.Rig do
   end
 
   @doc """
+  Whether the rig can have a patch layer at all.
+
+  This is the one rule the editor and the export share: a rig that cannot have
+  a patch has no background patch to carry, so its export carries on exactly
+  as before, while a rig that can have one must not ship without it.
+  """
+  def patch_buildable?(rig), do: patch_blocker(rig) == nil
+
+  @doc """
   Record the patch's feather width, in pixels.
 
   A split rig without a recorded fade has no patch layer at all, so the fade is

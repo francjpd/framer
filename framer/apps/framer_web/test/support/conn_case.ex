@@ -37,20 +37,52 @@ defmodule FramerWebWeb.ConnCase do
   end
 
   @doc """
-  Stop the orchestrator when a job is still processing, so the next test has a
-  clean idle worker.
-  """
-  def stop_orchestrator do
-    if Process.whereis(FramerCore.Orchestrator) do
-      try do
-        state = FramerCore.Orchestrator.get_status()
+  Leave the orchestrator idle, so the next test has a clean worker.
 
-        if state.job && state.job.status == :processing do
-          GenServer.stop(FramerCore.Orchestrator, :shutdown, 2000)
-        end
-      catch
-        :exit, _ -> :ok
-      end
+  A test that leaves a job processing would make the next test's submission
+  fail with `job_in_progress`, so the helper waits for the job to reach a
+  terminal state.  The orchestrator itself is never stopped: the editor of the
+  test that just finished is still polling it, and an orchestrator that
+  disappears takes that editor down with it.
+  """
+  def await_idle_orchestrator(attempts \\ 300) do
+    state = FramerCore.Orchestrator.get_status()
+
+    cond do
+      is_nil(state.job) ->
+        :ok
+
+      state.job.status in [:completed, :failed] ->
+        :ok
+
+      attempts <= 0 ->
+        :ok
+
+      true ->
+        Process.sleep(100)
+        await_idle_orchestrator(attempts - 1)
+    end
+  end
+
+  @doc """
+  Wait for the orchestrator's job to reach `status` and return its state.
+
+  The state carries the job's own error, which is what a failed job says
+  about itself.
+  """
+  def await_job_status(status, attempts \\ 100) do
+    state = FramerCore.Orchestrator.get_status()
+
+    cond do
+      state.job && state.job.status == status ->
+        state
+
+      attempts <= 0 ->
+        state
+
+      true ->
+        Process.sleep(100)
+        await_job_status(status, attempts - 1)
     end
   end
 end

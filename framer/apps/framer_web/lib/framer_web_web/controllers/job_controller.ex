@@ -124,6 +124,7 @@ defmodule FramerWebWeb.JobController do
 
   # A failed job says why, in words: a chunk that could not be rendered - the
   # patch could not be built, the plate was missing - fails the export loudly.
+  defp job_error(%{job: %{status: :failed, error: error}}) when is_binary(error), do: error
   defp job_error(%{job: %{status: :failed}} = state), do: Renderer.job_failure_message(state)
   defp job_error(_state), do: nil
 end

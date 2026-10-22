@@ -20,7 +20,7 @@ Request::
 
     {
       "id":          "uuid",            # opaque correlation id, echoed back
-      "op":          "remove-bg",       # remove-bg | fps-boost | loop | deform | merge | info
+      "op":          "remove-bg",       # remove-bg | fps-boost | loop | deform | patch | merge | info
       "input":       "/abs/input",      # source file (or nil for merge)
       "output":      "/abs/output",     # destination chunk file
       "start_frame": 0,                 # inclusive
@@ -374,6 +374,37 @@ def op_deform(req: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
+def op_patch(req: dict[str, Any]) -> dict[str, Any]:
+    """Materialise the rig's background patch beside the source still.
+
+    The patch is a project-level artefact: the export's job runs this once,
+    before its chunks are dispatched, so every chunk composites the same
+    patch file instead of each sweeping the timeline itself.
+    """
+    from ops.deform import materialise_patch
+
+    opts = req.get("options") or {}
+
+    rig = opts.get("rig") or opts.get("rig_path")
+    if not rig:
+        raise RuntimeError("patch requires a 'rig' option pointing at a framer.rig document")
+
+    result = materialise_patch(
+        input_path=req["input"],
+        rig=rig,
+        iterations=int(opts.get("iterations", 5)),
+        weights=opts.get("weights"),
+        still=opts.get("still"),
+    )
+
+    if not result.get("success"):
+        raise RuntimeError(
+            f"the engine could not build the patch: {result.get('error') or 'unknown error'}"
+        )
+
+    return {"output": req.get("output"), "patch": result.get("patch")}
+
+
 def op_merge(req: dict[str, Any]) -> dict[str, Any]:
     """Concatenate finished chunk files into the final output."""
     opts = req.get("options") or {}
@@ -414,6 +445,7 @@ _OPERATIONS = {
     "fps-boost": op_fps_boost,
     "loop": op_loop,
     "deform": op_deform,
+    "patch": op_patch,
     "merge": op_merge,
 }
 
@@ -437,6 +469,7 @@ _OPTION_KEYS: dict[str, set[str]] = {
         "analyze_only", "progress", "until", "workers",
     },
     "deform": {"rig", "rig_path", "iterations", "weights", "still", "radius_scale"},
+    "patch": {"rig", "rig_path", "iterations", "weights", "still"},
     "merge": {"chunks"},
 }
 

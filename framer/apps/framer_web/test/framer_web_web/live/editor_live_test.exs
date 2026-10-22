@@ -919,7 +919,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert render(view) =~ "Exporting animation"
       refute RigStore.patch_path(id)
 
-      stop_orchestrator()
+      await_idle_orchestrator()
     end
 
     test "the patch waits for the background plate it heals against", %{conn: conn} do
@@ -980,7 +980,30 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert render(view) =~ "Exporting animation"
       refute RigStore.patch_path(id)
 
-      stop_orchestrator()
+      await_idle_orchestrator()
+    end
+
+    test "an export whose patch cannot be built says so", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      id = rig["id"]
+
+      _saved =
+        RigStore.save(
+          Fixtures.simple_rig(32) |> Map.put("id", id) |> FramerWeb.Rig.enable_split()
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{id}")
+
+      # The cut-out the patch is built from cannot be read, so the job's
+      # preparation fails: the editor says so instead of claiming an export.
+      File.write!(Path.join(RigStore.project_dir(id), "character.png"), "not a png")
+
+      render_submit(form(view, "#export-form"), %{"format" => "webm"})
+
+      assert wait_for(fn -> render(view) =~ "Export failed" end)
+      assert render(view) =~ "patch"
+
+      await_idle_orchestrator()
     end
 
     test "the patch waits for a skeleton", %{conn: conn} do
@@ -1286,7 +1309,19 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert render(view) =~ "Encoding failed: out of memory"
 
       # Stop orchestrator if still processing so subsequent tests have a clean idle worker
-      stop_orchestrator()
+      await_idle_orchestrator()
+    end
+  end
+
+  # Wait for something the editor shows: the export's outcome arrives over
+  # PubSub, so it lands a moment after the request.
+  defp wait_for(fun, attempts \\ 100) do
+    cond do
+      fun.() -> true
+      attempts <= 0 -> false
+      true ->
+        Process.sleep(100)
+        wait_for(fun, attempts - 1)
     end
   end
 end

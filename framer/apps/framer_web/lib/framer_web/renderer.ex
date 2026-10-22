@@ -228,8 +228,10 @@ defmodule FramerWeb.Renderer do
   background watcher that merges the finished chunks when the job completes.
 
   The request only queues the job.  The patch the export composites is the
-  project's own, copied into the export directory; a project with no patch has
-  the job build one there, so the request never waits for a region sweep.
+  project's own, copied into the export directory; a project with no patch - or
+  with one the engine would rebuild - has the job build one there, once,
+  before the chunks are dispatched, so the request never waits for a region
+  sweep.
   """
   def submit_export(rig, opts \\ []) do
     with {:ok, source} <- source_path(rig),
@@ -250,23 +252,25 @@ defmodule FramerWeb.Renderer do
       File.write!(snapshotted_rig_path, Jason.encode!(rig))
 
       # The layer snapshot carries the project's patch and its sidecar, so the
-      # export composites the very file the editor's preview shows.  A project
-      # with no patch has nothing to copy, and the job builds one in the
-      # export directory - before the chunks are dispatched - so the request
-      # never waits for a region sweep.
+      # export composites the very file the editor's preview shows.  The job
+      # builds the patch in the export directory - before the chunks are
+      # dispatched - so the request never waits for a region sweep, and a
+      # patch the engine would rebuild is rebuilt there in that same step.
       snapshot_layer_files(rig, export_dir)
 
       options =
         %{
           "rig" => snapshotted_rig_path,
           "still" => true,
-          "iterations" => opts[:iterations] || 5
+          "iterations" => opts[:iterations] || 5,
+          "patch" => "reuse"
         }
         |> maybe_put("weights", opts[:weights])
 
       case Orchestrator.submit_job(snapshotted_source, output,
              operation: "deform",
              options: options,
+             prepare: prepare_patch(rig, snapshotted_source, options),
              total_frames: frames,
              fps: to_float(fps)
            ) do
@@ -290,6 +294,23 @@ defmodule FramerWeb.Renderer do
   end
 
   # --- internals ---
+
+  # The job's preparation: the export's own patch, materialised in the export
+  # directory before the chunks are dispatched, by one worker.  The chunks then
+  # reuse that copy, so no chunk sweeps the timeline and no two workers write
+  # the same file.
+  #
+  # A rig that cannot have a patch at all - no skeleton, no character layer, no
+  # plate - has nothing to prepare: its export carries on exactly as before.
+  defp prepare_patch(rig, source, options) do
+    if Rig.patch_buildable?(rig) do
+      %{
+        "op" => "patch",
+        "input" => source,
+        "options" => Map.take(options, ["rig", "still", "iterations", "weights"])
+      }
+    end
+  end
 
   defp start_watcher(job_id, rig_id, output, export_dir) do
     Task.start(fn -> watch(job_id, rig_id, output, export_dir) end)
@@ -330,7 +351,10 @@ defmodule FramerWeb.Renderer do
   happened instead of showing an atom.
   """
   def job_failure_message(state) do
-    "#{length(state.failed_chunks)} of #{state.total_chunks} chunks could not be rendered"
+    case Map.get(state, :job) do
+      %{error: error} when is_binary(error) -> error
+      _ -> "#{length(state.failed_chunks)} of #{state.total_chunks} chunks could not be rendered"
+    end
   end
 
   @doc false

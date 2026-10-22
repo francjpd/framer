@@ -10,7 +10,7 @@ Port worker, so the CLI and the orchestrator run the exact same code.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import cv2
 
@@ -42,6 +42,115 @@ def _resolve_rig(rig: Any) -> dict[str, Any]:
     if isinstance(rig, (str, Path)):
         return load_rig(rig)
     raise RigError("a rig is required: pass 'rig' as a path or a rig document")
+
+
+class SplitStack(NamedTuple):
+    """The layers a split rig composites: character over patch over plate."""
+
+    character: Any
+    background: Any
+    weights: Any
+    patch: Any
+    character_path: Path | None
+    patch_path: Path | None
+
+
+def _split_stack(
+    rig_document: dict[str, Any],
+    input_path: str,
+    source: Any,
+    width: int,
+    height: int,
+    *,
+    iterations: int,
+    weights: str | None,
+    build_patch: bool,
+) -> SplitStack:
+    """
+    Resolve the layers of a split rig: the cut-out, the plate and the patch.
+
+    The patch is computed from the skeleton, so it needs the same dense
+    weights the renderer uses.  They are built once here and handed to both.
+    Without the plate there is no background to heal against, so there is no
+    patch to build, and ``build_patch`` decides whether a missing patch is
+    materialised or only looked for.
+    """
+    if not is_split(rig_document):
+        return SplitStack(None, None, None, None, None, None)
+
+    character, character_path = resolve_character_layer(rig_document, source, input_path)
+    background = resolve_background_layer(rig_document, source, input_path, character)
+
+    shared_weights = None
+    patch = None
+    written_patch = None
+    if character is not None and background is not None and has_patch_layer(rig_document):
+        shared_weights = load_or_build_weights(
+            rig_document, width=width, height=height, cache_path=weights
+        )
+        patch, written_patch = resolve_patch_layer(
+            rig_document,
+            input_path,
+            character,
+            background,
+            weights=shared_weights,
+            iterations=iterations,
+            build=build_patch,
+        )
+
+    return SplitStack(
+        character, background, shared_weights, patch, character_path, written_patch
+    )
+
+
+def materialise_patch(
+    input_path: str,
+    rig: Any,
+    iterations: int = 5,
+    weights: str | None = None,
+    still: bool | None = None,
+) -> dict[str, Any]:
+    """
+    Materialise the rig's background patch beside the source still.
+
+    The patch is a project-level artefact, so the export's job builds it once,
+    before its chunks are dispatched, and every chunk then reuses that copy.
+    A rig that cannot have a patch (no skeleton, no character layer, no
+    plate) has none to build, and the export carries on without it; a rig
+    that asks for one and gets none is an error, so the export never ships
+    the character over the plate.
+    """
+    try:
+        rig_document = _resolve_rig(rig)
+
+        source = load_source(input_path, still=still)
+        width = int(rig_document["canvas"]["width"])
+        height = int(rig_document["canvas"]["height"])
+
+        stack = _split_stack(
+            rig_document,
+            input_path,
+            source,
+            width,
+            height,
+            iterations=iterations,
+            weights=weights,
+            build_patch=True,
+        )
+
+        if stack.patch is None:
+            if has_patch_layer(rig_document):
+                return {
+                    "success": False,
+                    "error": "this rig asks for a background patch, but the engine produced none",
+                }
+
+            return {"success": True, "patch": None}
+
+        return {"success": True, "patch": str(stack.patch_path or patch_path(input_path))}
+
+    except (RigError, cv2.error, OSError, ValueError) as exc:
+        return {"success": False, "error": str(exc)}
 
 
 def _resolve_frame_range(
@@ -129,33 +238,22 @@ def deform_video(
         patch_materialised = None
         shared_weights = None
         if is_split(rig_document):
-            character_layer, materialised = resolve_character_layer(
-                rig_document, source, input_path
+            stack = _split_stack(
+                rig_document,
+                input_path,
+                source,
+                width,
+                height,
+                iterations=iterations,
+                weights=weights,
+                build_patch=patch != "reuse",
             )
-            background_layer = resolve_background_layer(
-                rig_document, source, input_path, character_layer
-            )
-            if (
-                character_layer is not None
-                and background_layer is not None
-                and has_patch_layer(rig_document)
-            ):
-                # The patch is computed from the skeleton, so it needs the same
-                # dense weights the renderer uses.  They are built once here and
-                # handed to both.  Without the plate there is no background to
-                # heal against, so there is no patch to build.
-                shared_weights = load_or_build_weights(
-                    rig_document, width=width, height=height, cache_path=weights
-                )
-                patch_layer, patch_materialised = resolve_patch_layer(
-                    rig_document,
-                    input_path,
-                    character_layer,
-                    background_layer,
-                    weights=shared_weights,
-                    iterations=iterations,
-                    build=patch != "reuse",
-                )
+            character_layer = stack.character
+            background_layer = stack.background
+            shared_weights = stack.weights
+            patch_layer = stack.patch
+            materialised = stack.character_path
+            patch_materialised = stack.patch_path
 
         renderer = DeformRenderer(
             rig_document,

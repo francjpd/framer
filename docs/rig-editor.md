@@ -278,13 +278,15 @@ the preview never shows a patch the engine would rebuild.
 
 An export composites a patch: it copies the project's patch and its sidecar
 into the export directory, so every chunk of the job composites that one file,
-the same one the preview shows. When the project has no patch, the job builds
-one in the export directory before the chunks are dispatched - the request only
-queues the job, so it never waits for a region sweep - and a build that fails
-fails the export loudly, rather than shipping the character-over-plate stack. A
-rig that cannot have a patch at all (no skeleton, or no background plate to heal
-against) has nothing to build and nothing to reuse, so it exports the
-character-over-plate stack as it always did.
+the same one the preview shows. When the project has no patch, or one the
+engine would rebuild, the job builds one in the export directory before the
+chunks are dispatched - one worker writes that one file, and the request only
+queues the job, so it never waits for a region sweep - and the chunks then
+reuse that copy. A build that fails fails the export loudly, rather than
+shipping the character-over-plate stack. A rig that cannot have a patch at all
+(no skeleton, or no background plate to heal against) has nothing to build and
+nothing to reuse, so it exports the character-over-plate stack as it always
+did.
 
 **What it promises, honestly**: on a flat or gradient background the patch
 reproduces the background almost exactly. On a textured background it is a
