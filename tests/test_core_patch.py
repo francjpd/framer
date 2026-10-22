@@ -422,6 +422,50 @@ def test_the_reuse_mode_uses_the_materialised_patch(project: Path):
     assert patch.stat().st_mtime_ns == mtime
 
 
+def test_the_reuse_mode_refuses_a_patch_built_for_another_rig(project: Path):
+    """The sidecar's fingerprint decides: a stale patch is never composited."""
+    rig, _source = scene_rig()
+    rig_path = project / "rig.json"
+    rig_path.write_text(json.dumps(rig))
+
+    built = deform_video(
+        input_path=str(project / "source.png"),
+        output_path=str(project / "frame.png"),
+        rig=str(rig_path),
+        start_frame=0,
+        end_frame=0,
+        fps=12.0,
+        iterations=6,
+        still=True,
+    )
+    assert built["success"], built.get("error")
+    patch = project / PATCH_FILENAME
+    assert patch.exists()
+    mtime = patch.stat().st_mtime_ns
+
+    # The rig moves, so the materialised patch no longer describes it.
+    moved = json.loads(rig_path.read_text())
+    moved["keyframes"][-1]["pose"]["b0"]["tx"] = SHIFT * 2
+    rig_path.write_text(json.dumps(moved))
+
+    reused = deform_video(
+        input_path=str(project / "source.png"),
+        output_path=str(project / "frame2.png"),
+        rig=str(rig_path),
+        start_frame=0,
+        end_frame=0,
+        fps=12.0,
+        iterations=6,
+        still=True,
+        patch="reuse",
+    )
+
+    assert reused["success"], reused.get("error")
+    assert "patch" not in reused
+    # And the stale patch was neither composited nor rebuilt.
+    assert patch.stat().st_mtime_ns == mtime
+
+
 def test_the_patch_is_rebuilt_when_the_rig_it_came_from_changes(project: Path):
     """A rig that moved is a different region, so the patch is rebuilt."""
     rig, _source = scene_rig()

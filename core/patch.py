@@ -284,9 +284,11 @@ def resolve_patch_layer(
     The character layer and the plate are the ones the caller resolved, so the
     layer files are decoded once per operation.
 
-    With ``build=False`` the materialised patch is used as it is - when the
-    file is there - and nothing is ever built: a caller that must not pay for
-    the whole-timeline sweep gets the patch the project already has, or none.
+    With ``build=False`` the materialised patch is used when it still matches
+    the rig and nothing is ever built: a caller that must not pay for the
+    whole-timeline sweep gets the patch the project already has, or none.  The
+    sidecar's fingerprint decides whether it still matches, so a patch built
+    for another rig is never composited.
 
     Returns:
         ``(patch, written_path)``; ``written_path`` is ``None`` when an
@@ -315,20 +317,19 @@ def resolve_patch_layer(
         return None, None
 
     path = patch_path(source_path)
-
-    if not build:
-        # The caller asked for the materialised patch only: it is used as it
-        # is, and this call never builds one.
-        if path.exists():
-            return load_layer(path), None
-        return None, None
-
     fingerprint = patch_fingerprint(rig, character, plate)
+
     if path.exists():
         meta = read_patch_meta(path)
         if meta and meta.get("fingerprint") == fingerprint:
             return load_layer(path), None
-        # The rig changed since the patch was built: rebuild it.
+        # The rig changed since the patch was built: it is stale.
+
+    if not build:
+        # The caller asked for the materialised patch only: it is missing or
+        # stale, and this call never builds one.  The sidecar's fingerprint is
+        # what decides, so a patch built for another rig is never composited.
+        return None, None
 
     size = int(rig["canvas"]["width"])
     height = int(rig["canvas"]["height"])

@@ -186,10 +186,29 @@ defmodule FramerWeb.RigStoreTest do
     File.write!(patch, "patch")
 
     assert RigStore.patch_path(id) == patch
-    assert is_binary(RigStore.patch_version(id))
-    # The version travels in a URL, so it must not carry a fragment marker.
-    refute String.contains?(RigStore.patch_version(id), "#")
     assert RigStore.patch_path("../escape") == nil
+  end
+
+  test "the patch version follows the sidecar the patch was built with" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+
+    patch = Path.join(RigStore.project_dir(id), Rig.patch_filename())
+    meta = Path.join(RigStore.project_dir(id), Rig.patch_meta_filename())
+    File.write!(patch, "patch")
+
+    # Without a sidecar there is nothing to version the bytes by.
+    assert RigStore.patch_version(id) == nil
+
+    File.write!(meta, ~s({"fade": 12}))
+    version = RigStore.patch_version(id)
+    assert is_binary(version)
+    # The version travels in a URL, so it must not carry a fragment marker.
+    refute String.contains?(version, "#")
+
+    # A patch built from something else is a different patch.
+    File.write!(meta, ~s({"fade": 20}))
+    assert RigStore.patch_version(id) != version
   end
 
   test "removing the patch drops the layer and the sidecar that records it" do

@@ -646,11 +646,18 @@ defmodule FramerWebWeb.EditorLive do
 
     # The export is submitted outside the LiveView process, the way the frame
     # render and the patch build are, so the editor keeps answering while the
-    # job is prepared.
+    # job is prepared.  The patch is materialised in the project first - also
+    # off the LiveView process - so the exported frames carry the same patch
+    # the preview shows.
     socket =
       socket
       |> assign(:error, nil)
-      |> start_async(:export, fn -> Renderer.submit_export(rig, format: format) end)
+      |> start_async(:export, fn ->
+        with :ok <- Renderer.materialise_project_patch(rig),
+             {:ok, export} <- Renderer.submit_export(rig, format: format) do
+          {:ok, export}
+        end
+      end)
 
     {:noreply, socket}
   end

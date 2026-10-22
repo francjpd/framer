@@ -238,7 +238,7 @@ The Layers panel (`#layers-panel`) lists every layer belonging to the project:
 
 **When the patch applies**: the patch is built from the rig's motion, the feather and the layer files, so a change to any of them makes the materialised patch stale and the editor drops it - the row then says *not computed* and the preview stops compositing it. That happens when the slider moves, when the motion changes (a bone is moved, a keyframe is recorded) and when a layer is replaced or re-extracted. The feather and the motion apply when the patch is computed again: **Compute patch** computes it, and so does an export of a project that has no materialised patch (once, before the job runs). The extraction and the single-frame render use the materialised patch as it is, so neither pays for the whole-timeline region sweep. Dragging the slider never triggers an engine call of its own - the patch is a project-level artefact, so it is built once and reused.
 
-The three editor surfaces therefore tell the same story: a project with no materialised patch has no patch in the preview and in the rendered frame, and an export builds it in the project first, so the exported frames carry the same patch the preview would show.
+The engine is the authority on whether a materialised patch still matches the rig: the sidecar's fingerprint decides, and a patch built for another rig is never composited. So the three editor surfaces tell the same story - a project with no materialised patch has no patch in the preview and in the rendered frame, and an export builds it in the project first, so the exported frames carry the same patch the preview would show.
 
 **No-background outcome**: When the background layer is removed (`layers.background: false`), the deformed character layer renders alone against a transparent background. The viewport preview, frame render, and video export (WebM with alpha) all reflect this transparent outcome. The patch is a heal against the plate, so it is not used in that outcome either.
 
@@ -276,8 +276,8 @@ the background plate, so replacing either of them rebuilds it as well. The
 editor drops the materialised patch as soon as one of its inputs changes, so
 the preview never shows a patch the engine would rebuild.
 
-An export composites the *project's* patch: when the project has no materialised
-patch the export builds it there first - one region sweep for the whole
+An export composites the *project's* patch: the editor's export builds it in the
+project first when the project has none - one region sweep for the whole
 export, not one per chunk - and then copies the patch and its sidecar into
 the export directory, so every chunk of the job composites that one file, the
 same one the preview shows.

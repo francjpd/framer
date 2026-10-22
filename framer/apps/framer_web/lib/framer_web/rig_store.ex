@@ -132,17 +132,20 @@ defmodule FramerWeb.RigStore do
   A cache-busting version for the materialised patch layer.
 
   The patch is rebuilt whenever the rig it came from changes, so the bytes
-  behind the same URL are new.  The token is a digest of those bytes, so it
-  changes whenever they do, and it is plain text, so it survives the URL it is
-  interpolated into.
+  behind the same URL are new.  The sidecar records what the patch was built
+  from, so its digest is the patch's identity: it changes whenever the patch
+  does, and it costs a read of a small file rather than of the patch itself.
+  The token is plain text, so it survives the URL it is interpolated into.
   """
   def patch_version(id) do
     case patch_path(id) do
       nil ->
         nil
 
-      path ->
-        case File.read(path) do
+      _path ->
+        meta = Path.join(project_dir(id), Rig.patch_meta_filename())
+
+        case File.read(meta) do
           {:ok, bytes} -> Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
           _ -> nil
         end
