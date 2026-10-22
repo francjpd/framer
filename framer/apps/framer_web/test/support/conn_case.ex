@@ -35,4 +35,22 @@ defmodule FramerWebWeb.ConnCase do
     FramerWeb.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc """
+  Stop the orchestrator when a job is still processing, so the next test has a
+  clean idle worker.
+  """
+  def stop_orchestrator do
+    if Process.whereis(FramerCore.Orchestrator) do
+      try do
+        state = FramerCore.Orchestrator.get_status()
+
+        if state.job && state.job.status == :processing do
+          GenServer.stop(FramerCore.Orchestrator, :shutdown, 2000)
+        end
+      catch
+        :exit, _ -> :ok
+      end
+    end
+  end
 end

@@ -138,17 +138,11 @@ defmodule FramerWeb.RigStore do
   The token is plain text, so it survives the URL it is interpolated into.
   """
   def patch_version(id) do
-    case patch_path(id) do
-      nil ->
-        nil
-
-      _path ->
-        meta = Path.join(project_dir(id), Rig.patch_meta_filename())
-
-        case File.read(meta) do
-          {:ok, bytes} -> Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
-          _ -> nil
-        end
+    with true <- patch_path(id) != nil,
+         meta when is_map(meta) <- patch_meta(id) do
+      Base.encode16(:crypto.hash(:sha256, :erlang.term_to_binary(meta)), case: :lower)
+    else
+      _ -> nil
     end
   end
 

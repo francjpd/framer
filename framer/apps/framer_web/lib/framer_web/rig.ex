@@ -485,9 +485,6 @@ defmodule FramerWeb.Rig do
     end
   end
 
-  @doc "Whether the rig can have a patch layer at all."
-  def patch_buildable?(rig), do: patch_blocker(rig) == nil
-
   @doc """
   Record the patch's feather width, in pixels.
 

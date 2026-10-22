@@ -26,6 +26,13 @@ defmodule FramerWeb.RendererTest do
     refute event.status == :completed
   end
 
+  test "a failed job says why, in words" do
+    message = Renderer.job_failure_message(%{failed_chunks: [%{}, %{}], total_chunks: 6})
+
+    assert message == "2 of 6 chunks could not be rendered"
+    refute message =~ ":"
+  end
+
   test "a patch the engine cannot build is reported as a failure" do
     {:ok, project} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
 

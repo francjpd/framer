@@ -962,7 +962,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert FramerWeb.Rig.bone(saved, "b0")["rest"]["head"] == [16.0, 16.0]
     end
 
-    test "the export builds the project's patch when it is missing", %{conn: conn} do
+    test "the export does not wait for a patch to be built", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
       _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
       id = rig["id"]
@@ -970,16 +970,15 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       render_click(view, "toggle_background_layer", %{})
 
-      # The rig records a feather but the project has no materialised patch, so
-      # the export builds it there first: the exported frames carry the same
-      # patch the preview would show.
+      # The rig records a feather but the project has no materialised patch: the
+      # job builds it, so the export is queued at once and the request never
+      # waits for a region sweep.
       refute RigStore.patch_path(id)
 
       render_submit(form(view, "#export-form"), %{"format" => "webm"})
-      render_async(view, 60_000)
 
       assert render(view) =~ "Exporting animation"
-      assert RigStore.patch_path(id)
+      refute RigStore.patch_path(id)
 
       stop_orchestrator()
     end
@@ -1288,22 +1287,6 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       # Stop orchestrator if still processing so subsequent tests have a clean idle worker
       stop_orchestrator()
-    end
-  end
-
-  # Stop the orchestrator if a job is still processing, so the next test has a
-  # clean idle worker.
-  defp stop_orchestrator do
-    if Process.whereis(FramerCore.Orchestrator) do
-      try do
-        state = FramerCore.Orchestrator.get_status()
-
-        if state.job && state.job.status == :processing do
-          GenServer.stop(FramerCore.Orchestrator, :shutdown, 2000)
-        end
-      catch
-        :exit, _ -> :ok
-      end
     end
   end
 end

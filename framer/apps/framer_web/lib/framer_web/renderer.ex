@@ -226,11 +226,14 @@ defmodule FramerWeb.Renderer do
 
   Returns `{:ok, %{job_id: id, output: path, format: format}}` and starts a
   background watcher that merges the finished chunks when the job completes.
+
+  The request only queues the job.  The patch the export composites is the
+  project's own, copied into the export directory; a project with no patch has
+  the job build one there, so the request never waits for a region sweep.
   """
   def submit_export(rig, opts \\ []) do
     with {:ok, source} <- source_path(rig),
-         :ok <- ensure_saved(rig),
-         :ok <- materialise_project_patch(rig) do
+         :ok <- ensure_saved(rig) do
       format = opts[:format] || "webm"
       output = RigStore.output_path(rig["id"], format)
       frames = to_int(opts[:frames]) || Rig.frame_count(rig)
@@ -246,14 +249,18 @@ defmodule FramerWeb.Renderer do
       snapshotted_rig_path = Path.join(export_dir, "rig.json")
       File.write!(snapshotted_rig_path, Jason.encode!(rig))
 
+      # The layer snapshot carries the project's patch and its sidecar, so the
+      # export composites the very file the editor's preview shows.  A project
+      # with no patch has nothing to copy, and the job builds one in the
+      # export directory - before the chunks are dispatched - so the request
+      # never waits for a region sweep.
       snapshot_layer_files(rig, export_dir)
 
       options =
         %{
           "rig" => snapshotted_rig_path,
           "still" => true,
-          "iterations" => opts[:iterations] || 5,
-          "patch" => "reuse"
+          "iterations" => opts[:iterations] || 5
         }
         |> maybe_put("weights", opts[:weights])
 
@@ -299,7 +306,11 @@ defmodule FramerWeb.Renderer do
 
       state.job && state.job.id == job_id && state.job.status == :failed ->
         if export_dir, do: File.rm_rf(export_dir)
-        broadcast(rig_id, event(job_id, :failed, {:error, :job_failed}, output, state))
+
+        broadcast(
+          rig_id,
+          event(job_id, :failed, {:error, job_failure_message(state)}, output, state)
+        )
 
       attempts <= 0 ->
         if export_dir, do: File.rm_rf(export_dir)
@@ -309,6 +320,17 @@ defmodule FramerWeb.Renderer do
         Process.sleep(@poll_interval)
         watch(job_id, rig_id, output, export_dir, attempts - 1)
     end
+  end
+
+  @doc """
+  Why the job failed, in words.
+
+  A chunk that could not be rendered - the patch could not be built, the
+  plate was missing - fails the export loudly, and the message says what
+  happened instead of showing an atom.
+  """
+  def job_failure_message(state) do
+    "#{length(state.failed_chunks)} of #{state.total_chunks} chunks could not be rendered"
   end
 
   @doc false
@@ -343,42 +365,6 @@ defmodule FramerWeb.Renderer do
     case RigStore.save(rig) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  Materialise the project's patch, if the rig asks for one and the project has
-  none.
-
-  The patch is a project-level artefact, so the export composites the very
-  file the editor's preview shows.  It is built here, once, before the job
-  runs - the export directory gets a copy of it and every chunk reuses that
-  copy, so no chunk sweeps the timeline and no two workers write the same file.
-
-  A rig that records a feather but cannot have a patch is refused: an export
-  that ships the character-over-plate stack is the defect this feature exists
-  to fix.
-  """
-  def materialise_project_patch(rig) do
-    cond do
-      Rig.patch_fade(rig) == nil ->
-        :ok
-
-      not Rig.has_background_layer?(rig) ->
-        # The character-only stack: the patch is not part of it.
-        :ok
-
-      not Rig.patch_buildable?(rig) ->
-        {:error, :patch_not_buildable}
-
-      RigStore.patch_path(rig["id"]) != nil ->
-        :ok
-
-      true ->
-        case build_patch(rig) do
-          {:ok, _path} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
     end
   end
 

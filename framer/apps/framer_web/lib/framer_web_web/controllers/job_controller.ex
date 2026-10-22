@@ -10,6 +10,7 @@ defmodule FramerWebWeb.JobController do
 
   alias FramerCore.Orchestrator
   alias FramerCore.PortWorker
+  alias FramerWeb.Renderer
 
   @doc "GET /api/status - current orchestrator/job status."
   def status(conn, _params) do
@@ -112,6 +113,7 @@ defmodule FramerWebWeb.JobController do
         output: job.output_path,
         total_frames: job.total_frames
       },
+      error: job_error(state),
       total_chunks: state.total_chunks,
       completed_chunks: completed,
       failed_chunks: failed,
@@ -119,4 +121,9 @@ defmodule FramerWebWeb.JobController do
       progress: progress
     }
   end
+
+  # A failed job says why, in words: a chunk that could not be rendered - the
+  # patch could not be built, the plate was missing - fails the export loudly.
+  defp job_error(%{job: %{status: :failed}} = state), do: Renderer.job_failure_message(state)
+  defp job_error(_state), do: nil
 end

@@ -256,6 +256,32 @@ defmodule FramerWebWeb.RigControllerTest do
     end
   end
 
+  describe "POST /api/rigs/:id/export" do
+    test "queues the job without building a patch in the request", %{conn: conn} do
+      {:ok, project} =
+        RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+
+      id = project["id"]
+
+      rig =
+        Fixtures.simple_rig(32)
+        |> Map.put("id", id)
+        |> FramerWeb.Rig.enable_split()
+
+      _saved = RigStore.save(rig)
+
+      # The rig records a feather, so the job has a patch to build - the
+      # request only queues the job, so the project keeps no patch and the
+      # caller is answered straight away.
+      body = conn |> post(~p"/api/rigs/#{id}/export", %{"format" => "webm"}) |> json_response(202)
+
+      assert body["job_id"]
+      refute RigStore.patch_path(id)
+
+      stop_orchestrator()
+    end
+  end
+
   describe "GET /api/rigs/:id/result" do
     test "404s until an export exists", %{conn: conn} do
       {:ok, rig} = RigStore.save(Fixtures.simple_rig(8))
