@@ -142,6 +142,7 @@ export const LbsPreview = {
     this.layerSettingsKey = null;
     this.frame = Number(this.el.dataset.frame || 0);
     this.tool = this.el.dataset.tool || "bones";
+    this.healRadius = Number(this.el.dataset.healRadius || 12);
     this.selected = this.el.dataset.selected || null;
     this.meshVisible = this.el.dataset.mesh !== "false";
     this.labelsVisible = this.el.dataset.labels === "true";
@@ -160,6 +161,14 @@ export const LbsPreview = {
     this.lostCanvas = null;
     this.resizeObserver = null;
 
+    // The healing brush: the strokes the user painted over the background
+    // layer. They are drawn on the overlay while they are being painted and
+    // are pushed to the server as they are finished, so the correction is
+    // the user's own paint - not a rectangle the server guessed.
+    this.healRadius = Number(this.el.dataset.healRadius || 12);
+    this.healStrokes = [];
+    this.healStroke = null;
+
     this.onContextLost = (event) => this.handleContextLost(event);
     this.onContextRestored = () => this.handleContextRestored();
 
@@ -176,6 +185,23 @@ export const LbsPreview = {
     this.handleEvent("clear_overrides", () => {
       this.overrides = {};
       this.invalidate();
+      this.draw();
+    });
+
+    // The correction landed: the background plate behind the same URL now
+    // holds the healed pixels, so the layer is re-fetched. The strokes are
+    // spent - the correction they describe is on the plate.
+    this.handleEvent("reload_background", () => {
+      this.healStrokes = [];
+      this.healStroke = null;
+      const url = this.el.dataset.backgroundUrl || null;
+      if (url) this.loadBackgroundLayer(`${url}?reload=${Date.now()}`);
+      this.draw();
+    });
+
+    this.handleEvent("clear_strokes", () => {
+      this.healStrokes = [];
+      this.healStroke = null;
       this.draw();
     });
 
@@ -220,9 +246,11 @@ export const LbsPreview = {
   updated() {
     this.frame = Number(this.el.dataset.frame || 0);
     this.tool = this.el.dataset.tool || "bones";
+    this.healRadius = Number(this.el.dataset.healRadius || 12);
     this.selected = this.el.dataset.selected || null;
     this.meshVisible = this.el.dataset.mesh !== "false";
     this.labelsVisible = this.el.dataset.labels === "true";
+    this.setCursor(this.tool === "pose" ? "default" : "crosshair");
 
     const url = this.el.dataset.sourceUrl;
     if (url !== this.sourceUrl) {
@@ -1126,6 +1154,13 @@ export const LbsPreview = {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
 
+    // The painted strokes are drawn whatever the rig's mesh looks like: the
+    // healing brush works on the background layer, which exists long before
+    // the rig has a skeleton.
+    if (this.tool === "heal") {
+      this.drawHealStrokes();
+    }
+
     if (!this.rig || !this.view || !this.cache.vertexWeights) return;
 
     // The rig with the in-progress drag applied, so the overlay draws the bone
@@ -1137,6 +1172,47 @@ export const LbsPreview = {
     if (this.tool === "bones") this.drawLinkHandles(world, rig);
     this.drawHandles(world, rig);
     this.drawDrag(world, rig);
+  },
+
+  // The strokes the healing brush has painted, drawn on the overlay so the
+  // user sees the area they are about to heal.  The brush is round, so a
+  // stroke is drawn as a round-capped line of the brush's own width.
+  drawHealStrokes() {
+    const ctx = this.ctx;
+    if (!ctx || !this.view) return;
+
+    const scale = this.view.scale;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(56, 189, 248, 0.45)";
+    ctx.fillStyle = "rgba(56, 189, 248, 0.45)";
+
+    for (const stroke of this.healStrokes) {
+      const points = stroke.points || [];
+      if (points.length === 0) continue;
+
+      const radius = (stroke.radius || this.healRadius) * scale;
+      ctx.lineWidth = radius * 2;
+      ctx.beginPath();
+
+      points.forEach((point, index) => {
+        const x = point[0] * scale;
+        const y = point[1] * scale;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+
+      if (points.length === 1) {
+        // A single dab is a dot, not a line.
+        ctx.arc(points[0][0] * scale, points[0][1] * scale, radius, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
   },
 
   // The rig as the in-progress drag will commit it: a joint drag replaces the
@@ -1547,6 +1623,11 @@ export const LbsPreview = {
   // canvas depending on the tool.
   updateHover(event) {
     if (!this.rig || !this.view) return;
+    // The healing brush has no bones to hover over: the pointer is a brush.
+    if (this.tool === "heal") {
+      this.setCursor("crosshair");
+      return;
+    }
 
     const rect = this.el.getBoundingClientRect();
     const inside =
@@ -1585,6 +1666,17 @@ export const LbsPreview = {
     event.preventDefault();
 
     const point = this.toImage(event);
+
+    // The healing brush: a press starts a stroke over the background layer.
+    // It never touches the skeleton, so it returns before the bone paths.
+    if (this.tool === "heal") {
+      this.healStroke = { points: [point], radius: this.healRadius };
+      this.healStrokes.push(this.healStroke);
+      this.setCursor("crosshair");
+      this.draw();
+      return;
+    }
+
     const { rig, world } = this.interactionWorld();
 
     const handle = this.handleHit(point, world, rig);
@@ -1691,6 +1783,20 @@ export const LbsPreview = {
   },
 
   pointerMove(event) {
+    if (this.healStroke) {
+      // A stroke in progress: the painted points are collected in image
+      // coordinates, so the correction is exactly what the user painted.
+      const point = this.toImage(event);
+      const points = this.healStroke.points;
+      const last = points[points.length - 1];
+
+      if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= 1) {
+        points.push(point);
+        this.draw();
+      }
+      return;
+    }
+
     if (!this.drag) {
       this.updateHover(event);
       return;
@@ -1741,6 +1847,16 @@ export const LbsPreview = {
   },
 
   pointerUp() {
+    if (this.healStroke) {
+      const stroke = this.healStroke;
+      this.healStroke = null;
+      this.pushEvent("heal_stroke", {
+        stroke: { points: stroke.points, radius: stroke.radius },
+      });
+      this.draw();
+      return;
+    }
+
     if (!this.drag) return;
     const drag = this.drag;
     this.setCursor(this.tool === "bones" ? "crosshair" : "default");

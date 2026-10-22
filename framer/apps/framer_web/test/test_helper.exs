@@ -1,6 +1,11 @@
 ExUnit.start()
 # Ecto.Adapters.SQL.Sandbox.mode(FramerWeb.Repo, :manual)
 
+# The editor's durable store: the healing corpus. Its schema is migrated
+# before the suite runs, so a test never has to be skipped because the
+# database is not there yet.
+Ecto.Migrator.run(FramerWeb.Repo, :up, all: true)
+
 # The editor's end-to-end tests drive the engine through the Python Port
 # worker. If the environment has not been prepared (no `.venv` / `FRAMER_PYTHON`,
 # or a system python without cv2), exclude them rather than failing the suite.

@@ -8,18 +8,20 @@ config :framer_core, worker_count: 2
 config :framer_web,
   projects_dir: Path.join(System.tmp_dir!(), "framer_web_projects_test")
 
-# Configure your database (commented out: requires PostgreSQL)
-#
-# The MIX_TEST_PARTITION environment variable can be used
-# to provide built-in test partitioning in CI environment.
-# Run `mix help test` for more information.
-# config :framer_web, FramerWeb.Repo,
-#   username: "postgres",
-#   password: "postgres",
-#   hostname: "localhost",
-#   database: "framer_web_test#{System.get_env("MIX_TEST_PARTITION")}",
-#   pool: Ecto.Adapters.SQL.Sandbox,
-#   pool_size: System.schedulers_online() * 2
+# The healing corpus lives in a database of its own, in the temporary
+# directory: every `mix test` run gets a fresh one, so the corpus a test
+# leaves behind never reaches the next run.
+config :framer_web, FramerWeb.Repo,
+  database:
+    Path.join(
+      System.tmp_dir!(),
+      "framer_web_test_#{System.unique_integer([:positive])}.db"
+    ),
+  # One connection: SQLite writes are serialised anyway, and a second
+  # connection opening while the schema is being migrated would only race
+  # for the lock.
+  pool_size: 1,
+  busy_timeout: 5000
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below. The browser preview suite

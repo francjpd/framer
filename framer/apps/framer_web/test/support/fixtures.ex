@@ -163,6 +163,84 @@ defmodule FramerWebWeb.Fixtures do
     Rig.new(size, size, name: "Zero-bone fixture rig")
   end
 
+  @doc """
+  A background plate with a visible artefact in it.
+
+  The same green ground as the keyable still, but with a red block in the
+  pure-background area - the kind of area the automatic patch cannot repair
+  and the healing brush is there to fix by hand. The block is small and
+  well inside the canvas, so a brush stroke over it has green ground all
+  around it to paint from.
+  """
+  def background_with_artefact(width \\ 64, height \\ 64) do
+    raw =
+      for y <- 0..(height - 1), into: <<>> do
+        pixels =
+          for x <- 0..(width - 1), into: <<>> do
+            cond do
+              y >= 12 and y < 20 and x >= 12 and x < 20 -> <<255, 0, 0, 255>>
+              rem(x, 3) == 1 -> <<0, 191, 0, 255>>
+              rem(x, 3) == 2 -> <<0, 192, 0, 255>>
+              true -> <<0, 190, 0, 255>>
+            end
+          end
+
+        <<0>> <> pixels
+      end
+
+    png_from_raw(raw, width, height)
+  end
+
+  @doc """
+  Read pixels out of an image with the engine's own Python.
+
+  The BEAM never decodes pixels itself - the editor is a file-and-path system
+  - so a test that wants to look at an image asks the engine's Python (OpenCV)
+  for the pixels it wants. `points` is a list of `{x, y}` pairs; the colours
+  come back in OpenCV's order, so index 2 is the red channel.
+  """
+  def read_pixels(path, points) do
+    python = FramerCore.PortWorker.python_executable()
+
+    script = """
+    import cv2, json, sys
+    image = cv2.imread(sys.argv[1], cv2.IMREAD_UNCHANGED)
+    points = json.loads(sys.argv[2])
+    def pixel(x, y):
+        value = image[int(y), int(x)]
+        if getattr(value, "ndim", 0) == 0:
+            return [int(value)]
+        return [int(v) for v in value]
+    print(json.dumps({
+        "width": int(image.shape[1]),
+        "height": int(image.shape[0]),
+        "pixels": [[int(x), int(y), pixel(x, y)] for x, y in points],
+    }))
+    """
+
+    encoded = Enum.map(points, fn {x, y} -> [x, y] end)
+    {out, 0} = System.cmd(python, ["-c", script, to_string(path), Jason.encode!(encoded)])
+    Jason.decode!(out)
+  end
+
+  @doc """
+  The largest red channel value in an image, read with the engine's Python.
+
+  Used to show that a stored artefact really carries the pixels it claims to.
+  """
+  def max_red(path) do
+    python = FramerCore.PortWorker.python_executable()
+
+    script = """
+    import cv2, sys
+    image = cv2.imread(sys.argv[1], cv2.IMREAD_UNCHANGED)
+    print(int(image[:, :, 2].max()) if image.ndim == 3 and image.shape[2] > 2 else 0)
+    """
+
+    {out, 0} = System.cmd(python, ["-c", script, to_string(path)])
+    String.trim(out) |> String.to_integer()
+  end
+
   defp exif_tiff(orientation) do
     # Little-endian TIFF with a single IFD0 entry: tag 0x0112 (orientation),
     # type SHORT (3), count 1, value in the first two bytes of the value field.

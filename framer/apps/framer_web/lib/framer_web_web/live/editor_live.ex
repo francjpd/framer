@@ -16,11 +16,17 @@ defmodule FramerWebWeb.EditorLive do
 
   use FramerWebWeb, :live_view
 
+  alias FramerWeb.Healing.Corpus
   alias FramerWeb.Renderer
   alias FramerWeb.Rig
   alias FramerWeb.RigStore
 
   @max_undo 40
+
+  # The healing brush's round brush, in image pixels.  The correction it
+  # paints is feathered with the rig's own patch falloff, so a hand-painted
+  # fix merges into the untouched background the way the automatic patch does.
+  @default_heal_radius 12
 
   # The ordered five-step workflow the guide renders. `group` is presentational
   # only (setup vs animation); `tool` is the optional click-to-focus affordance
@@ -86,6 +92,9 @@ defmodule FramerWebWeb.EditorLive do
      |> assign(:blocking_loader, nil)
      |> assign(:rendered, nil)
      |> assign(:rendered_frame, nil)
+     |> assign(:heal_strokes, [])
+     |> assign(:heal_radius, @default_heal_radius)
+     |> assign(:corpus_count, Corpus.count())
      |> allow_upload(:source,
        accept: ~w(.png .jpg .jpeg .webp .bmp .gif),
        max_entries: 1,
@@ -185,6 +194,26 @@ defmodule FramerWebWeb.EditorLive do
 
   def handle_event("select_tool", %{"tool" => tool}, socket) when tool in ["bones", "pose"] do
     {:noreply, socket |> assign(:tool, tool) |> push_clear_overrides()}
+  end
+
+  # The healing brush is a third tool: it paints over the background layer
+  # instead of over the skeleton.  It needs the background plate to paint
+  # into, so it is only offered when the project has one.
+  def handle_event("select_tool", %{"tool" => "heal"}, %{assigns: %{rig: nil}} = socket) do
+    {:noreply, assign(socket, :error, "Load a rig first")}
+  end
+
+  def handle_event("select_tool", %{"tool" => "heal"}, socket) do
+    if heal_available?(socket.assigns.rig) do
+      {:noreply, socket |> assign(:tool, "heal") |> assign(:error, nil)}
+    else
+      {:noreply,
+       assign(
+         socket,
+         :error,
+         "The healing brush needs the background layer: keep it to heal the background"
+       )}
+    end
   end
 
   def handle_event("select_bone", %{"id" => id}, socket) do
@@ -537,6 +566,83 @@ defmodule FramerWebWeb.EditorLive do
           |> start_async(:compute_patch, fn -> Renderer.build_patch(rig) end)
 
         {:noreply, socket}
+    end
+  end
+
+  # --- the healing brush ----------------------------------------------------
+  #
+  # The brush paints over a bad area of the background layer: the surrounding
+  # background is painted over it, feathered with the patch's own falloff, so
+  # a hand-painted correction merges into the untouched background exactly
+  # like the automatic patch does.  The correction is a normal editor
+  # operation - it is submitted like an export and polled - so a long paint
+  # never blocks the LiveView, and it is stored in the corpus from its first
+  # use, because the material cannot be reconstructed afterwards.
+
+  def handle_event("heal_stroke", %{"stroke" => stroke}, socket) do
+    {:noreply, assign(socket, :heal_strokes, socket.assigns.heal_strokes ++ [stroke])}
+  end
+
+  def handle_event("heal_stroke", _params, socket), do: {:noreply, socket}
+
+  def handle_event("clear_heal", _params, socket) do
+    {:noreply, socket |> assign(:heal_strokes, []) |> push_event("clear_strokes", %{})}
+  end
+
+  def handle_event("set_heal_radius", %{"radius" => radius}, socket) do
+    case to_float(radius) do
+      value when is_number(value) and value > 0 ->
+        {:noreply, assign(socket, :heal_radius, trunc(value))}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("set_heal_radius", _params, socket), do: {:noreply, socket}
+
+  def handle_event("apply_healing", _params, %{assigns: %{rig: nil}} = socket),
+    do: {:noreply, assign(socket, :error, "Load a rig first")}
+
+  def handle_event("apply_healing", _params, socket) do
+    rig = socket.assigns.rig
+    strokes = socket.assigns.heal_strokes
+
+    cond do
+      not heal_available?(rig) ->
+        {:noreply,
+         assign(
+           socket,
+           :error,
+           "The healing brush needs the background layer: keep it to heal the background"
+         )}
+
+      strokes == [] ->
+        {:noreply, assign(socket, :error, "Paint over the area you want to heal first")}
+
+      true ->
+        opts = [fade: heal_fade(rig), radius: socket.assigns.heal_radius]
+
+        case Renderer.submit_heal(rig, strokes, opts) do
+          {:ok, _export} ->
+            {:noreply,
+             socket
+             |> assign(:error, nil)
+             |> assign(:status, "Healing the background...")
+             |> assign(:blocking_loader, %{
+               op: :heal,
+               title: "Healing the background",
+               message: "Painting the surrounding background over the painted area...",
+               progress: nil
+             })}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> assign(:blocking_loader, nil)
+             |> assign(:status, nil)
+             |> assign(:error, "Could not heal the background: #{format_reason(reason)}")}
+        end
     end
   end
 
@@ -926,6 +1032,16 @@ defmodule FramerWebWeb.EditorLive do
     end
   end
 
+  def handle_info({:heal, payload}, socket) do
+    rig = socket.assigns.rig
+
+    if rig && payload[:rig_id] in [nil, rig["id"]] do
+      {:noreply, apply_heal_result(socket, payload)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info(_message, socket), do: {:noreply, socket}
 
   # --- rendering -----------------------------------------------------------
@@ -982,6 +1098,9 @@ defmodule FramerWebWeb.EditorLive do
           tool={@tool}
           pending_delete={@pending_delete}
           selected={selected_bone(@rig, @selected_bone)}
+          heal_radius={@heal_radius}
+          heal_strokes={@heal_strokes}
+          corpus_count={@corpus_count}
         />
         <.viewport
           rig={@rig}
@@ -991,6 +1110,7 @@ defmodule FramerWebWeb.EditorLive do
           mesh_visible={@mesh_visible}
           labels_visible={@labels_visible}
           patch_url={@patch_url}
+          heal_radius={@heal_radius}
         />
       </div>
 
@@ -1137,6 +1257,9 @@ defmodule FramerWebWeb.EditorLive do
   attr :tool, :string, required: true
   attr :pending_delete, :string, default: nil
   attr :selected, :map, default: nil
+  attr :heal_radius, :integer, default: 12
+  attr :heal_strokes, :list, default: []
+  attr :corpus_count, :integer, default: 0
 
   defp palette(assigns) do
     ~H"""
@@ -1208,6 +1331,16 @@ defmodule FramerWebWeb.EditorLive do
           >
             Pose
           </button>
+          <button
+            phx-click="select_tool"
+            phx-value-tool="heal"
+            id="select-heal-tool"
+            class={["btn btn-xs justify-start gap-2", @tool == "heal" && "btn-primary"]}
+            disabled={not heal_available?(@rig)}
+            title="Paint over a bad area of the background layer to heal it by hand"
+          >
+            Heal
+          </button>
         </div>
         <p class="mt-2 opacity-60">
           <span :if={@tool == "bones"}>
@@ -1216,6 +1349,11 @@ defmodule FramerWebWeb.EditorLive do
           </span>
           <span :if={@tool == "pose"}>
             Drag a joint to rotate and the body to translate, then record a keyframe.
+          </span>
+          <span :if={@tool == "heal"}>
+            Drag over the bad area of the background to paint the surrounding
+            background over it. The correction is feathered into the untouched
+            background, just like the automatic patch.
           </span>
         </p>
       </section>
@@ -1658,6 +1796,57 @@ defmodule FramerWebWeb.EditorLive do
           </form>
         </div>
       </section>
+
+      <section :if={@rig} id="healing-brush-panel" class="flex flex-col gap-2">
+        <h2 class="mb-2 font-semibold uppercase tracking-wide opacity-70">Healing brush</h2>
+        <p class="opacity-60">
+          Paint over a bad area of the background layer: the surrounding background is
+          painted over it, feathered with the patch's own falloff, so the fix merges into
+          the untouched background instead of sitting on it as a hard-edged blob.
+        </p>
+        <form id="heal-radius-form">
+          <label class="label-text" for="heal-radius">Brush size</label>
+          <input
+            id="heal-radius"
+            type="range"
+            min="4"
+            max="80"
+            step="1"
+            value={@heal_radius}
+            phx-change="set_heal_radius"
+            name="radius"
+            class="range range-xs"
+            title="How wide the brush is, in pixels"
+          />
+          <p class="opacity-60">{@heal_radius} px</p>
+        </form>
+        <div class="flex items-center gap-1">
+          <button
+            id="apply-healing-btn"
+            phx-click="apply_healing"
+            class="btn btn-xs btn-primary flex-1"
+            disabled={@heal_strokes == [] or not heal_available?(@rig)}
+          >
+            Heal
+          </button>
+          <button
+            id="clear-healing-btn"
+            phx-click="clear_heal"
+            class="btn btn-xs btn-outline"
+            disabled={@heal_strokes == []}
+          >
+            Clear
+          </button>
+        </div>
+        <p class="opacity-60" id="heal-stroke-count">
+          {length(@heal_strokes)} stroke{(length(@heal_strokes) == 1 && "") || "s"} painted · {heal_fade(
+            @rig
+          )} px feather
+        </p>
+        <p class="opacity-60" id="healing-corpus-count">
+          {@corpus_count} correction{@corpus_count} == 1 && "" || "s"} stored for training
+        </p>
+      </section>
     </aside>
     """
   end
@@ -1685,6 +1874,7 @@ defmodule FramerWebWeb.EditorLive do
   attr :mesh_visible, :boolean, default: true
   attr :labels_visible, :boolean, default: false
   attr :patch_url, :string, default: nil
+  attr :heal_radius, :integer, default: 12
 
   defp viewport(assigns) do
     ~H"""
@@ -1747,6 +1937,7 @@ defmodule FramerWebWeb.EditorLive do
         data-patch-url={@patch_url}
         data-frame={@playhead}
         data-tool={@tool}
+        data-heal-radius={@heal_radius}
         data-selected={@selected || ""}
         data-mesh={to_string(@mesh_visible)}
         data-labels={to_string(@labels_visible)}
@@ -1772,6 +1963,7 @@ defmodule FramerWebWeb.EditorLive do
 
   attr :rig, :map, default: nil
   attr :playhead, :integer, required: true
+  attr :heal_radius, :integer, default: 12
   attr :playing, :boolean, required: true
   attr :pending_pose, :map, required: true
   attr :selected, :map, default: nil
@@ -2343,6 +2535,50 @@ defmodule FramerWebWeb.EditorLive do
       socket
       |> assign(:status, nil)
       |> assign(:error, "Export failed: #{format_reason(payload[:error] || "operation failed")}")
+    end
+  end
+
+  # The healing brush's result.  A completed correction is on the plate, so
+  # the preview re-fetches the background layer and the strokes are spent; the
+  # correction itself is in the corpus, which is where the training material
+  # lives from now on.
+  defp apply_heal_result(socket, payload) do
+    socket =
+      socket
+      |> assign(:blocking_loader, nil)
+      |> assign(:heal_strokes, [])
+      |> assign(:corpus_count, Corpus.count())
+
+    if payload[:status] == :completed do
+      socket
+      |> assign(:status, "Background healed - the correction is stored for training")
+      |> assign(:error, payload[:error])
+      |> push_event("reload_background", %{})
+    else
+      socket
+      |> assign(:status, nil)
+      |> assign(:error, "Healing failed: #{format_reason(payload[:error] || "operation failed")}")
+    end
+  end
+
+  # Whether the healing brush can be used on this rig: it paints into the
+  # background plate, so the project needs one.  The document is the
+  # authority here - the plate itself is checked when the correction is
+  # submitted, so the panel never has to touch the filesystem on every
+  # render.
+  defp heal_available?(nil), do: false
+
+  defp heal_available?(rig) do
+    Rig.split?(rig) and Rig.has_background_layer?(rig)
+  end
+
+  # The falloff a hand-painted correction is feathered with: the rig's own
+  # patch falloff, so a manual fix and the automatic patch merge into the
+  # untouched background in exactly the same way.
+  defp heal_fade(rig) do
+    case Rig.patch_fade(rig) do
+      nil -> Rig.default_fade()
+      fade -> fade
     end
   end
 

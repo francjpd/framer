@@ -30,6 +30,25 @@ config :framer_core,
 #   ecto_repos: [FramerWeb.Repo],
 #   generators: [timestamp_type: :utc_datetime]
 
+# The editor's durable store: the healing corpus - the manual corrections the
+# user paints into the background layer - lives in a database, so it
+# accumulates across projects and survives a restart.  SQLite keeps the app
+# self-contained: the editor works without a database server.
+config :framer_web,
+  ecto_repos: [FramerWeb.Repo],
+  generators: [timestamp_type: :utc_datetime]
+
+config :framer_web, FramerWeb.Repo,
+  database:
+    Path.join(
+      System.get_env("XDG_DATA_HOME") || Path.join(System.user_home!(), ".local/share"),
+      "framer/framer.db"
+    ),
+  pool_size: 5,
+  # SQLite serialises writers: the corpus is written while the editor reads
+  # it, so a writer waits for the lock instead of failing.
+  busy_timeout: 5000
+
 # Configures the endpoint
 config :framer_web, FramerWebWeb.Endpoint,
   url: [host: "localhost"],
