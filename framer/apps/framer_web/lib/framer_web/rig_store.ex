@@ -173,6 +173,8 @@ defmodule FramerWeb.RigStore do
         |> put_in(["canvas", "width"], info.width)
         |> put_in(["canvas", "height"], info.height)
 
+      remove_patch_layer(id)
+
       save(rig)
     end
   end
@@ -190,6 +192,8 @@ defmodule FramerWeb.RigStore do
         rig
         |> then(fn r -> if Rig.split?(r), do: r, else: Rig.enable_split(r) end)
         |> Rig.set_character_layer(dest_name)
+
+      remove_patch_layer(id)
 
       save(rig)
     end
@@ -209,6 +213,8 @@ defmodule FramerWeb.RigStore do
         |> then(fn r -> if Rig.split?(r), do: r, else: Rig.enable_split(r) end)
         |> Rig.set_background_layer(dest_name)
 
+      remove_patch_layer(id)
+
       save(rig)
     end
   end
@@ -218,7 +224,8 @@ defmodule FramerWeb.RigStore do
 
   A re-extraction has to drop every file the engine could resolve for the rig:
   the declared character path and the default name it falls back to once the
-  document stops declaring one, plus the plate that was built from them.
+  document stops declaring one, plus the plate that was built from them. The
+  patch is built from those two layers, so it goes with them.
   """
   def remove_character_layer(id) do
     with :ok <- validate_id(id),
@@ -227,6 +234,29 @@ defmodule FramerWeb.RigStore do
         character_layer_for(rig, id),
         Path.join(project_dir(id), Rig.layer_filename()),
         Path.join(project_dir(id), Rig.plate_filename())
+      ]
+      |> Enum.each(&File.rm/1)
+
+      remove_patch_layer(id)
+
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  @doc """
+  Drop a project's materialised patch and the sidecar that records it.
+
+  The patch is built from the rig's motion, the feather and the layer files,
+  so it is stale as soon as any of them changes. The engine rebuilds it on
+  the next render, or when the compute action asks for it.
+  """
+  def remove_patch_layer(id) do
+    with :ok <- validate_id(id) do
+      [
+        Path.join(project_dir(id), Rig.patch_filename()),
+        Path.join(project_dir(id), Rig.patch_meta_filename())
       ]
       |> Enum.each(&File.rm/1)
 

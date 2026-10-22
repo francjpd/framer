@@ -833,7 +833,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert has_element?(view, "#viewport[data-patch-url]")
     end
 
-    test "a patch that no longer matches the document is reported as stale", %{conn: conn} do
+    test "a feather change drops the materialised patch until it is computed again", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
       _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
       {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
@@ -843,16 +843,40 @@ defmodule FramerWebWeb.EditorLiveTest do
       # The materialised patch was built with the feather the document records.
       assert has_element?(view, "#layer-row-patch .badge-success")
 
-      # Moving the feather leaves the materialised patch behind: the new
-      # feather applies when the patch is computed again.
+      # Moving the feather makes the materialised patch stale, so it is
+      # dropped: the panel reports it as not computed and the preview stops
+      # compositing it.
       render_change(view, "set_patch_fade", %{"fade" => "20"})
-      assert has_element?(view, "#layer-row-patch .badge-warning")
-      assert render(view) =~ "Stale - compute it again"
+      assert render(view) =~ "Not computed yet"
+      refute RigStore.patch_path(rig["id"])
+      refute has_element?(view, "#viewport[data-patch-url]")
 
       # Computing it again rebuilds the patch with the new feather.
       render_click(view, "compute_patch", %{})
       assert render_async(view, 60_000) =~ "Patch computed"
       assert has_element?(view, "#layer-row-patch .badge-success")
+      assert has_element?(view, "#viewport[data-patch-url]")
+    end
+
+    test "a change of the motion drops the materialised patch", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "subject.png")
+      _saved = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      assert RigStore.patch_path(rig["id"])
+
+      # Moving a bone changes the swept region, so the materialised patch no
+      # longer describes it.
+      render_click(view, "bone_moved", %{
+        "id" => "b0",
+        "head" => [20.0, 16.0],
+        "tail" => [20.0, 8.0]
+      })
+
+      assert render(view) =~ "Not computed yet"
+      refute RigStore.patch_path(rig["id"])
+      refute has_element?(view, "#viewport[data-patch-url]")
     end
 
     test "the patch waits for a skeleton", %{conn: conn} do

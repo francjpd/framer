@@ -52,10 +52,8 @@ from core.errors import RigError
 from core.layers import (
     LAYER_FILENAME,
     PATCH_FILENAME,
-    PLATE_FILENAME,
     background_plate,
     composite_layers,
-    declared_background_path,
     declared_character_path,
     has_background_layer,
     has_character_layer,
@@ -63,6 +61,7 @@ from core.layers import (
     is_split,
     layer_settings,
     load_layer,
+    resolve_background_layer,
     split_layers,
 )
 
@@ -1074,17 +1073,13 @@ class DeformRenderer:
                     # is the very file the editor's preview fetches.
                     bg = background
                 else:
-                    bg_declared = declared_background_path(self.rig) or PLATE_FILENAME
-                    bg_path = Path(bg_declared)
+                    # The plate is resolved by the same rule the engine uses
+                    # everywhere else, so the frame and the patch are built
+                    # from the very same file.
                     source_path = self.rig.get("source", {}).get("path") or ""
-                    if not bg_path.is_absolute() and source_path:
-                        bg_path = Path(source_path).parent / bg_path
-                    if bg_path.exists():
-                        bg = load_layer(bg_path)
-                    elif self.character is not None:
-                        bg = background_plate(self.source, self.character[:, :, 3])
-                    else:
-                        bg = None
+                    bg = resolve_background_layer(
+                        self.rig, self.source, source_path, self.character
+                    )
 
                 if bg is not None:
                     self.background = self._fit(bg)

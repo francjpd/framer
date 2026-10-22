@@ -14,8 +14,8 @@ This module builds the third materialised layer that closes that gap:
 
 * ``character_region`` - the region, computed from the skeleton with the
   engine's own LBS: the union of the character's warped footprints over the
-  whole timeline, minus its rest footprint, dilated by a few pixels as a
-  margin for the feather.
+  whole timeline, grown by a few pixels as a margin for the feather, minus its
+  own rest footprint.
 * ``reconstruct`` - the region reconstructed from the *plate*, never from the
   still: inpainting from the still leaks the character's own pixels into the
   synthesis (measured, textured background: 46.9 vs 34.5 mean error).
@@ -101,8 +101,10 @@ def character_region(
     The region the character can uncover: the union of its warped footprints
     over the timeline, minus its own rest footprint.
 
-    The union is dilated by ``grow`` pixels, which is a margin on top of the
-    exact union and gives the feather something to ramp over.
+    The union is grown by ``grow`` pixels *before* the rest footprint is
+    subtracted, so the region is the swept area grown outwards and the rest
+    footprint keeps the plate's own reconstruction of it rather than a second
+    inpaint of it.  The grown edge is what the feather ramps over.
 
     Args:
         rig: the rig document, whose bones and keyframes define the motion.
@@ -135,11 +137,13 @@ def character_region(
         union = np.maximum(union, (warped[:, :, 3] > ALPHA_THRESHOLD).astype(np.uint8) * 255)
 
     rest = (alpha > ALPHA_THRESHOLD).astype(np.uint8) * 255
-    region = ((union > 0) & (rest == 0)).astype(np.uint8) * 255
+    swept = (union > 0).astype(np.uint8)
 
-    if grow > 0 and region.any():
+    if grow > 0 and swept.any():
         kernel = np.ones((2 * grow + 1, 2 * grow + 1), np.uint8)
-        region = cv2.dilate(region, kernel, iterations=1)
+        swept = cv2.dilate(swept, kernel, iterations=1)
+
+    region = ((swept > 0) & (rest == 0)).astype(np.uint8) * 255
     return region
 
 

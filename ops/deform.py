@@ -146,6 +146,7 @@ def deform_video(
                     input_path,
                     character_layer,
                     weights=shared_weights,
+                    iterations=iterations,
                 )
 
         renderer = DeformRenderer(

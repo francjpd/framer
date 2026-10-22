@@ -139,8 +139,8 @@ layer between the character and the plate: the **patch** (`patch.png` beside
 the still). The stack is *character -> feathered patch -> opaque plate*.
 
 * **The region** is the character's *swept area*: the union of its warped
-  footprints over the whole timeline, minus its own rest footprint, dilated by
-  a few pixels as a margin for the feather. It is computed from the
+  footprints over the whole timeline, grown by a few pixels as a margin for the
+  feather, minus its own rest footprint. It is computed from the
   skeleton with the engine's own LBS (`compute_dense_weights` ->
   `evaluate_bones` -> `apply_lbs` over the character mask), so it is exactly
   the ground the character can uncover.
@@ -149,7 +149,8 @@ the still). The stack is *character -> feathered patch -> opaque plate*.
   result. The ordering is the measured one - the rest footprint is reconstructed
   first (that is the plate) and the swept-only part is inpainted from that
   plate, so the original background is preserved wherever the sweep merely
-  passed over it.
+  passed over it, and the rest footprint keeps the plate's own reconstruction
+  of it.
 * **The feather** is an alpha ramp over the region (`cv2.distanceTransform`),
   fully opaque in the middle of the region and 0 at its edge, so the patch
   merges into the untouched background around it. `layers.fade` is its width in

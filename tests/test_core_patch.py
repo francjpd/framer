@@ -46,7 +46,6 @@ from core.deform import DeformRenderer, load_or_build_weights, validate_rig
 from core.layers import (
     PATCH_FILENAME,
     PLATE_FILENAME,
-    composite_layers,
     has_patch_layer,
     patch_fade,
     split_layers,
@@ -178,9 +177,9 @@ def test_the_region_is_the_area_the_character_can_uncover():
 
     # The strip the character travels into is inside the region...
     assert region[CHARACTER_ROWS, CHARACTER_COLUMNS.stop : CHARACTER_COLUMNS.stop + SHIFT].any()
-    # ...and the block it started on is not (the region is dilated by a few
-    # pixels, so the middle of the rest footprint stays clear of it).
-    assert not region[CHARACTER_ROWS, CHARACTER_COLUMNS.start : CHARACTER_COLUMNS.start + 8].any()
+    # ...and the block it started on is not: the rest footprint keeps the
+    # plate's own reconstruction of it.
+    assert not region[CHARACTER_ROWS, CHARACTER_COLUMNS.start : CHARACTER_COLUMNS.stop].any()
     # The background the character never reaches is not in the region either.
     assert not region[: CHARACTER_ROWS.start - 4].any()
 
@@ -466,18 +465,51 @@ def test_the_region_covers_the_whole_swept_path():
     assert not (region[22, 59:] > 0).any()
 
 
-def test_the_renderer_composites_character_over_patch_over_plate():
-    """The stack order is the one the editor's preview has to match."""
+def test_the_rest_footprint_keeps_the_plates_own_reconstruction():
+    """
+    The ground the character stood on is the plate's, not a second inpaint.
+
+    The region is the swept area grown outwards, minus the rest footprint, so
+    the patch leaves the rest footprint exactly as the plate reconstructed it.
+    """
     rig, source = scene_rig()
     alpha = scene_alpha(source)
     weights = load_or_build_weights(rig, width=SIZE, height=SIZE)
-    character, plate = split_layers(source, alpha)
+    _character, plate = split_layers(source, alpha)
+
     patch = build_patch(rig, alpha, plate, fade=FADE, weights=weights)
+
+    rest = alpha > 127
+    assert rest.any()
+    assert np.array_equal(patch[:, :, :3][rest], plate[:, :, :3][rest])
+
+
+def test_the_renderer_composites_character_over_patch_over_plate():
+    """
+    The stack order is the one the editor's preview has to match.
+
+    A synthetic patch makes the order observable: a half-transparent green
+    layer between the character and the plate tints the background green,
+    while the same layer over the plate would tint the character instead.
+    """
+    rig, source = scene_rig()
+    alpha = scene_alpha(source)
+    character, _plate = split_layers(source, alpha)
+
+    patch = np.zeros((SIZE, SIZE, 4), dtype=np.uint8)
+    patch[:, :, 1] = 255
+    patch[:, :, 3] = 128
 
     renderer = DeformRenderer(rig, source, iterations=6, character=character, patch=patch)
     frame = renderer.render(FRAMES - 1)
 
     # The frame is the character over the patch over the plate.
     assert (frame[:, :, 3] == 255).all()
-    stacked = composite_layers(renderer.character, patch, plate)
-    assert stacked.shape == frame.shape
+
+    # The patch is in the middle: the background under it is tinted, and the
+    # character over it is not.
+    background = frame[:20]
+    assert (background[:, :, 1] > background[:, :, 0]).all()
+    character_pixels = frame[CHARACTER_ROWS, 26:34]
+    assert (character_pixels[:, :, 2] > character_pixels[:, :, 1]).all()
+    assert (character_pixels[:, :, 1] == 0).all()

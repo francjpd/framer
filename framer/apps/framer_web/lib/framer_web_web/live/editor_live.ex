@@ -910,7 +910,10 @@ defmodule FramerWebWeb.EditorLive do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :patch_state, patch_state(assigns.rig))
+    assigns =
+      assigns
+      |> assign(:patch_state, patch_state(assigns.rig))
+      |> assign(:patch_url, patch_layer_url(assigns.rig))
 
     ~H"""
     <div
@@ -965,6 +968,7 @@ defmodule FramerWebWeb.EditorLive do
           selected={@selected_bone}
           mesh_visible={@mesh_visible}
           labels_visible={@labels_visible}
+          patch_url={@patch_url}
         />
       </div>
 
@@ -1658,6 +1662,7 @@ defmodule FramerWebWeb.EditorLive do
   attr :selected, :string, default: nil
   attr :mesh_visible, :boolean, default: true
   attr :labels_visible, :boolean, default: false
+  attr :patch_url, :string, default: nil
 
   defp viewport(assigns) do
     ~H"""
@@ -1717,7 +1722,7 @@ defmodule FramerWebWeb.EditorLive do
         data-source-url={~p"/api/rigs/#{@rig["id"]}/source"}
         data-character-url={character_layer_url(@rig)}
         data-background-url={background_layer_url(@rig)}
-        data-patch-url={patch_layer_url(@rig)}
+        data-patch-url={@patch_url}
         data-frame={@playhead}
         data-tool={@tool}
         data-selected={@selected || ""}
@@ -2229,6 +2234,7 @@ defmodule FramerWebWeb.EditorLive do
 
   defp finalize_mutation(socket, rig, opts) do
     socket
+    |> invalidate_stale_patch(rig)
     |> assign(:rig, rig)
     |> assign(:status, opts[:status])
     |> assign(:error, nil)
@@ -2236,6 +2242,29 @@ defmodule FramerWebWeb.EditorLive do
     |> persist(rig)
     |> push_rig()
   end
+
+  # The materialised patch is built from the rig's skeleton, bind and motion,
+  # and from the feather and the layer files, so a change to any of them makes
+  # it stale: it is dropped, and the engine rebuilds it on the next render or
+  # when the compute action asks for it.  Every route that can change the rig
+  # goes through this mutation path, so this is the one place the rig inputs
+  # are compared.
+  defp invalidate_stale_patch(socket, rig) do
+    previous = socket.assigns.rig
+
+    inputs_changed =
+      previous && previous["id"] == rig["id"] && patch_inputs(previous) != patch_inputs(rig)
+
+    if inputs_changed || patch_built_with_other_fade?(rig) do
+      RigStore.remove_patch_layer(rig["id"])
+    end
+
+    socket
+  end
+
+  # The rig inputs the region is computed from: the skeleton, the bind the
+  # weights are built with and the motion over the timeline.
+  defp patch_inputs(rig), do: {rig["bones"], rig["bind"], rig["keyframes"]}
 
   defp persist(socket, rig) do
     case RigStore.save(rig) do
@@ -2368,10 +2397,11 @@ defmodule FramerWebWeb.EditorLive do
     end
   end
 
-  # The state of the patch layer in the panel. A materialised patch is only
-  # "ready" when it still matches the document: the sidecar next to it records
-  # the feather it was built with, so a patch built with another feather is
-  # stale and has to be computed again.
+  # The state of the patch layer in the panel. A patch the editor dropped is
+  # not computed any more, and a materialised patch is only "ready" when it
+  # still matches the document: the sidecar next to it records the feather it
+  # was built with, so a patch built with another feather is stale and has to
+  # be computed again.
   defp patch_state(nil), do: :unsplit
 
   defp patch_state(rig) do
@@ -2380,14 +2410,17 @@ defmodule FramerWebWeb.EditorLive do
       Rig.bones(rig) == [] -> :no_skeleton
       Rig.patch_fade(rig) == nil -> :off
       RigStore.patch_path(rig["id"]) == nil -> :pending
-      patch_matches_rig?(rig) -> :ready
-      true -> :stale
+      patch_built_with_other_fade?(rig) -> :stale
+      true -> :ready
     end
   end
 
-  defp patch_matches_rig?(rig) do
+  # Whether the materialised patch was built with another feather than the
+  # document records.  The sidecar the engine writes next to the patch holds
+  # the feather it was built with.
+  defp patch_built_with_other_fade?(rig) do
     case RigStore.patch_meta(rig["id"]) do
-      %{"fade" => fade} -> fade == Rig.patch_fade(rig)
+      %{"fade" => fade} -> fade != Rig.patch_fade(rig)
       _ -> false
     end
   end

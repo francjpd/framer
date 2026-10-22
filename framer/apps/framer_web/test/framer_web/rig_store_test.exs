@@ -190,6 +190,25 @@ defmodule FramerWeb.RigStoreTest do
     assert RigStore.patch_path("../escape") == nil
   end
 
+  test "removing the patch drops the layer and the sidecar that records it" do
+    {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
+    id = rig["id"]
+
+    patch = Path.join(RigStore.project_dir(id), Rig.patch_filename())
+    meta = Path.join(RigStore.project_dir(id), Rig.patch_meta_filename())
+    File.write!(patch, "patch")
+    File.write!(meta, ~s({"fade": 12}))
+
+    assert RigStore.patch_meta(id) == %{"fade" => 12}
+
+    assert RigStore.remove_patch_layer(id) == :ok
+
+    refute File.exists?(patch)
+    refute File.exists?(meta)
+    assert RigStore.patch_path(id) == nil
+    assert RigStore.patch_meta(id) == nil
+  end
+
   test "character layer paths honour the declared layer path" do
     {:ok, rig} = RigStore.save(Fixtures.simple_rig(32))
     id = rig["id"]
