@@ -448,7 +448,7 @@ defmodule FramerWeb.Renderer do
           {:error, reason} ->
             broadcast_heal(rig_id, %{
               status: :failed,
-              stored: true,
+              healed: true,
               error:
                 "the correction was stored but the patch would not remember it: #{inspect(reason)}"
             })
@@ -462,7 +462,7 @@ defmodule FramerWeb.Renderer do
         # Heal again retries the material instead of discarding it.
         broadcast_heal(rig_id, %{
           status: :failed,
-          stored: false,
+          healed: true,
           error: "the correction was applied but could not be stored: #{inspect(reason)}"
         })
     end

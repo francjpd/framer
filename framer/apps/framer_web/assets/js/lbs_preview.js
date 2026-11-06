@@ -190,10 +190,13 @@ export const LbsPreview = {
 
     // The correction landed: the background plate behind the same URL now
     // holds the healed pixels, so the layer is re-fetched. The strokes are
-    // spent - the correction they describe is on the plate.
-    this.handleEvent("reload_background", () => {
-      this.healStrokes = [];
-      this.healStroke = null;
+    // spent - the correction they describe is on the plate - unless the
+    // server kept them so the paint can be retried.
+    this.handleEvent("reload_background", ({ keep_strokes } = {}) => {
+      if (!keep_strokes) {
+        this.healStrokes = [];
+        this.healStroke = null;
+      }
       const url = this.el.dataset.backgroundUrl || null;
       if (url) this.loadBackgroundLayer(`${url}?reload=${Date.now()}`);
       this.draw();

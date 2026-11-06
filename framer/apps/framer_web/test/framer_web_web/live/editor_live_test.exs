@@ -1409,8 +1409,7 @@ defmodule FramerWebWeb.EditorLiveTest do
       refute has_element?(view, "#apply-healing-btn[disabled]")
     end
 
-    test "a completed correction that could not be stored does not claim it was stored",
-         %{conn: conn} do
+    test "a heal that landed but could not be stored keeps the paint for a retry", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
       _ = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
       {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
@@ -1420,22 +1419,27 @@ defmodule FramerWebWeb.EditorLiveTest do
       render_hook(view, "heal_stroke", %{"stroke" => %{"points" => [[16, 16]], "radius" => 12}})
 
       # The plate was healed but the training material was not stored: the
-      # green status may not say it was, and the error carries the failure.
+      # status stays the plain healed wording, the alert carries the failure,
+      # and the preview re-fetches the healed ground while the strokes stay so
+      # Heal can retry.
       Phoenix.PubSub.broadcast(
         FramerWeb.PubSub,
         FramerWeb.Renderer.topic(rig["id"]),
         {:heal,
          %{
            rig_id: rig["id"],
-           status: :completed,
-           stored: false,
+           status: :failed,
+           healed: true,
            error: "the correction was applied but could not be stored: boom"
          }}
       )
 
+      assert_push_event(view, "reload_background", %{keep_strokes: true})
       assert wait_for(fn -> render(view) =~ "could not be stored" end)
+      assert render(view) =~ "Background healed"
       refute render(view) =~ "the correction is stored for training"
-      assert render(view) =~ "0 strokes painted"
+      refute render(view) =~ "Healing failed"
+      assert render(view) =~ "1 stroke painted"
     end
 
     test "a correction the patch cannot remember keeps the strokes for a retry", %{conn: conn} do
@@ -1460,6 +1464,8 @@ defmodule FramerWebWeb.EditorLiveTest do
 
       assert wait_for(fn -> render(view) =~ "would not remember it" end)
       assert FramerWeb.Healing.Corpus.count() > stored_before
+      assert render(view) =~ "Background healed"
+      refute render(view) =~ "Healing failed"
       assert render(view) =~ "1 stroke painted"
 
       await_idle_orchestrator()

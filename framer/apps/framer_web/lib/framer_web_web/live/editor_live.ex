@@ -2548,33 +2548,41 @@ defmodule FramerWebWeb.EditorLive do
   # correction itself is in the corpus, which is where the training material
   # lives from now on.  A failed correction leaves the strokes alone - on both
   # sides - so the user can try again or clear them.
+  # The healing brush's result.  A completed correction is on the plate, so
+  # the preview re-fetches the background layer and the strokes are spent; the
+  # correction itself is in the corpus, which is where the training material
+  # lives from now on.  A correction that was applied but could not be
+  # recorded is still on the plate: the preview re-fetches it, the alert
+  # carries the failure, and the strokes stay so Heal can retry.  A
+  # correction that never landed leaves the strokes alone - on both sides - so
+  # the user can try again or clear them.
   defp apply_heal_result(socket, payload) do
     socket =
       socket
       |> assign(:blocking_loader, nil)
       |> assign(:corpus_count, Corpus.count())
 
-    if payload[:status] == :completed do
-      socket
-      |> assign(:heal_strokes, [])
-      |> assign(:status, healed_status(payload))
-      |> assign(:error, payload[:error])
-      |> push_event("reload_background", %{})
-    else
-      socket
-      |> assign(:status, nil)
-      |> assign(:error, "Healing failed: #{format_reason(payload[:error] || "operation failed")}")
-    end
-  end
+    cond do
+      payload[:status] == :completed ->
+        socket
+        |> assign(:heal_strokes, [])
+        |> assign(:status, "Background healed - the correction is stored for training")
+        |> assign(:error, payload[:error])
+        |> push_event("reload_background", %{})
 
-  # A correction that could not be stored still healed the plate, so the
-  # status says so and the error alert carries the storing failure: the green
-  # banner must never claim the training material was stored when it was not.
-  defp healed_status(payload) do
-    if payload[:error] do
-      "Background healed"
-    else
-      "Background healed - the correction is stored for training"
+      payload[:healed] ->
+        socket
+        |> assign(:status, "Background healed")
+        |> assign(:error, payload[:error])
+        |> push_event("reload_background", %{keep_strokes: true})
+
+      true ->
+        socket
+        |> assign(:status, nil)
+        |> assign(
+          :error,
+          "Healing failed: #{format_reason(payload[:error] || "operation failed")}"
+        )
     end
   end
 
