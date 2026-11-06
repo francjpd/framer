@@ -34,6 +34,7 @@ is used.
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
@@ -73,19 +74,14 @@ META_FILENAME = "correction.json"
 
 def _as_points(stroke: Any) -> list[tuple[float, float]]:
     """The points of one stroke, as floats."""
-    points = stroke.get("points") if isinstance(stroke, dict) else stroke
-    result: list[tuple[float, float]] = []
-    for point in points or []:
-        if isinstance(point, dict):
-            x, y = point.get("x"), point.get("y")
-        else:
-            try:
-                x, y = point[0], point[1]
-            except (TypeError, IndexError):
-                continue
-        if isinstance(x, (int, float)) and isinstance(y, (int, float)):
-            result.append((float(x), float(y)))
-    return result
+    pairs: list[tuple[float, float]] = []
+    for x, y in stroke["points"]:
+        if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+            raise RigError(
+                f"a healing stroke point must be an [x, y] pair of numbers, got {[x, y]}"
+            )
+        pairs.append((float(x), float(y)))
+    return pairs
 
 
 def stroke_radius(stroke: Any, default: int = DEFAULT_BRUSH_RADIUS) -> int:
@@ -95,6 +91,26 @@ def stroke_radius(stroke: Any, default: int = DEFAULT_BRUSH_RADIUS) -> int:
         if isinstance(radius, (int, float)) and radius > 0:
             return round(radius)
     return default
+
+
+def _paint_stroke(
+    mask: np.ndarray,
+    stroke: Any,
+    radius: int,
+    offset: tuple[int, int] = (0, 0),
+) -> None:
+    """Paint one stroke's round brush into a mask."""
+    brush = stroke_radius(stroke, radius)
+    left, top = offset
+    for x, y in _as_points(stroke):
+        cv2.circle(
+            mask,
+            (round(x) - left, round(y) - top),
+            max(brush, 1),
+            255,
+            -1,
+            lineType=cv2.LINE_8,
+        )
 
 
 def stroke_mask(
@@ -112,18 +128,38 @@ def stroke_mask(
     mask = np.zeros((height, width), np.uint8)
 
     for stroke in strokes or []:
-        brush = stroke_radius(stroke, radius)
-        for x, y in _as_points(stroke):
-            cv2.circle(
-                mask,
-                (round(x), round(y)),
-                max(brush, 1),
-                255,
-                -1,
-                lineType=cv2.LINE_8,
-            )
+        _paint_stroke(mask, stroke, radius)
 
     return mask
+
+
+def _painted_radius(shape: tuple[int, ...], stroke: Any, radius: int) -> float:
+    """
+    The inscribed radius of one stroke's painted area.
+
+    Measured on the stroke's own crop, so sizing the band never depends on
+    how many strokes the correction holds or on the canvas's size.
+    """
+    height, width = shape[0], shape[1]
+    points = _as_points(stroke)
+    if not points:
+        return 0.0
+
+    brush = stroke_radius(stroke, radius)
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    left = max(0, math.floor(min(xs)) - brush)
+    top = max(0, math.floor(min(ys)) - brush)
+    right = min(width, math.ceil(max(xs)) + brush + 1)
+    bottom = min(height, math.ceil(max(ys)) + brush + 1)
+    if right <= left or bottom <= top:
+        return 0.0
+
+    painted = np.zeros((bottom - top, right - left), np.uint8)
+    _paint_stroke(painted, stroke, radius, (left, top))
+    if painted.max() == 0:
+        return 0.0
+    return region_radius(painted)
 
 
 def correction_band(
@@ -150,10 +186,9 @@ def correction_band(
     """
     narrowest: float | None = None
     for stroke in strokes or []:
-        painted = stroke_mask(shape, [stroke], radius)
-        if painted.max() == 0:
+        measured = _painted_radius(shape, stroke, radius)
+        if measured <= 0:
             continue
-        measured = region_radius(painted)
         narrowest = measured if narrowest is None else min(narrowest, measured)
 
     # The widest band a stroke can carry: the ramp reaches full opacity at

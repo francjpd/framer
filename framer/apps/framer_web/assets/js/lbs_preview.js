@@ -440,6 +440,8 @@ export const LbsPreview = {
     this.rig = rig;
     if (!previous || previous.id !== rig.id) {
       this.overrides = {};
+      this.healStrokes = [];
+      this.healStroke = null;
       this.resetZoom();
       this.heldRig = null;
     }

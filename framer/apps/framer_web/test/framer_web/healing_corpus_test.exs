@@ -54,7 +54,6 @@ defmodule FramerWeb.Healing.CorpusTest do
     {:ok, _} = Corpus.store(%{rig_id: "project-b", content: <<1>>, mask: <<2>>, replaced: <<3>>})
 
     assert Corpus.count() == before + 2
-    assert Corpus.count_for_rig("project-a") >= 1
   end
 
   test "a correction without its material is refused" do

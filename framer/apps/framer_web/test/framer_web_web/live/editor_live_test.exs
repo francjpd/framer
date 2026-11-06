@@ -1355,8 +1355,10 @@ defmodule FramerWebWeb.EditorLiveTest do
       # The correction is a job like any other: it lands a moment later, and
       # it is stored in the corpus from its first use.
       assert wait_for(fn -> render(view) =~ "Background healed" end)
-      assert FramerWeb.Healing.Corpus.count() > stored_before
-      assert render(view) =~ "stored for training"
+      count = FramerWeb.Healing.Corpus.count()
+      assert count > stored_before
+      suffix = if count == 1, do: "", else: "s"
+      assert render(view) =~ "#{count} correction#{suffix} stored for training"
       assert render(view) =~ "0 strokes painted"
 
       await_idle_orchestrator()
@@ -1394,12 +1396,85 @@ defmodule FramerWebWeb.EditorLiveTest do
       Phoenix.PubSub.broadcast(
         FramerWeb.PubSub,
         FramerWeb.Renderer.topic(rig["id"]),
-        {:heal, %{status: :failed, error: "the engine could not heal the background"}}
+        {:heal,
+         %{
+           rig_id: rig["id"],
+           status: :failed,
+           error: "the engine could not heal the background"
+         }}
       )
 
       assert wait_for(fn -> render(view) =~ "Healing failed" end)
       assert render(view) =~ "1 stroke painted"
       refute has_element?(view, "#apply-healing-btn[disabled]")
+    end
+
+    test "a completed correction that could not be stored does not claim it was stored",
+         %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _ = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      render_click(view, "select_tool", %{"tool" => "heal"})
+      render_hook(view, "heal_stroke", %{"stroke" => %{"points" => [[16, 16]], "radius" => 12}})
+
+      # The plate was healed but the training material was not stored: the
+      # green status may not say it was, and the error carries the failure.
+      Phoenix.PubSub.broadcast(
+        FramerWeb.PubSub,
+        FramerWeb.Renderer.topic(rig["id"]),
+        {:heal,
+         %{
+           rig_id: rig["id"],
+           status: :completed,
+           stored: false,
+           error: "the correction was applied but could not be stored: boom"
+         }}
+      )
+
+      assert wait_for(fn -> render(view) =~ "could not be stored" end)
+      refute render(view) =~ "the correction is stored for training"
+      assert render(view) =~ "0 strokes painted"
+    end
+
+    test "a correction for another project is ignored", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _ = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      render_click(view, "select_tool", %{"tool" => "heal"})
+      render_hook(view, "heal_stroke", %{"stroke" => %{"points" => [[16, 16]], "radius" => 12}})
+      assert render(view) =~ "1 stroke painted"
+
+      Phoenix.PubSub.broadcast(
+        FramerWeb.PubSub,
+        FramerWeb.Renderer.topic(rig["id"]),
+        {:heal, %{rig_id: "another-project", status: :completed}}
+      )
+
+      refute render(view) =~ "Background healed"
+      assert render(view) =~ "1 stroke painted"
+    end
+
+    test "switching projects clears the strokes painted for the previous one", %{conn: conn} do
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "a.png")
+      _ = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+      {:ok, other} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "b.png")
+      _ = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", other["id"]))
+
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      render_click(view, "select_tool", %{"tool" => "heal"})
+      render_hook(view, "heal_stroke", %{"stroke" => %{"points" => [[16, 16]], "radius" => 12}})
+      assert render(view) =~ "1 stroke painted"
+
+      render_patch(view, ~p"/editor?rig=#{other["id"]}")
+
+      assert render(view) =~ "0 strokes painted"
+      assert has_element?(view, "#apply-healing-btn[disabled]")
     end
   end
 

@@ -15,8 +15,6 @@ defmodule FramerWeb.Healing.Corpus do
   there from the first correction.
   """
 
-  import Ecto.Query
-
   require Logger
 
   alias FramerWeb.Healing.Correction
@@ -47,35 +45,5 @@ defmodule FramerWeb.Healing.Corpus do
     Repo.aggregate(Correction, :count)
   rescue
     _error -> 0
-  end
-
-  @doc "How many corrections were painted into `rig_id`."
-  def count_for_rig(rig_id) when is_binary(rig_id) do
-    Repo.aggregate(from(c in Correction, where: c.rig_id == ^rig_id), :count)
-  rescue
-    _error -> 0
-  end
-
-  @doc """
-  The corpus, newest first.
-
-  The images are not loaded: a corpus is a pile of training material, and
-  listing it must not pull megabytes of pixels into the BEAM.
-  """
-  def list(opts \\ []) do
-    limit = Keyword.get(opts, :limit, 50)
-
-    Correction
-    |> order_by([c], desc: c.inserted_at)
-    |> limit(^limit)
-    |> Repo.all()
-  end
-
-  @doc "One correction with its images, or nil."
-  def get(id) do
-    case Ecto.UUID.cast(id) do
-      {:ok, uuid} -> Repo.get(Correction, uuid)
-      :error -> nil
-    end
   end
 end

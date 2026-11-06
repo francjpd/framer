@@ -489,7 +489,11 @@ defmodule FramerWeb.Renderer do
   end
 
   defp broadcast_heal(rig_id, payload) do
-    Phoenix.PubSub.broadcast(FramerWeb.PubSub, topic(rig_id), {:heal, payload})
+    Phoenix.PubSub.broadcast(
+      FramerWeb.PubSub,
+      topic(rig_id),
+      {:heal, Map.put(payload, :rig_id, rig_id)}
+    )
   end
 
   # The background plate a correction is painted into.
@@ -529,7 +533,6 @@ defmodule FramerWeb.Renderer do
   defp painted_stroke?(_stroke), do: false
 
   defp painted_point?([x, y]) when is_number(x) and is_number(y), do: true
-  defp painted_point?(%{"x" => x, "y" => y}) when is_number(x) and is_number(y), do: true
   defp painted_point?(_point), do: false
 
   defp watch(job_id, rig_id, output, export_dir, attempts \\ 750) do

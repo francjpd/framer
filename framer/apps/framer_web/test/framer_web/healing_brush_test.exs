@@ -33,11 +33,15 @@ defmodule FramerWeb.Healing.BrushTest do
   @moduletag :requires_cv2
   @moduletag timeout: 180_000
 
+  alias FramerWeb.Healing.Correction
   alias FramerWeb.Healing.Corpus
   alias FramerWeb.Renderer
+  alias FramerWeb.Repo
   alias FramerWeb.Rig
   alias FramerWeb.RigStore
   alias FramerWebWeb.Fixtures
+
+  import Ecto.Query, only: [from: 2]
 
   @size 64
   # The artefact the user paints over: a red block in the green ground.
@@ -269,7 +273,7 @@ defmodule FramerWeb.Healing.BrushTest do
   end
 
   defp latest_correction do
-    Corpus.list(limit: 1) |> List.first()
+    Repo.one(from c in Correction, order_by: [desc: c.inserted_at], limit: 1)
   end
 
   # Wait for the correction to be stored: the job is submitted and watched,

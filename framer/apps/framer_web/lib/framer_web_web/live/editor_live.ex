@@ -1035,7 +1035,7 @@ defmodule FramerWebWeb.EditorLive do
   def handle_info({:heal, payload}, socket) do
     rig = socket.assigns.rig
 
-    if rig && payload[:rig_id] in [nil, rig["id"]] do
+    if rig && payload[:rig_id] == rig["id"] do
       {:noreply, apply_heal_result(socket, payload)}
     else
       {:noreply, socket}
@@ -1845,7 +1845,7 @@ defmodule FramerWebWeb.EditorLive do
           )} px feather
         </p>
         <p class="opacity-60" id="healing-corpus-count">
-          {@corpus_count} correction{@corpus_count} == 1 && "" || "s"} stored for training
+          {@corpus_count} correction{(@corpus_count == 1 && "") || "s"} stored for training
         </p>
       </section>
     </aside>
@@ -2396,11 +2396,13 @@ defmodule FramerWebWeb.EditorLive do
     |> assign(:pending_pose, %{})
     |> assign(:graph_channel, "rot")
     |> assign(:undo, [])
+    |> assign(:heal_strokes, [])
     |> assign(:export, nil)
     |> assign(:blocking_loader, nil)
     |> assign(:rendered, nil)
     |> assign(:rendered_frame, nil)
     |> assign(:error, nil)
+    |> push_event("clear_strokes", %{})
     |> push_patch(to: ~p"/editor")
   end
 
@@ -2423,10 +2425,12 @@ defmodule FramerWebWeb.EditorLive do
     |> assign(:pending_pose, %{})
     |> assign(:graph_channel, "rot")
     |> assign(:undo, [])
+    |> assign(:heal_strokes, [])
     |> assign(:error, nil)
     |> assign(:export, nil)
     |> assign(:blocking_loader, nil)
     |> assign(:rendered, nil)
+    |> push_event("clear_strokes", %{})
     |> push_rig()
   end
 
@@ -2553,13 +2557,24 @@ defmodule FramerWebWeb.EditorLive do
     if payload[:status] == :completed do
       socket
       |> assign(:heal_strokes, [])
-      |> assign(:status, "Background healed - the correction is stored for training")
+      |> assign(:status, healed_status(payload))
       |> assign(:error, payload[:error])
       |> push_event("reload_background", %{})
     else
       socket
       |> assign(:status, nil)
       |> assign(:error, "Healing failed: #{format_reason(payload[:error] || "operation failed")}")
+    end
+  end
+
+  # A correction that could not be stored still healed the plate, so the
+  # status says so and the error alert carries the storing failure: the green
+  # banner must never claim the training material was stored when it was not.
+  defp healed_status(payload) do
+    if payload[:error] do
+      "Background healed"
+    else
+      "Background healed - the correction is stored for training"
     end
   end
 
