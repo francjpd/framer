@@ -126,7 +126,12 @@ def stroke_mask(
     return mask
 
 
-def correction_band(mask: np.ndarray, fade: int) -> int:
+def correction_band(
+    shape: tuple[int, ...],
+    strokes: Iterable[Any],
+    fade: int,
+    radius: int = DEFAULT_BRUSH_RADIUS,
+) -> int:
     """
     The width of the falloff band of a manual correction, in pixels.
 
@@ -135,13 +140,25 @@ def correction_band(mask: np.ndarray, fade: int) -> int:
     It is scaled down only when the painted area is smaller than that
     feather - a brush-sized area cannot carry a wide band - and never up.
 
+    The band is sized from the narrowest painted stroke: one correction can
+    hold brushes of different widths, and every painted stroke keeps an
+    opaque middle only if the narrowest one sets the band.  A stroke cut by
+    the canvas edge is measured by the area it actually painted.
+
     The band is never zero: a rig with no feather of its own still gets a
     correction with a soft edge, never a hard-edged blob.
     """
-    radius = region_radius(mask)
-    # The widest band the painted area can carry: the ramp reaches full
-    # opacity at or before the area's inscribed radius.
-    limit = max(1, int(radius) - 1)
+    narrowest: float | None = None
+    for stroke in strokes or []:
+        painted = stroke_mask(shape, [stroke], radius)
+        if painted.max() == 0:
+            continue
+        measured = region_radius(painted)
+        narrowest = measured if narrowest is None else min(narrowest, measured)
+
+    # The widest band a stroke can carry: the ramp reaches full opacity at
+    # or before that stroke's inscribed radius.
+    limit = max(1, int(narrowest) - 1) if narrowest is not None else 1
 
     if fade <= 0:
         return max(1, min(MIN_BAND, limit))
@@ -211,14 +228,16 @@ def heal_plate(
         raise RigError("the healing brush needs a canvas size")
 
     # The painted area is the user's own brush, in the canvas's pixels.
-    mask = stroke_mask((canvas_height, canvas_width), strokes, radius)
+    strokes = list(strokes or [])
+    shape = (canvas_height, canvas_width)
+    mask = stroke_mask(shape, strokes, radius)
     if mask.max() == 0:
         raise RigError("the healing brush needs at least one painted point")
 
     # The very same ramp the automatic patch feathers with: opaque in the
     # middle of the area, transparent at its edge - measured from the area
     # the user painted, so the correction is opaque where they painted.
-    band = correction_band(mask, fade)
+    band = correction_band(shape, strokes, fade, radius)
     ramp = feather_ramp(mask, band)
 
     # The painted area and the ramp are mapped into the plate's own pixels,

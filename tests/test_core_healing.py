@@ -155,7 +155,7 @@ def test_the_falloff_is_measured_from_the_painted_area() -> None:
     # The band is the rig's own feather: the painted area is bigger than it,
     # so it is not scaled down.
     assert band == FADE
-    assert band == correction_band(mask, FADE)
+    assert band == correction_band((SIZE, SIZE), stroke(), FADE, BRUSH)
 
     # The ramp is the patch's own ramp over that band.
     ramp = feather_ramp(mask, band)
@@ -180,6 +180,30 @@ def test_a_brush_smaller_than_the_feather_is_opaque_inside() -> None:
     ys, xs = np.nonzero(core)
     assert len(ys) > 0
     assert np.array_equal(result["plate"][ys, xs, :3], result["content"][ys, xs, :3])
+
+
+def test_a_narrow_stroke_stays_opaque_beside_a_wide_one() -> None:
+    """One correction can hold brushes of different widths: both stay opaque."""
+    plate = make_plate()
+    wide = {"points": [[12, 12]], "radius": 20}
+    narrow = {"points": [[32, 32]], "radius": 4}
+    result = heal_plate(plate, [wide, narrow], fade=FADE, radius=BRUSH)
+
+    mask = result["mask"]
+    band = result["band"]
+
+    # The narrow brush sizes the band: a band sized by the wide brush would
+    # leave most of the narrow stroke inside the feather.
+    assert band < FADE
+
+    for stroke in (wide, narrow):
+        core = opaque_core(stroke_mask((SIZE, SIZE), [stroke], BRUSH), band)
+        ys, xs = np.nonzero(core)
+        assert len(ys) > 0, "the stroke has no fully opaque middle"
+        assert (mask[ys, xs] > 0).all()
+        assert np.array_equal(
+            result["plate"][ys, xs, :3], result["content"][ys, xs, :3]
+        ), "the painted pixels were only tinted, not replaced"
 
 
 def test_a_rig_without_a_feather_still_softens_the_edge() -> None:

@@ -324,11 +324,12 @@ automatic patch is, done by hand, and it is done the same way:
   hard-edged blob;
 * the feather is the rig's own - the band the correction is feathered with is
   the width the document records as `layers.fade` (the **Patch feather**
-  slider), scaled down only when the painted area is too small to carry that
-  band, so the correction always reaches full opacity at the middle of what
-  the user painted. The band is never scaled up, and never zero: a rig with no
-  feather of its own still gets a soft edge, three pixels wide, narrowed
-  further only when the painted area is too small to carry even that.
+  slider), scaled down when the painted area - or the narrowest stroke in it,
+  when the correction mixes brush widths - is too small to carry that band, so
+  every stroke the user painted reaches full opacity at its middle. The band
+  is never scaled up, and never zero: a rig with no feather of its own still
+  gets a soft edge, three pixels wide, narrowed further only when the painted
+  area is too small to carry even that.
 
 The corrected plate is written back over the project's background layer, so
 the frame the editor shows and the frame the engine renders are the same
