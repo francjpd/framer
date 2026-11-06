@@ -443,26 +443,25 @@ defmodule FramerWeb.Renderer do
 
         case write_project_corrections(rig_id, correction) do
           :ok ->
-            broadcast_heal(rig_id, %{
-              status: :completed,
-              correction: Healing.summarize(correction)
-            })
+            broadcast_heal(rig_id, %{status: :completed})
 
           {:error, reason} ->
             broadcast_heal(rig_id, %{
-              status: :completed,
-              stored: false,
+              status: :failed,
+              stored: true,
               error:
-                "the correction was applied but the patch would not remember it: #{inspect(reason)}"
+                "the correction was stored but the patch would not remember it: #{inspect(reason)}"
             })
         end
 
       {:error, reason} ->
         # The correction itself is on the plate; only the corpus missed it.
         # The working files stay: the painted material cannot be
-        # reconstructed, so the correction can still be stored.
+        # reconstructed, so the correction can still be stored.  The heal is
+        # not reported as completed: the editor keeps the strokes so pressing
+        # Heal again retries the material instead of discarding it.
         broadcast_heal(rig_id, %{
-          status: :completed,
+          status: :failed,
           stored: false,
           error: "the correction was applied but could not be stored: #{inspect(reason)}"
         })

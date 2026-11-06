@@ -63,28 +63,6 @@ defmodule FramerWeb.Healing do
   end
 
   @doc """
-  A short description of a stored correction.
-
-  The images themselves stay in the corpus: a summary is what the editor
-  shows, and it never carries pixels.
-  """
-  def summarize(correction) do
-    %{
-      id: correction.id,
-      rig_id: correction.rig_id,
-      project_name: correction.project_name,
-      bbox: %{
-        x: correction.bbox_x,
-        y: correction.bbox_y,
-        width: correction.bbox_width,
-        height: correction.bbox_height
-      },
-      fade: correction.fade,
-      inserted_at: correction.inserted_at
-    }
-  end
-
-  @doc """
   Add a correction to the project's corrections, so a rebuilt patch re-applies it.
 
   The corpus is where a correction's material lives; the project's own file is
@@ -95,9 +73,15 @@ defmodule FramerWeb.Healing do
   covered and the rectangle they are cropped to - the very material the
   corpus holds - so the engine re-applies it exactly as it was applied to
   the plate.
+
+  An existing file that cannot be read is an error, never an empty list: it
+  holds every correction the patch re-applies, and overwriting it would
+  discard them for good.
   """
   def append_correction(correction, path) do
-    write_corrections(read_corrections(path) ++ [correction_entry(correction)], path)
+    with {:ok, corrections} <- read_corrections(path) do
+      write_corrections(corrections ++ [correction_entry(correction)], path)
+    end
   end
 
   defp write_corrections(corrections, path) when is_list(corrections) do
@@ -135,12 +119,18 @@ defmodule FramerWeb.Healing do
     case File.read(path) do
       {:ok, body} ->
         case Jason.decode(body) do
-          {:ok, %{"corrections" => corrections}} when is_list(corrections) -> corrections
-          _ -> []
+          {:ok, %{"corrections" => corrections}} when is_list(corrections) ->
+            {:ok, corrections}
+
+          _ ->
+            {:error, "the corrections file is not a correction list: #{path}"}
         end
 
-      {:error, _reason} ->
-        []
+      {:error, :enoent} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        {:error, "the corrections file could not be read: #{reason}"}
     end
   end
 

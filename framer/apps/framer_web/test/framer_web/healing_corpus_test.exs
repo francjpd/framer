@@ -10,6 +10,7 @@ defmodule FramerWeb.Healing.CorpusTest do
 
   use ExUnit.Case, async: false
 
+  alias FramerWeb.Healing
   alias FramerWeb.Healing.Corpus
 
   test "a correction is stored with its content, mask and replaced region" do
@@ -59,5 +60,20 @@ defmodule FramerWeb.Healing.CorpusTest do
   test "a correction without its material is refused" do
     assert {:error, changeset} = Corpus.store(%{rig_id: "incomplete"})
     refute changeset.valid?
+  end
+
+  test "an unreadable corrections file is not overwritten" do
+    dir = Path.join(System.tmp_dir!(), "framer_corrections_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    path = Path.join(dir, "corrections.json")
+    File.write!(path, "{not json")
+
+    {:ok, correction} =
+      Corpus.store(%{rig_id: "keep-me", content: <<1>>, mask: <<2>>, replaced: <<3>>})
+
+    assert {:error, _reason} = Healing.append_correction(correction, path)
+    assert File.read!(path) == "{not json"
   end
 end

@@ -59,6 +59,7 @@ defmodule FramerWeb.Application do
   rescue
     error ->
       Logger.error("could not migrate the editor's store: #{Exception.message(error)}")
+      reraise error, __STACKTRACE__
   end
 
   # Tell Phoenix to update the endpoint configuration

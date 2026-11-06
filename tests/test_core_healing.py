@@ -63,10 +63,12 @@ from core.healing import (
 )
 from core.layers import split_layers, write_layer
 from core.patch import (
+    apply_corrections,
     build_patch,
     character_region,
     corrections_path,
     feather_ramp,
+    load_corrections,
     resolve_patch_layer,
 )
 from ops.deform import deform_video
@@ -361,6 +363,102 @@ def test_an_empty_stroke_is_refused() -> None:
 
     with pytest.raises(RigError):
         heal_plate(make_plate(), [], fade=FADE, radius=BRUSH)
+
+
+def _correction_entry(
+    bbox: tuple[int, int, int, int],
+    colour: tuple[int, int, int],
+    canvas: tuple[int, int],
+    band: int,
+) -> dict:
+    """One stored correction, in the shape the editor writes it."""
+    x, y, width, height = bbox
+    mask = np.full((height, width), 255, np.uint8)
+    content = np.zeros((height, width, 4), np.uint8)
+    content[:, :, :3] = colour
+    content[:, :, 3] = 255
+
+    return {
+        "bbox": {"x": x, "y": y, "width": width, "height": height},
+        "canvas": [canvas[0], canvas[1]],
+        "fade": band,
+        "mask": base64.b64encode(cv2.imencode(".png", mask)[1].tobytes()).decode(),
+        "content": base64.b64encode(cv2.imencode(".png", content)[1].tobytes()).decode(),
+    }
+
+
+def test_corrections_are_applied_inside_their_own_rectangles(tmp_path: Path) -> None:
+    """Each stored correction lands where it was painted, and only there."""
+    canvas = (SIZE, SIZE)
+    band = 2
+    red = (0, 0, 255)
+    green = (0, 255, 0)
+
+    path = tmp_path / "corrections.json"
+    path.write_text(
+        json.dumps(
+            {
+                "corrections": [
+                    _correction_entry((10, 10, 8, 8), red, canvas, band),
+                    _correction_entry((40, 40, 8, 8), green, canvas, band),
+                ]
+            }
+        )
+    )
+
+    corrections = load_corrections(path, (SIZE, SIZE))
+    assert len(corrections) == 2
+
+    colour = np.full((SIZE, SIZE, 3), 50, np.uint8)
+    result = apply_corrections(colour, corrections)
+
+    # The middle of each painted rectangle is that correction's own content.
+    assert np.array_equal(result[14, 14], np.array(red, np.uint8))
+    assert np.array_equal(result[44, 44], np.array(green, np.uint8))
+
+    # The correction feathers out at its rectangle's edge: the border is the
+    # untouched ground, not a hard edge.
+    assert np.array_equal(result[10, 10], colour[10, 10])
+    assert np.array_equal(result[40, 40], colour[40, 40])
+
+    # Nothing outside the painted rectangles moved.
+    outside = np.ones((SIZE, SIZE), bool)
+    outside[10:18, 10:18] = False
+    outside[40:48, 40:48] = False
+    assert np.array_equal(result[outside], colour[outside])
+
+
+def test_a_damaged_corrections_file_is_not_silently_ignored(tmp_path: Path) -> None:
+    """The only source a rebuilt patch re-applies corrections from never fails open."""
+    from core.errors import RigError
+
+    path = tmp_path / "corrections.json"
+    path.write_text("{not json")
+
+    with pytest.raises(RigError):
+        load_corrections(path, (SIZE, SIZE))
+
+    path.write_text(
+        json.dumps(
+            {
+                "corrections": [
+                    {
+                        "bbox": {"x": 0, "y": 0, "width": 4, "height": 4},
+                        "canvas": [SIZE, SIZE],
+                        "fade": 2,
+                        "mask": "not base64",
+                        "content": "not base64",
+                    }
+                ]
+            }
+        )
+    )
+
+    with pytest.raises(RigError):
+        load_corrections(path, (SIZE, SIZE))
+
+    missing = tmp_path / "missing.json"
+    assert load_corrections(missing, (SIZE, SIZE)) == []
 
 
 # --- the correction and the patch -------------------------------------------

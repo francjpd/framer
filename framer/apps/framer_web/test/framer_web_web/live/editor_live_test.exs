@@ -1438,6 +1438,33 @@ defmodule FramerWebWeb.EditorLiveTest do
       assert render(view) =~ "0 strokes painted"
     end
 
+    test "a correction the patch cannot remember keeps the strokes for a retry", %{conn: conn} do
+      await_idle_orchestrator()
+
+      {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
+      _ = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))
+
+      {:ok, view, _html} = live(conn, ~p"/editor?rig=#{rig["id"]}")
+
+      render_click(view, "toggle_background_layer", %{})
+      render_click(view, "select_tool", %{"tool" => "heal"})
+      render_hook(view, "heal_stroke", %{"stroke" => %{"points" => [[16, 16]], "radius" => 12}})
+
+      # The project's corrections file is damaged, so the corpus can store the
+      # material but the patch cannot record the correction it re-applies.
+      corrections = RigStore.corrections_path(rig["id"])
+      File.write!(corrections, "{not json")
+      stored_before = FramerWeb.Healing.Corpus.count()
+
+      render_click(view, "apply_healing", %{})
+
+      assert wait_for(fn -> render(view) =~ "would not remember it" end)
+      assert FramerWeb.Healing.Corpus.count() > stored_before
+      assert render(view) =~ "1 stroke painted"
+
+      await_idle_orchestrator()
+    end
+
     test "a correction for another project is ignored", %{conn: conn} do
       {:ok, rig} = RigStore.create_from_source(Fixtures.png_with_subject(32, 32), "s.png")
       _ = RigStore.save(Fixtures.simple_rig(32) |> Map.put("id", rig["id"]))

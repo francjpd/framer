@@ -323,7 +323,9 @@ def load_corrections(path: str | Path, shape: tuple[int, int]) -> list[dict[str,
 
     A correction is skipped when it was painted on another canvas: the
     source was replaced and the canvas changed, so its rectangle no longer
-    says where the correction belongs.
+    says where the correction belongs.  A file or entry that cannot be read
+    is an error, never silently dropped: these files are the only source the
+    engine re-applies the user's corrections from.
     """
     path = Path(path)
     if not path.exists():
@@ -331,18 +333,18 @@ def load_corrections(path: str | Path, shape: tuple[int, int]) -> list[dict[str,
 
     try:
         payload = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return []
+    except (OSError, ValueError) as error:
+        raise RigError(f"could not read the manual corrections in {path}: {error}") from error
 
-    if not isinstance(payload, dict):
-        return []
+    if not isinstance(payload, dict) or not isinstance(payload.get("corrections"), list):
+        raise RigError(f"the manual corrections in {path} are not a correction list")
 
     height, width = shape
     corrections: list[dict[str, Any]] = []
 
-    for entry in payload.get("corrections") or []:
+    for entry in payload["corrections"]:
         if not isinstance(entry, dict):
-            continue
+            raise RigError(f"a manual correction in {path} is not an object")
 
         canvas = entry.get("canvas") or []
         if len(canvas) == 2 and (int(canvas[0]), int(canvas[1])) != (width, height):
@@ -352,7 +354,7 @@ def load_corrections(path: str | Path, shape: tuple[int, int]) -> list[dict[str,
         mask = _decode_mask(entry.get("mask"))
         content = _decode_png(entry.get("content"))
         if mask is None or content is None:
-            continue
+            raise RigError(f"a manual correction in {path} has unreadable images")
 
         bbox = entry.get("bbox") or {}
         x = int(bbox.get("x") or 0)
@@ -367,15 +369,20 @@ def load_corrections(path: str | Path, shape: tuple[int, int]) -> list[dict[str,
         if x1 <= x0 or y1 <= y0:
             continue
 
-        full_mask = np.zeros((height, width), np.uint8)
-        full_content = np.zeros((height, width, 4), np.uint8)
-        full_mask[y0:y1, x0:x1] = mask[y0 - y : y1 - y, x0 - x : x1 - x]
-        full_content[y0:y1, x0:x1] = content[y0 - y : y1 - y, x0 - x : x1 - x]
+        crop_mask = mask[y0 - y : y1 - y, x0 - x : x1 - x]
+        crop_content = content[y0 - y : y1 - y, x0 - x : x1 - x]
+        if crop_mask.shape != (y1 - y0, x1 - x0) or crop_content.shape[:2] != (
+            y1 - y0,
+            x1 - x0,
+        ):
+            raise RigError(f"a manual correction in {path} does not match its rectangle")
 
         corrections.append(
             {
-                "mask": full_mask,
-                "content": full_content,
+                "mask": crop_mask,
+                "content": crop_content,
+                "x": x0,
+                "y": y0,
                 "band": max(1, int(entry.get("fade") or 0)),
             }
         )
@@ -392,13 +399,32 @@ def apply_corrections(colour: np.ndarray, corrections: list[dict[str, Any]]) -> 
     at its edge.  It is applied here with the very same ramp it was applied
     to the plate with, so a patch that is rebuilt shows the correction
     instead of the ground it replaced.
+
+    Each correction is blended only inside its own rectangle, and its ramp is
+    measured with the untouched ground outside that rectangle as the zero
+    border - the same ramp the full canvas would give it - so a project with
+    many corrections costs the sum of their rectangles, not corrections x
+    canvas pixels.
     """
+    corrected = colour.copy()
+
     for correction in corrections:
-        ramp = feather_ramp(correction["mask"], correction["band"])
+        mask = correction["mask"]
+        content = correction["content"]
+        height, width = mask.shape[:2]
+        x, y = correction["x"], correction["y"]
+        band = correction["band"]
+
+        pad = band + 2
+        padded = np.pad(mask, pad, mode="constant", constant_values=0)
+        ramp = feather_ramp(padded, band)[pad:-pad, pad:-pad]
         alpha = (ramp.astype(np.float32) / 255.0)[:, :, np.newaxis]
-        content = correction["content"][:, :, :3].astype(np.float32)
-        colour = colour.astype(np.float32) * (1.0 - alpha) + content * alpha
-    return np.clip(colour, 0, 255).astype(np.uint8)
+
+        region = corrected[y : y + height, x : x + width].astype(np.float32)
+        blended = region * (1.0 - alpha) + content[:, :, :3].astype(np.float32) * alpha
+        corrected[y : y + height, x : x + width] = np.clip(blended, 0, 255).astype(np.uint8)
+
+    return corrected
 
 
 def build_patch(

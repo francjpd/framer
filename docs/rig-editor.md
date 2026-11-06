@@ -353,7 +353,11 @@ of the ground it replaced. A correction painted on another canvas - the still
 was replaced and the canvas changed with it - is not re-applied: its
 rectangle no longer says where it belongs. The patch is dropped when the
 correction lands, because the patch is built from the plate: the next render
-rebuilds it against the healed ground, with the correction in it.
+rebuilds it against the healed ground, with the correction in it. A
+correction that cannot be stored, or that the project's corrections file
+cannot record, is reported and the strokes stay painted, so pressing Heal
+again retries the material; an unreadable `corrections.json` is an error, never
+silently replaced.
 
 The brush is offered only when the project has a background layer to paint
 into (`#select-heal-tool` is disabled otherwise). **Brush size**
