@@ -170,9 +170,10 @@ every export. It is only computed for a rig that records a fade, has a
 skeleton - the region is only known once the bones and the timeline exist - and
 has the background plate to heal against. The engine records what the patch
 was built from in `patch.json` beside it: a fingerprint of the rig's skeleton
-and motion, of the feather, and of the *content* of the character layer and the
-background plate it was built from - so a rig that changed, or a layer whose
-bytes changed, rebuilds the patch instead of reusing a stale file.
+and motion, of the feather, of the *content* of the character layer and the
+background plate it was built from, and of the manual corrections painted into
+that background - so a rig that changed, a layer whose bytes changed, or a
+correction that was added, rebuilds the patch instead of reusing a stale file.
 
 **What it promises, honestly**: on a flat or gradient background the patch
 reproduces the background almost exactly. On a textured background it is a

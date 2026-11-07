@@ -1,0 +1,156 @@
+defmodule FramerWeb.Healing do
+  @moduledoc """
+  The healing brush: the editor's hand-painted correction to the background
+  layer.
+
+  The automatic patch reconstructs the ground the character uncovers from the
+  surrounding background and feathers it into the untouched plate.  When that
+  is not good enough, the user repairs the area by hand with this brush: they
+  paint over the bad area and the surrounding background is painted over it,
+  with the very same feathered falloff the patch uses - so a hand-painted
+  correction merges into the untouched background exactly like the automatic
+  one, and never as a hard-edged blob.
+
+  Every correction is also *material*: the content that was painted, the mask
+  it covered and the pixels it replaced.  Those three are stored in the
+  editor's durable store (`FramerWeb.Healing.Corpus`) the moment the
+  correction lands, so the corpus accumulates across projects and can later
+  train a model to do the reconstruction itself.  Storing is part of using the
+  brush, not a later migration: the material is nearly free while it is being
+  painted and impossible to reconstruct afterwards.
+  """
+
+  alias FramerWeb.Healing.Corpus
+
+  # The three artefacts the engine writes for every correction.
+  @content_file "content.png"
+  @mask_file "mask.png"
+  @replaced_file "replaced.png"
+  @meta_file "correction.json"
+
+  @doc """
+  Store the correction the engine just wrote.
+
+  `artifacts_dir` holds the three images and the sidecar that records the
+  rectangle they are cropped to; `meta` carries what only the editor knows -
+  the project the correction was painted in and the canvas it was painted on.
+
+  Returns `{:ok, correction}` or `{:error, reason}`.
+  """
+  def store_correction(artifacts_dir, meta \\ %{}) do
+    with {:ok, content} <- read_artifact(artifacts_dir, @content_file),
+         {:ok, mask} <- read_artifact(artifacts_dir, @mask_file),
+         {:ok, replaced} <- read_artifact(artifacts_dir, @replaced_file),
+         {:ok, sidecar} <- read_sidecar(artifacts_dir) do
+      bbox = sidecar["bbox"] || %{}
+
+      Corpus.store(%{
+        rig_id: meta[:rig_id],
+        project_name: meta[:project_name],
+        content: content,
+        mask: mask,
+        replaced: replaced,
+        bbox_x: bbox["x"] || 0,
+        bbox_y: bbox["y"] || 0,
+        bbox_width: bbox["width"] || 0,
+        bbox_height: bbox["height"] || 0,
+        fade: sidecar["fade"] || meta[:fade] || 0,
+        brush_radius: sidecar["radius"] || meta[:radius] || 0,
+        canvas_width: meta[:canvas_width] || 0,
+        canvas_height: meta[:canvas_height] || 0
+      })
+    end
+  end
+
+  @doc """
+  Add a correction to the project's corrections, so a rebuilt patch re-applies it.
+
+  The corpus is where a correction's material lives; the project's own file is
+  what the engine reads when it builds the patch, so a correction the user
+  painted is never painted over by a patch that is rebuilt.
+
+  Each correction travels as the content that was painted, the mask it
+  covered and the rectangle they are cropped to - the very material the
+  corpus holds - so the engine re-applies it exactly as it was applied to
+  the plate.
+
+  An existing file that cannot be read is an error, never an empty list: it
+  holds every correction the patch re-applies, and overwriting it would
+  discard them for good.
+  """
+  def append_correction(correction, path) do
+    with {:ok, corrections} <- read_corrections(path) do
+      write_corrections(corrections ++ [correction_entry(correction)], path)
+    end
+  end
+
+  defp write_corrections(corrections, path) when is_list(corrections) do
+    body = Jason.encode!(%{"corrections" => corrections})
+    target = Path.dirname(path)
+    File.mkdir_p!(target)
+
+    # The file is written atomically: the engine reads it while the editor
+    # is running, and a half-written file would read as "no corrections".
+    temp = Path.join(target, ".#{Path.basename(path)}.tmp.#{System.unique_integer([:positive])}")
+    File.write!(temp, body)
+    File.rename!(temp, path)
+
+    :ok
+  rescue
+    error -> {:error, Exception.message(error)}
+  end
+
+  defp correction_entry(correction) do
+    %{
+      "bbox" => %{
+        "x" => correction.bbox_x,
+        "y" => correction.bbox_y,
+        "width" => correction.bbox_width,
+        "height" => correction.bbox_height
+      },
+      "canvas" => [correction.canvas_width, correction.canvas_height],
+      "fade" => correction.fade,
+      "mask" => Base.encode64(correction.mask),
+      "content" => Base.encode64(correction.content)
+    }
+  end
+
+  defp read_corrections(path) do
+    case File.read(path) do
+      {:ok, body} ->
+        case Jason.decode(body) do
+          {:ok, %{"corrections" => corrections}} when is_list(corrections) ->
+            {:ok, corrections}
+
+          _ ->
+            {:error, "the corrections file is not a correction list: #{path}"}
+        end
+
+      {:error, :enoent} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        {:error, "the corrections file could not be read: #{reason}"}
+    end
+  end
+
+  defp read_artifact(dir, name) do
+    case File.read(Path.join(dir, name)) do
+      {:ok, binary} -> {:ok, binary}
+      {:error, reason} -> {:error, "the correction's #{name} could not be read: #{reason}"}
+    end
+  end
+
+  defp read_sidecar(dir) do
+    case File.read(Path.join(dir, @meta_file)) do
+      {:ok, body} ->
+        case Jason.decode(body) do
+          {:ok, meta} when is_map(meta) -> {:ok, meta}
+          _ -> {:ok, %{}}
+        end
+
+      {:error, _reason} ->
+        {:ok, %{}}
+    end
+  end
+end

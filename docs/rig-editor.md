@@ -37,7 +37,9 @@ path, a frame range and JSON options - exactly the existing Port contract.
     project row carries a `×` remove control that reveals an inline
     confirm/cancel pair before deleting the project's directory; removing the
     rig currently open resets the editor to its empty state.
-  * **Tools** - the two first-slice tools, **Bones** and **Pose**.
+  * **Tools** - the two first-slice tools, **Bones** and **Pose**, plus
+    **Heal**, the brush that repairs the background layer by hand (see
+    [The healing brush](#the-healing-brush)).
   * **Hierarchy** - the bone list as an indented tree (children under their
     parent), with selection and delete. Rows show each bone's readable name
     (falling back to its `id`), so a renamed skeleton reads as anatomy.
@@ -300,6 +302,81 @@ reads as the same character on top of a coherent material; the pixels
 underneath it where it used to be are a reconstruction, as they already were
 with the plate alone.
 
+### The healing brush
+
+The automatic patch is a *plausible* reconstruction: on a textured background
+it invents the ground the character uncovers, and on a busy one the invented
+ground can be visibly wrong. When that happens the user repairs the area by
+hand, with the **Heal** tool.
+
+The brush acts on the **background layer**: the user paints over the bad area
+and the *surrounding background* is painted over it. It is the same fix the
+automatic patch is, done by hand, and it is done the same way:
+
+* the reconstruction is the patch's own - the painted area is filled from the
+  background around it (`core.patch.reconstruct`), so the character's own
+  pixels never bleed into the correction;
+* the falloff is the patch's own ramp (`core.patch.feather_ramp`), but it is
+  measured from the area the user painted, not from the rig's absolute feather
+  width: the correction reaches full opacity at the middle of the painted
+  area, so the pixels the user covered are actually replaced, and it feathers
+  into the untouched background at the edge of the painted area - never as a
+  hard-edged blob;
+* the feather is the rig's own - the band the correction is feathered with is
+  the width the document records as `layers.fade` (the **Patch feather**
+  slider), scaled down when the painted area - or the narrowest stroke in it,
+  when the correction mixes brush widths - is too small to carry that band, so
+  every stroke the user painted reaches full opacity at its middle. The band
+  is never scaled up, and never zero: a rig with no feather of its own still
+  gets a soft edge, three pixels wide, narrowed further only when the painted
+  area is too small to carry even that.
+
+The corrected plate is written back over the project's background layer, so
+the frame the editor shows and the frame the engine renders are the same
+healed background. The strokes are painted in the canvas's own pixels, and
+the background layer may be an image of another resolution, so the painted
+area is mapped into the layer's own pixels: the correction lands exactly
+where the user painted it, and the layer keeps its own resolution. The
+correction's geometry is recorded in the canvas's pixels - the space the user
+painted in, and the space the frame is rendered in - so the corpus never
+mixes a canvas size with a box in layer pixels. The healed layer is written
+in the format its own name implies, so the editor serves it with the content
+type it promises.
+
+**The patch shows the correction.** The patch is the ground the character
+uncovers, reconstructed from the plate - and the reconstruction would paint
+over the ground the user just fixed by hand. The correction is therefore
+written into the project as well (`corrections.json`, beside the still), and
+the patch re-applies it when it is built, so a patch that is rebuilt - the
+feather changed, the motion changed - shows the user's own fix again instead
+of the ground it replaced. A correction painted on another canvas - the still
+was replaced and the canvas changed with it - is not re-applied: its
+rectangle no longer says where it belongs. The patch is dropped when the
+correction lands, because the patch is built from the plate: the next render
+rebuilds it against the healed ground, with the correction in it. A
+correction that cannot be stored, or that the project's corrections file
+cannot record, is reported and the strokes stay painted, so pressing Heal
+again retries the material; an unreadable `corrections.json` is an error, never
+silently replaced.
+
+The brush is offered only when the project has a background layer to paint
+into (`#select-heal-tool` is disabled otherwise). **Brush size**
+(`#heal-radius-form`) is the width of the round brush, in image pixels.
+
+**The correction is a normal editor operation.** It is submitted to the
+engine's job path like an export and polled, so a long paint never blocks the
+LiveView, and the result is what the rendered frame shows.
+
+**Every correction is stored, from its first use.** The painted content, the
+mask it covered and the pixels it replaced are written to the editor's own
+durable store - the *healing corpus* - the moment the correction lands. The
+corpus is training material, not undo history: it accumulates across projects,
+survives a restart, and exists so a later model can learn to do the
+reconstruction itself. Storing it at the time is deliberate: it is nearly free
+while the correction is being painted, and impossible to reconstruct
+afterwards. The panel shows how many corrections the corpus holds
+(`#healing-corpus-count`).
+
 ### Fill of a vacated region
 
 When the background layer is kept, the layers are recomposited with a plain
@@ -333,8 +410,11 @@ transparency and export to an alpha-capable format such as WebM).
 
 ## Persistence
 
-Filesystem-first, with Ecto/Postgres still disabled. `FramerWeb.RigStore` owns
-one directory per project under the projects root (`:framer_web, :projects_dir`,
+Filesystem-first for the *documents*, with one exception: the healing corpus
+(the manual corrections painted into the background layer) lives in a
+database, because it is training material that accumulates across projects
+rather than a per-project artifact. `FramerWeb.RigStore` owns one directory
+per project under the projects root (`:framer_web, :projects_dir`,
 default `apps/framer_web/priv/projects`):
 
 ```
@@ -342,6 +422,7 @@ default `apps/framer_web/priv/projects`):
   source.png      # uploaded still (or source_replaced.<ext> when changed)
   character.png   # the materialised character layer, once split (or character_replaced.<ext>)
   background.png  # the materialised background plate, once split (or background_replaced.<ext>)
+  corrections.json # the manual corrections painted into the background layer
   patch.png       # the materialised background patch, once a rig records a fade
   patch.json      # what the patch was built from, so a changed rig rebuilds it
   rig.json        # framer.rig v1 - the engine-facing contract
@@ -351,6 +432,16 @@ default `apps/framer_web/priv/projects`):
 `rig.json` is the durable artifact; the editor autosaves on every structural
 change and `Undo` restores the previous document (up to 40 steps). Rig ids are
 opaque and URL-safe, so an `:id` path segment can never escape the root.
+
+**The healing corpus** is the one thing that is not a document:
+`FramerWeb.Healing.Corpus` stores every manual correction in the editor's
+database (`FramerWeb.Repo`, a SQLite file - no server to run), with the
+content that was painted, the mask it covered and the pixels it replaced, all
+cropped to the rectangle the brush covered so the three line up. The schema is
+migrated on boot, so the corpus is written from the very first correction. The
+database file lives under the user's data directory
+(`$XDG_DATA_HOME/framer/framer.db`, or `FRAMER_DATABASE` in production); the
+test suite uses a fresh one per run.
 
 ## JSON surface
 

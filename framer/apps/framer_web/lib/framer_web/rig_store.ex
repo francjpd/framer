@@ -103,6 +103,35 @@ defmodule FramerWeb.RigStore do
   end
 
   @doc """
+  Absolute path of a project's manual corrections.
+
+  The corrections the user painted into the background layer are written
+  beside the still, so the engine re-applies them when it rebuilds the patch.
+  """
+  def corrections_path(id) do
+    with :ok <- validate_id(id) do
+      Path.join(project_dir(id), Rig.corrections_filename())
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Drop a project's manual corrections.
+
+  The corrections were painted into the background layer they belong to, so
+  they go when that layer is replaced or removed.
+  """
+  def remove_corrections(id) do
+    with :ok <- validate_id(id) do
+      File.rm(corrections_path(id))
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  @doc """
   What the materialised patch records about itself, if anything.
 
   The sidecar the engine writes next to the patch holds the feather the patch
@@ -202,6 +231,10 @@ defmodule FramerWeb.RigStore do
       dest_path = Path.join(project_dir(id), dest_name)
       write_layer!(id, dest_path, binary)
 
+      # The corrections were painted into the background that was replaced,
+      # so they go with it: the patch must not paint them over the new one.
+      remove_corrections(id)
+
       rig =
         rig
         |> then(fn r -> if Rig.split?(r), do: r, else: Rig.enable_split(r) end)
@@ -230,6 +263,10 @@ defmodule FramerWeb.RigStore do
       |> Enum.each(&File.rm/1)
 
       remove_patch_layer(id)
+
+      # The corrections were painted into the plate that is gone, so they go
+      # with it: the patch must not paint them over the new plate.
+      remove_corrections(id)
 
       :ok
     else

@@ -20,7 +20,7 @@ Request::
 
     {
       "id":          "uuid",            # opaque correlation id, echoed back
-      "op":          "remove-bg",       # remove-bg | fps-boost | loop | deform | patch | merge | info
+      "op":          "remove-bg",       # remove-bg | fps-boost | loop | deform | patch | heal | merge | info
       "input":       "/abs/input",      # source file (or nil for merge)
       "output":      "/abs/output",     # destination chunk file
       "start_frame": 0,                 # inclusive
@@ -405,6 +405,47 @@ def op_patch(req: dict[str, Any]) -> dict[str, Any]:
     return {"output": req.get("output"), "patch": result.get("patch")}
 
 
+def op_heal(req: dict[str, Any]) -> dict[str, Any]:
+    """Paint the surrounding background over the area the brush covered.
+
+    The healing brush is the editor's hand-painted correction to the
+    background plate: the user paints over a bad area and the surrounding
+    background is painted over it, feathered with the very same falloff the
+    automatic patch uses.  The correction is written back over the plate, and
+    the three training artefacts - the content that was painted, the mask it
+    covered and the pixels it replaced - are written beside it, so the editor
+    can store them the moment the brush is used.
+    """
+    from core.healing import heal_file, read_strokes
+
+    opts = req.get("options") or {}
+
+    plate = opts.get("plate")
+    strokes_path = opts.get("strokes")
+    target = opts.get("target")
+    artifacts = opts.get("artifacts")
+
+    if not plate or not strokes_path or not target or not artifacts:
+        raise RuntimeError(
+            "heal requires 'plate', 'strokes', 'target' and 'artifacts' options"
+        )
+
+    canvas = opts.get("canvas")
+    canvas_size = (int(canvas[0]), int(canvas[1])) if canvas else None
+
+    result = heal_file(
+        plate,
+        read_strokes(strokes_path),
+        target_path=target,
+        artifacts_dir=artifacts,
+        fade=int(opts.get("fade", 12)),
+        radius=int(opts.get("radius", 12)),
+        canvas=canvas_size,
+    )
+
+    return {"output": req.get("output"), "healed": result}
+
+
 def op_merge(req: dict[str, Any]) -> dict[str, Any]:
     """Concatenate finished chunk files into the final output."""
     opts = req.get("options") or {}
@@ -446,6 +487,7 @@ _OPERATIONS = {
     "loop": op_loop,
     "deform": op_deform,
     "patch": op_patch,
+    "heal": op_heal,
     "merge": op_merge,
 }
 
@@ -470,6 +512,7 @@ _OPTION_KEYS: dict[str, set[str]] = {
     },
     "deform": {"rig", "rig_path", "iterations", "weights", "still", "radius_scale", "patch"},
     "patch": {"rig", "rig_path", "iterations", "weights", "still"},
+    "heal": {"plate", "strokes", "target", "artifacts", "fade", "radius", "canvas"},
     "merge": {"chunks"},
 }
 

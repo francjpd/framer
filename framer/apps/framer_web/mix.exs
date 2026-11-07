@@ -45,9 +45,11 @@ defmodule FramerWeb.MixProject do
   defp deps do
     [
       {:phoenix, "~> 1.8.0"},
-      # {:phoenix_ecto, "~> 4.5"},      # Commented out: requires PostgreSQL
-      # {:ecto_sql, "~> 3.13"},          # Commented out: requires PostgreSQL
-      # {:postgrex, ">= 0.0.0"},         # Commented out: requires PostgreSQL
+      # The editor's own durable store: the healing corpus (the manual
+      # corrections the user paints into the background layer) is kept in a
+      # database, so it accumulates across projects and survives a restart.
+      {:ecto_sql, "~> 3.13"},
+      {:ecto_sqlite3, "~> 0.23.0"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.1.0"},
@@ -86,6 +88,7 @@ defmodule FramerWeb.MixProject do
       # "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       # "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["test"],
+      "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["tailwind framer_web", "esbuild framer_web"],
       "assets.deploy": [

@@ -23,6 +23,11 @@ defmodule FramerWeb.Renderer do
   artefact: the engine computes it once from the skeleton and reuses it for
   every frame, every preview and every export.
 
+  `submit_heal/3` is the fifth: the healing brush's hand-painted correction to
+  the background plate. It is submitted like an export - a job the editor
+  polls - so a long paint never blocks the LiveView, and the plate the frame
+  is composited over is the healed one when the job completes.
+
   A split rig (`rig.layers.split`) renders through the same `deform` operation
   as ever - the rig document tells the engine which character layer to deform -
   so the final render is authoritative for the layering exactly as it is for the
@@ -36,6 +41,7 @@ defmodule FramerWeb.Renderer do
   alias FramerCore.Operations
   alias FramerCore.Orchestrator
   alias FramerCore.PortWorker
+  alias FramerWeb.Healing
   alias FramerWeb.Rig
   alias FramerWeb.RigStore
 
@@ -285,6 +291,82 @@ defmodule FramerWeb.Renderer do
     end
   end
 
+  @doc """
+  Submit the healing brush's correction for `rig`.
+
+  The brush paints over a bad area of the background plate; the engine
+  reconstructs the surrounding background over it, feathers the correction
+  into the untouched plate with the very same falloff the automatic patch
+  uses, and writes the correction back over the plate.  The three training
+  artefacts - the content that was painted, the mask it covered and the
+  pixels it replaced - are written beside it, and they are stored in the
+  corpus the moment the correction lands.
+
+  The correction is a normal editor operation: it goes through the same
+  submit-and-poll job path an export uses, so a long paint never blocks the
+  LiveView, and the plate the frame is composited over is the healed one when
+  the job completes.
+  """
+  def submit_heal(rig, strokes, opts \\ []) do
+    with {:ok, plate} <- plate_path(rig),
+         :ok <- validate_strokes(strokes) do
+      id = rig["id"]
+      workspace = workspace_dir(rig)
+      File.mkdir_p!(workspace)
+
+      unique = System.unique_integer([:positive])
+      strokes_path = Path.join(workspace, "heal_strokes_#{unique}.json")
+      artifacts_dir = Path.join(workspace, "heal_#{unique}")
+
+      File.write!(strokes_path, Jason.encode!(%{"strokes" => strokes}))
+
+      # The correction is feathered with the very same falloff the automatic
+      # patch uses: the rig's own feather, or the default when the document
+      # records none.  The engine measures the falloff from the area the user
+      # painted, so the correction is opaque where they painted.
+      fade = opts[:fade] || Rig.patch_fade(rig) || Rig.default_fade()
+      radius = opts[:radius] || 12
+
+      options = %{
+        "plate" => plate,
+        "strokes" => strokes_path,
+        "target" => plate,
+        "artifacts" => artifacts_dir,
+        "fade" => fade,
+        "radius" => radius,
+        # The strokes are painted in the canvas's own pixels, and the plate
+        # the editor shows is fitted to the canvas, so the plate is healed at
+        # the canvas's size.
+        "canvas" => [Rig.width(rig), Rig.height(rig)]
+      }
+
+      # The job's output is the healed plate itself: the correction is
+      # written back over the layer the frame is composited over.
+      case Orchestrator.submit_job(plate, plate,
+             operation: "heal",
+             options: options,
+             total_frames: 1,
+             fps: 1.0
+           ) do
+        {:ok, job_id} ->
+          start_heal_watcher(job_id, id, artifacts_dir, strokes_path, %{
+            rig_id: id,
+            project_name: rig["name"],
+            fade: fade,
+            radius: radius,
+            canvas_width: Rig.width(rig),
+            canvas_height: Rig.height(rig)
+          })
+
+          {:ok, %{job_id: job_id}}
+
+        {:error, reason} ->
+          File.rm(strokes_path)
+          {:error, reason}
+      end
+    end
+  end
+
   @doc "Merge a finished job's chunks into `output` and return the output path."
   def merge(job, chunks) do
     case Operations.merge_job(job, chunks) do
@@ -315,6 +397,142 @@ defmodule FramerWeb.Renderer do
   defp start_watcher(job_id, rig_id, output, export_dir) do
     Task.start(fn -> watch(job_id, rig_id, output, export_dir) end)
   end
+
+  # The healing brush's watcher: the same submit-and-poll shape the export
+  # uses.  When the job completes, the correction is stored in the corpus -
+  # it is stored from its first use, not as a later migration - and the patch
+  # built from the old plate is dropped, because the plate the correction
+  # changed is the material the patch is built from.
+  defp start_heal_watcher(job_id, rig_id, artifacts_dir, strokes_path, meta) do
+    Task.start(fn -> watch_heal(job_id, rig_id, artifacts_dir, strokes_path, meta) end)
+  end
+
+  defp watch_heal(job_id, rig_id, artifacts_dir, strokes_path, meta, attempts \\ 750) do
+    state = Orchestrator.get_status()
+
+    cond do
+      state.job && state.job.id == job_id && state.job.status == :completed ->
+        finish_heal(rig_id, artifacts_dir, strokes_path, meta)
+
+      state.job && state.job.id == job_id && state.job.status == :failed ->
+        discard_heal_files(artifacts_dir, strokes_path)
+        broadcast_heal(rig_id, %{status: :failed, error: job_failure_message(state)})
+
+      attempts <= 0 ->
+        # The job's fate is unknown, so its working files stay: the
+        # correction may still land, and the painted material cannot be
+        # reconstructed.
+        broadcast_heal(rig_id, %{status: :failed, error: "the healing brush timed out"})
+
+      true ->
+        Process.sleep(@poll_interval)
+        watch_heal(job_id, rig_id, artifacts_dir, strokes_path, meta, attempts - 1)
+    end
+  end
+
+  defp finish_heal(rig_id, artifacts_dir, strokes_path, meta) do
+    # The plate the correction changed is the material the patch is built
+    # from, so the patch is stale the moment the correction lands.
+    RigStore.remove_patch_layer(rig_id)
+
+    case Healing.store_correction(artifacts_dir, meta) do
+      {:ok, correction} ->
+        # The working files are the correction's own copies: the corpus holds
+        # them now, so the project keeps neither.
+        discard_heal_files(artifacts_dir, strokes_path)
+
+        case write_project_corrections(rig_id, correction) do
+          :ok ->
+            broadcast_heal(rig_id, %{status: :completed})
+
+          {:error, reason} ->
+            broadcast_heal(rig_id, %{
+              status: :failed,
+              healed: true,
+              error:
+                "the correction was stored but the patch would not remember it: #{inspect(reason)}"
+            })
+        end
+
+      {:error, reason} ->
+        # The correction itself is on the plate; only the corpus missed it.
+        # The working files stay: the painted material cannot be
+        # reconstructed, so the correction can still be stored.  The heal is
+        # not reported as completed: the editor keeps the strokes so pressing
+        # Heal again retries the material instead of discarding it.
+        broadcast_heal(rig_id, %{
+          status: :failed,
+          healed: true,
+          error: "the correction was applied but could not be stored: #{inspect(reason)}"
+        })
+    end
+  end
+
+  # The project's corrections, written from the corpus: the engine re-applies
+  # them when it rebuilds the patch, so a correction the user painted is
+  # never painted over by a patch that is rebuilt.
+  defp write_project_corrections(rig_id, correction) do
+    case RigStore.corrections_path(rig_id) do
+      nil ->
+        {:error, :unknown_rig}
+
+      path ->
+        Healing.append_correction(correction, path)
+    end
+  end
+
+  defp discard_heal_files(artifacts_dir, strokes_path) do
+    File.rm_rf(artifacts_dir)
+    File.rm(strokes_path)
+    :ok
+  end
+
+  defp broadcast_heal(rig_id, payload) do
+    Phoenix.PubSub.broadcast(
+      FramerWeb.PubSub,
+      topic(rig_id),
+      {:heal, Map.put(payload, :rig_id, rig_id)}
+    )
+  end
+
+  # The background plate a correction is painted into.
+  defp plate_path(rig) do
+    case rig && rig["id"] do
+      id when is_binary(id) ->
+        case RigStore.plate_path(id) do
+          nil -> {:error, :no_background_layer}
+          path -> {:ok, path}
+        end
+
+      _ ->
+        {:error, :missing_source}
+    end
+  end
+
+  @doc """
+  Whether a set of strokes carries a point the user actually painted.
+
+  A correction needs at least one painted point: an empty stroke list, or a
+  stroke without a usable point, would ask the engine to heal nothing.
+  """
+  def validate_strokes(strokes) when is_list(strokes) do
+    if Enum.any?(strokes, &painted_stroke?/1) do
+      :ok
+    else
+      {:error, :no_strokes}
+    end
+  end
+
+  def validate_strokes(_strokes), do: {:error, :no_strokes}
+
+  defp painted_stroke?(%{"points" => points}) when is_list(points) do
+    Enum.any?(points, &painted_point?/1)
+  end
+
+  defp painted_stroke?(_stroke), do: false
+
+  defp painted_point?([x, y]) when is_number(x) and is_number(y), do: true
+  defp painted_point?(_point), do: false
 
   defp watch(job_id, rig_id, output, export_dir, attempts \\ 750) do
     state = Orchestrator.get_status()
@@ -366,6 +584,11 @@ defmodule FramerWeb.Renderer do
   def failure_message(:job_in_progress), do: "another export is already running"
   def failure_message(:no_workers), do: "no render workers are available"
   def failure_message(:unknown_frame_count), do: "the frame count of the rig is unknown"
+
+  def failure_message(:no_background_layer),
+    do: "the healing brush needs the background layer: keep it to heal the background"
+
+  def failure_message(:no_strokes), do: "paint over the area you want to heal first"
   def failure_message(reason), do: PortWorker.failure_message(reason)
 
   @doc """
@@ -511,6 +734,15 @@ defmodule FramerWeb.Renderer do
             File.cp!(meta_src, Path.join(export_dir, Rig.patch_meta_filename()))
           end
         end
+      end
+
+      # The manual corrections travel with the project too: a patch built in
+      # the export directory has to show the corrections the user painted,
+      # exactly as the project's own patch does.
+      corrections_src = RigStore.corrections_path(id)
+
+      if corrections_src && File.exists?(corrections_src) do
+        File.cp!(corrections_src, Path.join(export_dir, Rig.corrections_filename()))
       end
     end
   end
